@@ -312,11 +312,6 @@ public class MetadataService(
         var configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
         if (!File.Exists(coverFilePath))
         {
-            if (File.Exists(configCoverFilePath))
-            {
-                File.Delete(configCoverFilePath);
-            }
-
             return false;
         }
 
