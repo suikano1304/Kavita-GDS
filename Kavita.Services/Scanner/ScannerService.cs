@@ -535,8 +535,9 @@ public class ScannerService(
 
 
         logger.LogDebug("[ScannerService] Library {LibraryName} Step 1: Scan & Parse Files", library.Name);
+        var forceFileSystemScan = forceUpdate;
         var (scanElapsedTime, parsedSeries) = await ScanFiles(library, libraryFolderPaths,
-            shouldUseLibraryScan, forceUpdate);
+            shouldUseLibraryScan, forceFileSystemScan);
 
         // We need to remove any keys where there is no actual parser info
         logger.LogDebug("[ScannerService] Library {LibraryName} Step 2: Process and Update Database", library.Name);

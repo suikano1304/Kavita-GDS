@@ -75,6 +75,13 @@ public class ProcessSeries(
     public async Task<int?> ProcessSeriesAsync(MetadataSettingsDto settings, IList<ParserInfo> parsedInfos, ProcessSeriesArgs args)
     {
         if (!parsedInfos.Any()) return null;
+        if (args.Library.Type == LibraryType.GDS)
+        {
+            parsedInfos = parsedInfos
+                .GroupBy(info => Parser.NormalizePath(info.FullFilePath))
+                .Select(group => group.First())
+                .ToList();
+        }
 
         var library = args.Library;
 
@@ -673,6 +680,12 @@ public class ProcessSeries(
                 logger.LogInformation(
                     "[ScannerService] Volume cleanup code was trying to remove a volume with a file still existing on disk (usually volume marker removed) File: {File}",
                     file);
+
+                if (series.Library?.Type == LibraryType.GDS)
+                {
+                    nonDeletedVolumes.Add(volume);
+                    continue;
+                }
             }
 
             logger.LogDebug("[ScannerService] Removed {SeriesName} - Volume {Volume}: {File}", series.Name, volume.Name, file);
@@ -701,11 +714,30 @@ public class ProcessSeries(
 
             if (chapter == null)
             {
-                logger.LogDebug(
-                    "[ScannerService] Adding new chapter, {Series} - Vol {Volume} Ch {Chapter}", info.Series, info.Volumes, info.Chapters);
-                chapter = ChapterBuilder.FromParserInfo(info).Build();
-                args.Volume.Chapters.Add(chapter);
-                args.Series.UpdateLastChapterAdded();
+                var normalizedPath = Parser.NormalizePath(info.FullFilePath);
+                chapter = args.Series.Volumes
+                    .SelectMany(volume => volume.Chapters)
+                    .FirstOrDefault(existingChapter =>
+                        existingChapter.Files.Any(file => Parser.NormalizePath(file.FilePath) == normalizedPath));
+
+                if (chapter != null)
+                {
+                    var existingVolume = args.Series.Volumes.FirstOrDefault(volume => volume.Chapters.Contains(chapter));
+                    if (existingVolume != args.Volume)
+                    {
+                        existingVolume?.Chapters.Remove(chapter);
+                        args.Volume.Chapters.Add(chapter);
+                    }
+                    chapter.UpdateFrom(info);
+                }
+                else
+                {
+                    logger.LogDebug(
+                        "[ScannerService] Adding new chapter, {Series} - Vol {Volume} Ch {Chapter}", info.Series, info.Volumes, info.Chapters);
+                    chapter = ChapterBuilder.FromParserInfo(info).Build();
+                    args.Volume.Chapters.Add(chapter);
+                    args.Series.UpdateLastChapterAdded();
+                }
             }
             else
             {
@@ -714,7 +746,7 @@ public class ProcessSeries(
 
 
             // Add files
-            AddOrUpdateFileForChapter(chapter, info, args.ForceUpdate);
+            AddOrUpdateFileForChapter(chapter, info, args.ForceUpdate, args.Series.Library?.Type == LibraryType.GDS);
 
             chapter.Number = info.LowestChapter.ToString(CultureInfo.InvariantCulture);
             chapter.MinNumber = info.LowestChapter;
@@ -843,7 +875,7 @@ public class ProcessSeries(
         }
     }
 
-    private void AddOrUpdateFileForChapter(Chapter chapter, ParserInfo info, bool forceUpdate = false)
+    private void AddOrUpdateFileForChapter(Chapter chapter, ParserInfo info, bool forceUpdate = false, bool skipExpensiveFileStats = false)
     {
         chapter.Files ??= [];
         var existingFile = chapter.Files.SingleOrDefault(f => f.FilePath == info.FullFilePath);
@@ -853,27 +885,58 @@ public class ProcessSeries(
             // TODO: I wonder if we can simplify this force check.
             existingFile.Format = info.Format;
 
-            if (!forceUpdate && !fileService.HasFileBeenModifiedSince(existingFile.FilePath, existingFile.LastModified) && existingFile.Pages != 0) return;
+            if (skipExpensiveFileStats && !fileService.HasFileBeenModifiedSince(existingFile.FilePath, existingFile.LastModified))
+            {
+                existingFile.Pages = GetFastGdsPageCount(existingFile.Pages, info.Format);
+                existingFile.Extension = fileInfo.Extension.ToLowerInvariant();
+                existingFile.FileName = Parser.RemoveExtensionIfSupported(existingFile.FilePath);
+                existingFile.FilePath = Parser.NormalizePath(existingFile.FilePath);
+                existingFile.Bytes = fileInfo.Length;
+                return;
+            }
 
-            existingFile.Pages = readingItemService.GetNumberOfPages(info.FullFilePath, info.Format);
+            if (!forceUpdate &&
+                !fileService.HasFileBeenModifiedSince(existingFile.FilePath, existingFile.LastModified) &&
+                existingFile.Pages != 0)
+            {
+                return;
+            }
+
+            existingFile.Pages = skipExpensiveFileStats
+                ? GetFastGdsPageCount(existingFile.Pages, info.Format)
+                : readingItemService.GetNumberOfPages(info.FullFilePath, info.Format);
             existingFile.Extension = fileInfo.Extension.ToLowerInvariant();
             existingFile.FileName = Parser.RemoveExtensionIfSupported(existingFile.FilePath);
             existingFile.FilePath = Parser.NormalizePath(existingFile.FilePath);
             existingFile.Bytes = fileInfo.Length;
-            existingFile.KoreaderHash = KoreaderHelper.HashContents(existingFile.FilePath);
+            if (!skipExpensiveFileStats)
+            {
+                existingFile.KoreaderHash = KoreaderHelper.HashContents(existingFile.FilePath);
+            }
 
             // We skip updating DB here with last modified time so that metadata refresh can do it
         }
         else
         {
 
-            var file = new MangaFileBuilder(info.FullFilePath, info.Format, readingItemService.GetNumberOfPages(info.FullFilePath, info.Format))
+            var fileBuilder = new MangaFileBuilder(info.FullFilePath, info.Format,
+                    skipExpensiveFileStats ? GetFastGdsPageCount(0, info.Format) : readingItemService.GetNumberOfPages(info.FullFilePath, info.Format))
                 .WithExtension(fileInfo.Extension)
-                .WithBytes(fileInfo.Length)
-                .WithHash()
-                .Build();
+                .WithBytes(fileInfo.Length);
+            if (!skipExpensiveFileStats)
+            {
+                fileBuilder.WithHash();
+            }
+            var file = fileBuilder.Build();
             chapter.Files.Add(file);
         }
+    }
+
+    private static int GetFastGdsPageCount(int existingPages, MangaFormat format)
+    {
+        if (existingPages > 0) return existingPages;
+
+        return format is MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text ? 1 : 0;
     }
 
     private async Task UpdateChapterFromComicInfo(UpdateChapterComicInfoArgs args)
