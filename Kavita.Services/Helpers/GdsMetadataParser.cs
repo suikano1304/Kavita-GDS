@@ -111,8 +111,7 @@ public static class GdsMetadataParser
 
             if (trimmed.StartsWith("cover:", StringComparison.OrdinalIgnoreCase))
             {
-                encodedImage = trimmed["cover:".Length..].Trim();
-                return !string.IsNullOrWhiteSpace(encodedImage);
+                return TryNormalizeBase64Cover(trimmed["cover:".Length..], out encodedImage);
             }
 
             if (!inTargetFile)
@@ -126,11 +125,40 @@ public static class GdsMetadataParser
             if (line.StartsWith("    ", StringComparison.Ordinal) && !line.StartsWith("        ", StringComparison.Ordinal)) return false;
             if (!trimmed.StartsWith("cover:", StringComparison.OrdinalIgnoreCase)) continue;
 
-            encodedImage = trimmed["cover:".Length..].Trim();
-            return !string.IsNullOrWhiteSpace(encodedImage);
+            return TryNormalizeBase64Cover(trimmed["cover:".Length..], out encodedImage);
         }
 
         return false;
+    }
+
+    private static bool TryNormalizeBase64Cover(string value, out string encodedImage)
+    {
+        encodedImage = value.Trim().Trim('"').Trim('\'');
+        if (string.IsNullOrWhiteSpace(encodedImage)) return false;
+        if (string.Equals(encodedImage, "TEXT", StringComparison.OrdinalIgnoreCase)) return false;
+        if (encodedImage.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            encodedImage.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        const string base64Marker = "base64,";
+        var base64Index = encodedImage.IndexOf(base64Marker, StringComparison.OrdinalIgnoreCase);
+        if (encodedImage.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) && base64Index >= 0)
+        {
+            encodedImage = encodedImage[(base64Index + base64Marker.Length)..];
+        }
+
+        try
+        {
+            Convert.FromBase64String(encodedImage);
+            return true;
+        }
+        catch (FormatException)
+        {
+            encodedImage = string.Empty;
+            return false;
+        }
     }
 
     private static string? GetMetadataPath(string directory)

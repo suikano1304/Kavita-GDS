@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Flurl.Http;
@@ -551,7 +553,6 @@ public class ImageService(ILogger<ImageService> logger, IDirectoryService direct
         return string.Empty;
     }
 
-    /// <inheritdoc />
     public string CreateThumbnailFromFile(string sourceFile, string fileName, EncodeFormat encodeFormat, int thumbnailWidth = ThumbnailWidth, string? targetDirectory = null)
     {
         try
@@ -570,6 +571,164 @@ public class ImageService(ILogger<ImageService> logger, IDirectoryService direct
         }
 
         return string.Empty;
+    }
+
+    /// <inheritdoc />
+    public string CreateTitleCover(string title, string? subtitle, string fileName, EncodeFormat encodeFormat,
+        CoverImageSize size = CoverImageSize.Default, string? targetDirectory = null)
+    {
+        try
+        {
+            targetDirectory ??= directoryService.CoverImageDirectory;
+            var (width, height) = size.GetDimensions();
+            var svg = BuildTitleCoverSvg(title, subtitle, width, height);
+
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(svg));
+            return WriteCoverThumbnail(stream, fileName, targetDirectory, encodeFormat, size);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[CreateTitleCover] There was an error generating a title cover for {Title}", title);
+            return string.Empty;
+        }
+    }
+
+    private static string BuildTitleCoverSvg(string title, string? subtitle, int width, int height)
+    {
+        var palette = GetTitleCoverPalette(title);
+        var safeTitle = string.IsNullOrWhiteSpace(title) ? "Untitled" : title.Trim();
+        var titleLines = WrapTitleCoverText(safeTitle, 14, 6);
+        var subtitleText = string.IsNullOrWhiteSpace(subtitle) ? "TEXT" : subtitle.Trim().ToUpperInvariant();
+
+        var titleFontSize = Math.Max(26, width / 9);
+        var titleLineHeight = (int) Math.Round(titleFontSize * 1.22);
+        var subtitleFontSize = Math.Max(16, width / 18);
+        var titleBlockHeight = titleLines.Count * titleLineHeight;
+        var startY = Math.Max(height / 4, (height - titleBlockHeight) / 2);
+        var centerX = width / 2;
+
+        var titleTspans = new StringBuilder();
+        for (var index = 0; index < titleLines.Count; index++)
+        {
+            var dy = index == 0 ? 0 : titleLineHeight;
+            titleTspans.Append(CultureInvariant(
+                $"<tspan x=\"{centerX}\" dy=\"{dy}\">{EscapeSvg(titleLines[index])}</tspan>"));
+        }
+
+        return CultureInvariant($"""
+            <svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+              <defs>
+                <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="{palette.BackgroundA}"/>
+                  <stop offset="100%" stop-color="{palette.BackgroundB}"/>
+                </linearGradient>
+              </defs>
+              <rect width="{width}" height="{height}" fill="url(#bg)"/>
+              <rect x="{width * 0.08:0}" y="{height * 0.08:0}" width="{width * 0.84:0}" height="{height * 0.84:0}" rx="{width * 0.035:0}" fill="none" stroke="{palette.Line}" stroke-width="{Math.Max(2, width / 70)}" opacity="0.72"/>
+              <rect x="{width * 0.14:0}" y="{height * 0.15:0}" width="{width * 0.72:0}" height="{Math.Max(3, height / 110)}" fill="{palette.Accent}" opacity="0.9"/>
+              <text x="{centerX}" y="{startY}" text-anchor="middle" fill="{palette.Text}" font-family="NanumGothic, Nanum Gothic, Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, DejaVu Sans, sans-serif" font-size="{titleFontSize}" font-weight="700">{titleTspans}</text>
+              <text x="{centerX}" y="{height * 0.82:0}" text-anchor="middle" fill="{palette.Text}" opacity="0.76" font-family="NanumGothic, Nanum Gothic, Noto Sans CJK KR, Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, DejaVu Sans, sans-serif" font-size="{subtitleFontSize}" font-weight="600" letter-spacing="{Math.Max(1, width / 160)}">{EscapeSvg(subtitleText)}</text>
+            </svg>
+            """);
+    }
+
+    private static (string BackgroundA, string BackgroundB, string Accent, string Line, string Text) GetTitleCoverPalette(string title)
+    {
+        var palettes = new[]
+        {
+            ("#1d3b53", "#0f1f2e", "#e6b450", "#d7dce2", "#f7f3ea"),
+            ("#3a2d4f", "#181526", "#8bd3dd", "#f4d35e", "#fbfbff"),
+            ("#243b2f", "#111f1a", "#f2a65a", "#dce3d5", "#f5f1e8"),
+            ("#4a2f35", "#211318", "#7dd3fc", "#f2d0a4", "#fff7ed"),
+            ("#263238", "#12191c", "#c3e88d", "#89ddff", "#f5f7fa"),
+            ("#40342f", "#1d1714", "#ffd166", "#e9c46a", "#fff8e7"),
+        };
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(title ?? string.Empty));
+        return palettes[hash[0] % palettes.Length];
+    }
+
+    private static List<string> WrapTitleCoverText(string text, int maxUnitsPerLine, int maxLines)
+    {
+        var lines = new List<string>();
+        var current = new StringBuilder();
+        var currentUnits = 0;
+        var truncated = false;
+
+        foreach (var rune in text.EnumerateRunes())
+        {
+            var value = rune.ToString();
+            var units = GetCoverTextUnits(rune);
+            if (char.IsWhiteSpace(value[0]))
+            {
+                if (current.Length > 0 && currentUnits + 1 <= maxUnitsPerLine)
+                {
+                    current.Append(' ');
+                    currentUnits++;
+                }
+                continue;
+            }
+
+            if (current.Length > 0 && currentUnits + units > maxUnitsPerLine)
+            {
+                lines.Add(current.ToString().Trim());
+                current.Clear();
+                currentUnits = 0;
+                if (lines.Count == maxLines)
+                {
+                    truncated = true;
+                    break;
+                }
+            }
+
+            current.Append(value);
+            currentUnits += units;
+        }
+
+        if (lines.Count < maxLines && current.Length > 0)
+        {
+            lines.Add(current.ToString().Trim());
+        }
+
+        if (lines.Count == 0)
+        {
+            lines.Add("Untitled");
+        }
+
+        if (truncated && !text.EndsWith(lines[^1], StringComparison.Ordinal))
+        {
+            lines[^1] = lines[^1].TrimEnd('.') + "...";
+        }
+
+        return lines;
+    }
+
+    private static int GetCoverTextUnits(Rune rune)
+    {
+        return rune.Value switch
+        {
+            >= 0x1100 and <= 0x11FF => 2,
+            >= 0x3130 and <= 0x318F => 2,
+            >= 0xAC00 and <= 0xD7AF => 2,
+            >= 0x3040 and <= 0x30FF => 2,
+            >= 0x3400 and <= 0x9FFF => 2,
+            _ => 1
+        };
+    }
+
+    private static string EscapeSvg(string value)
+    {
+        return value
+            .Replace("&", "&amp;", StringComparison.Ordinal)
+            .Replace("<", "&lt;", StringComparison.Ordinal)
+            .Replace(">", "&gt;", StringComparison.Ordinal)
+            .Replace("\"", "&quot;", StringComparison.Ordinal)
+            .Replace("'", "&apos;", StringComparison.Ordinal);
+    }
+
+    private static string CultureInvariant(FormattableString value)
+    {
+        return value.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <inheritdoc />

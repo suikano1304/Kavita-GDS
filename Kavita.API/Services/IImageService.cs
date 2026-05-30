@@ -32,6 +32,17 @@ public interface IImageService
     /// <returns>File name with extension of the file.</returns>
     string CreateThumbnailFromFile(string sourceFile, string fileName, EncodeFormat encodeFormat, int thumbnailWidth = 320, string? targetDirectory = null);
     /// <summary>
+    /// Creates a deterministic text-based cover image and writes it to the cover directory.
+    /// </summary>
+    /// <param name="title">Primary title to render on the cover</param>
+    /// <param name="subtitle">Optional short label to render below the title</param>
+    /// <param name="fileName">Filename without extension</param>
+    /// <param name="encodeFormat">Convert and save as encoding format</param>
+    /// <param name="size">Cover image size</param>
+    /// <param name="targetDirectory">If null, will write to the cover image directory</param>
+    /// <returns>File name with extension of the saved file, or empty string on failure</returns>
+    string CreateTitleCover(string title, string? subtitle, string fileName, EncodeFormat encodeFormat, CoverImageSize size = CoverImageSize.Default, string? targetDirectory = null);
+    /// <summary>
     /// Writes out a thumbnail by stream input
     /// </summary>
     /// <param name="stream"></param>
