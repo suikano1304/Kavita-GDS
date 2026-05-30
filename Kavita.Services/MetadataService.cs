@@ -17,6 +17,7 @@ using Kavita.Models.DTOs.SignalR;
 using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
 using Kavita.Models.Entities.Interfaces;
+using Kavita.Models.Extensions;
 using Kavita.Services.Comparators;
 using Kavita.Services.Extensions;
 using Kavita.Services.Helpers;
@@ -255,7 +256,11 @@ public class MetadataService(
         if (firstChapter == null) return false;
 
         var chapterUpdated = UpdateGdsChapterCoverFromYaml(firstChapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
-        if (!chapterUpdated) return true;
+        if (!chapterUpdated)
+        {
+            TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
+            return true;
+        }
 
         UpdateChapterLastModified(firstChapter, forceUpdate || chapterUpdated);
 
@@ -288,6 +293,82 @@ public class MetadataService(
         imageService.UpdateColorScape(chapter);
         unitOfWork.ChapterRepository.Update(chapter);
         _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+
+        return true;
+    }
+
+    private bool TryApplyGdsTextTitleCover(Series series, Chapter firstChapter, bool forceUpdate,
+        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
+    {
+        var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
+        if (firstFile?.Format != MangaFormat.Text) return false;
+        if (series.CoverImageLocked && !forceUpdate) return false;
+
+        if (!forceUpdate && !string.IsNullOrWhiteSpace(series.CoverImage) &&
+            File.Exists(Path.Join(directoryService.CoverImageDirectory, series.CoverImage)))
+        {
+            if (NeedsColorSpace(series, forceColorScape))
+            {
+                imageService.UpdateColorScape(series);
+                unitOfWork.SeriesRepository.Update(series);
+                _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+            }
+
+            return true;
+        }
+
+        var coverImageNameWithoutExtension = ImageService.GetSeriesFormat(series.Id);
+        var newCoverImage = coverImageNameWithoutExtension + encodeFormat.GetExtension();
+        var configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
+        if (forceUpdate || !File.Exists(configCoverFilePath))
+        {
+            var title = string.IsNullOrWhiteSpace(series.Name) ? series.OriginalName : series.Name;
+            var generatedCover = imageService.CreateTitleCover(title, "TEXT", coverImageNameWithoutExtension, encodeFormat, coverImageSize);
+            if (string.IsNullOrEmpty(generatedCover)) return false;
+            newCoverImage = generatedCover;
+            configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
+        }
+
+        if (!File.Exists(configCoverFilePath)) return false;
+
+        var shouldUpdateSeriesColor = series.CoverImage != newCoverImage || NeedsColorSpace(series, forceColorScape);
+        series.CoverImage = newCoverImage;
+        if (shouldUpdateSeriesColor)
+        {
+            imageService.UpdateColorScape(series);
+        }
+        unitOfWork.SeriesRepository.Update(series);
+        _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+
+        foreach (var volume in series.Volumes)
+        {
+            volume.Chapters ??= [];
+
+            if (!volume.CoverImageLocked)
+            {
+                var shouldUpdateVolumeColor = volume.CoverImage != newCoverImage || NeedsColorSpace(volume, forceColorScape);
+                volume.CoverImage = newCoverImage;
+                if (shouldUpdateVolumeColor)
+                {
+                    imageService.UpdateColorScape(volume);
+                }
+                unitOfWork.VolumeRepository.Update(volume);
+                _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
+            }
+
+            foreach (var chapter in volume.Chapters)
+            {
+                if (chapter.CoverImageLocked) continue;
+                var shouldUpdateChapterColor = chapter.CoverImage != newCoverImage || NeedsColorSpace(chapter, forceColorScape);
+                chapter.CoverImage = newCoverImage;
+                if (shouldUpdateChapterColor)
+                {
+                    imageService.UpdateColorScape(chapter);
+                }
+                unitOfWork.ChapterRepository.Update(chapter);
+                _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+            }
+        }
 
         return true;
     }
