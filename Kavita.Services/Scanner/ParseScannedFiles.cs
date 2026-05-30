@@ -25,6 +25,12 @@ namespace Kavita.Services.Scanner;
 /// </summary>
 public class ParseScannedFiles
 {
+    private static readonly HashSet<string> GdsFormatFolderNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "archive", "archives", "book", "books", "cbz", "comic", "comics", "epub", "image", "images",
+        "pdf", "rar", "text", "txt", "zip"
+    };
+
     private readonly ILogger _logger;
     private readonly IDirectoryService _directoryService;
     private readonly IReadingItemService _readingItemService;
@@ -145,9 +151,45 @@ public class ParseScannedFiles
 
         // With the bottom-up approach, this can report a false positive where a nested folder will get scanned even though a parent is the series
         // This can't really be avoided. This is more likely to happen on Image chapter folder library layouts.
-        if (forceCheck || !seriesPaths.TryGetValue(directory, out var seriesList))
+        if (forceCheck)
         {
             return false;
+        }
+
+        if (!seriesPaths.TryGetValue(directory, out var seriesList))
+        {
+            // GDS libraries often keep files under a format folder directly below the real series folder.
+            // Only handle that explicit layout to avoid broad parent fallback scans on normal libraries.
+            if (library.Type != LibraryType.GDS)
+            {
+                return false;
+            }
+
+            var matchedByDirectoryName = false;
+            if (IsGdsFormatFolder(directory))
+            {
+                var parentDirectory = _directoryService.GetParentDirectoryName(directory);
+                if (string.IsNullOrEmpty(parentDirectory) || !seriesPaths.TryGetValue(parentDirectory, out seriesList))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                seriesList = TryGetGdsSeriesListByDirectoryName(library, seriesPaths, directory);
+                matchedByDirectoryName = seriesList != null;
+            }
+
+            if (seriesList == null)
+            {
+                return false;
+            }
+
+            if (matchedByDirectoryName)
+            {
+                var directoryLastWriteTime = _directoryService.GetLastWriteTime(directory).Truncate(TimeSpan.TicksPerSecond);
+                return seriesList.All(series => series.LastScanned.Truncate(TimeSpan.TicksPerSecond) >= directoryLastWriteTime);
+            }
         }
 
         // if (forceCheck)
@@ -175,6 +217,11 @@ public class ParseScannedFiles
         return true;
     }
 
+    private static bool IsGdsFormatFolder(string directory)
+    {
+        return GdsFormatFolderNames.Contains(Path.GetFileName(directory));
+    }
+
     private IList<SeriesModified>? TryGetSeriesList(Library library, IDictionary<string, IList<SeriesModified>> seriesPaths, string directory)
     {
         if (seriesPaths.Count == 0)
@@ -197,7 +244,35 @@ public class ParseScannedFiles
             return seriesList;
         }
 
+        var gdsSeriesList = TryGetGdsSeriesListByDirectoryName(library, seriesPaths, directory);
+        if (gdsSeriesList != null)
+        {
+            return gdsSeriesList;
+        }
+
         return TryGetSeriesList(library, seriesPaths, _directoryService.GetParentDirectoryName(directory));
+    }
+
+    private static IList<SeriesModified>? TryGetGdsSeriesListByDirectoryName(Library library, IDictionary<string, IList<SeriesModified>> seriesPaths, string directory)
+    {
+        if (library.Type != LibraryType.GDS)
+        {
+            return null;
+        }
+
+        var directoryName = Path.GetFileName(directory).ToNormalized();
+        if (string.IsNullOrEmpty(directoryName))
+        {
+            return null;
+        }
+
+        var matches = seriesPaths.Values
+            .SelectMany(series => series)
+            .Where(series => series.SeriesName.ToNormalized().Equals(directoryName))
+            .DistinctBy(series => (series.SeriesName, series.FolderPath, series.LowestFolderPath, series.Format))
+            .ToList();
+
+        return matches.Count == 0 ? null : matches;
     }
 
     /// <summary>
@@ -747,14 +822,17 @@ public class ParseScannedFiles
         // If folder hasn't changed, generate fake ParserInfos
         if (!result.HasChanged)
         {
-            result.ParserInfos = seriesPaths[normalizedFolder]
+            var seriesList = TryGetSeriesList(library, seriesPaths, normalizedFolder);
+            if (seriesList == null)
+            {
+                _logger.LogDebug("[ScannerService] Skipped File Scan for {Folder} but no matching existing series path was found", normalizedFolder);
+                result.ParserInfos = ArraySegment<ParserInfo>.Empty;
+                return;
+            }
+
+            result.ParserInfos = seriesList
                 .Select(fp => new ParserInfo { Series = fp.SeriesName, Format = fp.Format })
                 .ToList();
-
-            // // We are certain TryGetSeriesList will return a valid result here, if the series wasn't present yet. It will have been changed.
-            // result.ParserInfos = TryGetSeriesList(library, seriesPaths, normalizedFolder)!
-            // .Select(fp => new ParserInfo { Series = fp.SeriesName, Format = fp.Format })
-            // .ToList();
 
             _logger.LogDebug("[ScannerService] Skipped File Scan for {Folder} as it hasn't changed", normalizedFolder);
             await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
