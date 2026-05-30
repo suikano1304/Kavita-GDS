@@ -20,6 +20,8 @@ export class MangaFormatIconPipe implements PipeTransform {
         return 'fa-solid fa-file-image';
       case MangaFormat.PDF:
         return 'fa-solid fa-file-pdf';
+      case MangaFormat.TEXT:
+        return 'fa-solid fa-file-lines';
       case MangaFormat.UNKNOWN:
         return 'fa-solid fa-file-circle-question';
     }

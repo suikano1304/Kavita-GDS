@@ -62,7 +62,8 @@ public class ExternalMetadataService : IExternalMetadataService
 
     private const int SeriesPerRefresh = 25;
     private readonly TimeSpan _externalSeriesMetadataCache = TimeSpan.FromDays(30);
-    private static readonly HashSet<LibraryType> NonEligibleLibraryTypes = [LibraryType.Comic, LibraryType.Image];
+    public static readonly HashSet<LibraryType> NonEligibleLibraryTypes =
+        [LibraryType.Comic, LibraryType.Book, LibraryType.Image, LibraryType.GDS];
     private readonly SeriesDetailPlusDto _defaultReturn = new()
     {
         Series =  null,

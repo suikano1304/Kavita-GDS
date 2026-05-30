@@ -165,6 +165,11 @@ public class BookController(
 
         try
         {
+            if (chapter.Files.FirstOrDefault()?.Format == MangaFormat.Text)
+            {
+                return Ok(await bookService.GetBookPageText(page, chapterId, path));
+            }
+
             var ptocBookmarks =
                 await unitOfWork.UserTableOfContentRepository.GetPersonalToCForPage(UserId, chapterId, page);
             var annotations = await unitOfWork.UserRepository.GetAnnotationsByPage(UserId, chapter.Id, page);

@@ -240,9 +240,7 @@ public class ParseScannedFiles
         {
             return;
         }
-        // Revert of https://github.com/Kareadita/Kavita/pull/3629/files#diff-0625df477047ab9d8e97a900201f2f29b2dc0599ba58eb75cfbbd073a9f3c72f
-        // for Hotfix v0.8.5.x
-        result.Add(CreateScanResult(directory, folderPath, true, files));
+        result.Add(CreateScanResult(directory, folderPath, hasChanged, files));
     }
 
     /// <summary>
@@ -302,7 +300,7 @@ public class ParseScannedFiles
     /// </summary>
     /// <param name="scanResults">A collection of scan results</param>
     /// <param name="scannedSeries">A concurrent dictionary to store the tracked series</param>
-    public void TrackSeriesAcrossScanResults(IList<ScanResult> scanResults, ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries)
+    public void TrackSeriesAcrossScanResults(IList<ScanResult> scanResults, ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, LibraryType libraryType)
     {
         // Flatten all ParserInfos from scanResults
         var allInfos = scanResults.SelectMany(sr => sr.ParserInfos).ToList();
@@ -314,7 +312,7 @@ public class ParseScannedFiles
 
             try
             {
-                TrackSeries(scannedSeries, info);
+                TrackSeries(scannedSeries, info, libraryType);
             }
             catch (Exception ex)
             {
@@ -330,7 +328,7 @@ public class ParseScannedFiles
     /// </summary>
     /// <param name="scannedSeries">A localized list of a series' parsed infos</param>
     /// <param name="info"></param>
-    private void TrackSeries(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, ParserInfo? info)
+    private void TrackSeries(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, ParserInfo? info, LibraryType libraryType)
     {
         if (info == null || info.Series == string.Empty) return;
 
@@ -351,7 +349,7 @@ public class ParseScannedFiles
         }
 
         // Check if normalized info.Series already exists and if so, update info to use that name instead
-        info.Series = MergeName(scannedSeries, info);
+        info.Series = MergeName(scannedSeries, info, libraryType);
 
         // BUG: This will fail for Solo Leveling & Solo Leveling (Manga)
 
@@ -393,7 +391,7 @@ public class ParseScannedFiles
 
         bool Guard(ParsedSeries series)
         {
-            return MergeNameGuard(series.Format, series.NormalizedName, info.Format,
+            return MergeNameGuard(series.Format, series.NormalizedName, info.Format, libraryType,
                 normalizedSeries, normalizedSortSeries, normalizedLocalizedSeries);
         }
     }
@@ -406,7 +404,7 @@ public class ParseScannedFiles
     /// <param name="scannedSeries"></param>
     /// <param name="info"></param>
     /// <returns>Series Name to group this info into</returns>
-    private string MergeName(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, ParserInfo info)
+    private string MergeName(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, ParserInfo info, LibraryType libraryType)
     {
 
         var normalizedName = info.Series.ToNormalized();
@@ -445,7 +443,7 @@ public class ParseScannedFiles
 
         bool Guard(KeyValuePair<ParsedSeries, List<ParserInfo>> p)
         {
-            return MergeNameGuard(p.Key.Format, p.Key.NormalizedName, info.Format,
+            return MergeNameGuard(p.Key.Format, p.Key.NormalizedName, info.Format, libraryType,
                 normalizedName, normalizedSortName, normalizedLocalizedName);
         }
     }
@@ -460,9 +458,9 @@ public class ParseScannedFiles
     /// <returns></returns>
     private static bool MergeNameGuard(
         MangaFormat mergeIntoFormat, string mergeIntoSeries,
-        MangaFormat format, params string[] normalizedNames)
+        MangaFormat format, LibraryType libraryType, params string[] normalizedNames)
     {
-        if (mergeIntoFormat != format) return false;
+        if (libraryType != LibraryType.GDS && mergeIntoFormat != format) return false;
 
         if (string.IsNullOrEmpty(mergeIntoSeries)) return false;
 
@@ -535,12 +533,12 @@ public class ParseScannedFiles
         scanResults = MergeLocalizedSeriesAcrossScanResults(scanResults);
 
         _logger.LogDebug("\t[ScannerService] Library {LibraryName} Step 1.E: Group all parsed data into logical Series", library.Name);
-        TrackSeriesAcrossScanResults(scanResults, scannedSeries);
+        TrackSeriesAcrossScanResults(scanResults, scannedSeries, library.Type);
 
 
         // Now transform and add to processedScannedSeries AFTER everything is processed
         _logger.LogDebug("\t[ScannerService] Library {LibraryName} Step 1.F: Generate Sort Order for Series and Finalize", library.Name);
-        GenerateProcessedScannedSeries(scannedSeries, scanResults, processedScannedSeries);
+        GenerateProcessedScannedSeries(scannedSeries, scanResults, processedScannedSeries, library.Type);
     }
 
     /// <summary>
@@ -549,13 +547,14 @@ public class ParseScannedFiles
     /// <param name="scannedSeries">A concurrent dictionary of tracked series and their parsed infos</param>
     /// <param name="scanResults">List of all scan results, used to determine if any series has changed</param>
     /// <param name="processedScannedSeries">A thread-safe concurrent bag of processed series results</param>
-    private void GenerateProcessedScannedSeries(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, IList<ScanResult> scanResults, ConcurrentBag<ScannedSeriesResult> processedScannedSeries)
+    private void GenerateProcessedScannedSeries(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, IList<ScanResult> scanResults,
+        ConcurrentBag<ScannedSeriesResult> processedScannedSeries, LibraryType libraryType)
     {
         // First, update the sort order for all series
         UpdateSeriesSortOrder(scannedSeries);
 
         // Now, generate the final processed scanned series results
-        CreateFinalSeriesResults(scannedSeries, scanResults, processedScannedSeries);
+        CreateFinalSeriesResults(scannedSeries, scanResults, processedScannedSeries, libraryType);
     }
 
     /// <summary>
@@ -586,7 +585,7 @@ public class ParseScannedFiles
     /// <param name="scanResults">List of all scan results, used to determine if any series has changed</param>
     /// <param name="processedScannedSeries">The list where processed results will be added</param>
     private static void CreateFinalSeriesResults(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries,
-        IList<ScanResult> scanResults, ConcurrentBag<ScannedSeriesResult> processedScannedSeries)
+        IList<ScanResult> scanResults, ConcurrentBag<ScannedSeriesResult> processedScannedSeries, LibraryType libraryType)
     {
         foreach (var series in scannedSeries.Keys)
         {
@@ -594,11 +593,19 @@ public class ParseScannedFiles
 
             processedScannedSeries.Add(new ScannedSeriesResult
             {
-                HasChanged = scanResults.Any(sr => sr.HasChanged),  // Combine HasChanged flag across all scanResults
+                HasChanged = scanResults.Any(sr => sr.HasChanged &&
+                                                   sr.ParserInfos.Any(info => IsParserInfoForSeries(info, series, libraryType))),
                 ParsedSeries = series,
                 ParsedInfos = scannedSeries[series]
             });
         }
+    }
+
+    private static bool IsParserInfoForSeries(ParserInfo info, ParsedSeries series, LibraryType libraryType)
+    {
+        if (!info.Series.ToNormalized().Equals(series.NormalizedName)) return false;
+
+        return libraryType == LibraryType.GDS || info.Format == series.Format;
     }
 
     /// <summary>

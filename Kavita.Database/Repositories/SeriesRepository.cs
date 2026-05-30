@@ -94,9 +94,15 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
     public async Task<bool> DoesSeriesNameExistInLibraryAsync(string name, int libraryId, MangaFormat format,
         CancellationToken ct = default)
     {
+        var isGdsLibrary = await context.Library
+            .Where(l => l.Id == libraryId)
+            .Select(l => l.Type == LibraryType.GDS)
+            .FirstOrDefaultAsync(ct);
+
         return await context.Series
             .AsNoTracking()
-            .Where(s => s.LibraryId == libraryId && s.Name.Equals(name) && s.Format == format)
+            .Where(s => s.LibraryId == libraryId && s.Name.Equals(name))
+            .Where(s => isGdsLibrary || s.Format == format)
             .AnyAsync(ct);
     }
 
@@ -1261,7 +1267,7 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
         var normalizedLocalized = localizedName.ToNormalized();
         var query = context.Series
             .Where(s => s.LibraryId == libraryId)
-            .Where(s => s.Format == format && format != MangaFormat.Unknown)
+            .Where(s => s.Library.Type == LibraryType.GDS || (s.Format == format && format != MangaFormat.Unknown))
             .Where(s =>
                 s.NormalizedName.Equals(normalizedSeries)
                 || s.NormalizedName.Equals(normalizedLocalized)
@@ -1270,10 +1276,13 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
                 || (!string.IsNullOrEmpty(normalizedLocalized) && s.NormalizedLocalizedName.Equals(normalizedLocalized))
 
                 || (s.OriginalName != null && s.OriginalName.Equals(seriesName))
-            );
+        );
         if (!withFullIncludes)
         {
-            return query.SingleOrDefaultAsync(ct);
+            return query
+                .OrderByDescending(s => s.Library.Type == LibraryType.GDS && s.Format == MangaFormat.Text)
+                .ThenByDescending(s => s.Id)
+                .FirstOrDefaultAsync(ct);
         }
 
 #nullable disable
@@ -1307,7 +1316,10 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
             .ThenInclude(c => c.Files)
 
             .AsSplitQuery();
-        return query.SingleOrDefaultAsync(ct);
+        return query
+            .OrderByDescending(s => s.Library.Type == LibraryType.GDS && s.Format == MangaFormat.Text)
+            .ThenByDescending(s => s.Id)
+            .FirstOrDefaultAsync(ct);
 
 #nullable enable
     }
@@ -1387,7 +1399,7 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
         var normalizedLocalized = localizedName.ToNormalized();
         return await context.Series
             .Where(s => s.LibraryId == libraryId)
-            .Where(s => s.Format == format && format != MangaFormat.Unknown)
+            .Where(s => s.Library.Type == LibraryType.GDS || (s.Format == format && format != MangaFormat.Unknown))
             .Where(s =>
                 s.NormalizedName.Equals(normalizedSeries)
                 || s.NormalizedName.Equals(normalizedLocalized)
@@ -1418,20 +1430,26 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
             .Where(s => s.LibraryId == libraryId)
             .ToListAsync(ct);
 
+        var isGdsLibrary = await context.Library
+            .Where(l => l.Id == libraryId)
+            .Select(l => l.Type == LibraryType.GDS)
+            .FirstOrDefaultAsync(ct);
+
         // Get a set of matching series ids for the given parsedSeries
         var ids = new HashSet<int>();
 
         foreach (var parsedSeries in seenSeries)
         {
             var matchingSeries = dbSeries
-                .Where(s => s.Format == parsedSeries.Format && s.NormalizedName == parsedSeries.NormalizedName)
-                .OrderBy(s => s.Id) // Sort to handle potential duplicates
+                .Where(s => (isGdsLibrary || s.Format == parsedSeries.Format) && s.NormalizedName == parsedSeries.NormalizedName)
+                .OrderBy(s => isGdsLibrary && s.Format == MangaFormat.Text ? 0 : 1)
+                .ThenBy(s => s.Id) // Sort to handle potential duplicates
                 .ToList();
 
-            // Prefer the first match or handle duplicates by choosing the last one
+            // Prefer the selected survivor and remove the remaining duplicates.
             if (matchingSeries.Count != 0)
             {
-                ids.Add(matchingSeries.Last().Id);
+                ids.Add(matchingSeries.First().Id);
             }
         }
 

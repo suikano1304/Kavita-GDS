@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,6 +19,7 @@ using Kavita.Models.Entities.Enums;
 using Kavita.Models.Entities.Interfaces;
 using Kavita.Services.Comparators;
 using Kavita.Services.Extensions;
+using Kavita.Services.Helpers;
 using Microsoft.Extensions.Logging;
 
 namespace Kavita.Services;
@@ -191,6 +193,16 @@ public class MetadataService(
         logger.LogDebug("[MetadataService] Processing cover image generation for series: {SeriesName}", series.OriginalName);
         try
         {
+            if (series.Library?.Type == LibraryType.GDS && TryApplyGdsFolderCover(series, forceUpdate, forceColorScape))
+            {
+                return;
+            }
+
+            if (series.Library?.Type == LibraryType.GDS && ProcessGdsSeriesCoverGen(series, forceUpdate, encodeFormat, coverImageSize, forceColorScape))
+            {
+                return;
+            }
+
             var totalVolumes = series.Volumes.Count;
             var volumeIndex = 0;
             var firstVolumeUpdated = false;
@@ -229,6 +241,143 @@ public class MetadataService(
         {
             logger.LogError(ex, "[MetadataService] There was an exception during cover generation for {SeriesName} ", series.Name);
         }
+    }
+
+    private bool ProcessGdsSeriesCoverGen(Series series, bool forceUpdate, EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
+    {
+        series.Volumes ??= [];
+        var firstVolume = series.Volumes.MinBy(volume => volume.MinNumber);
+        if (firstVolume == null) return false;
+
+        firstVolume.Chapters ??= [];
+        var firstChapter = firstVolume.Chapters.FirstOrDefault(chapter => chapter.MinNumber.Is(1f)) ??
+                           firstVolume.Chapters.MinBy(chapter => chapter.SortOrder, ChapterSortComparerDefaultFirst.Default);
+        if (firstChapter == null) return false;
+
+        var chapterUpdated = UpdateGdsChapterCoverFromYaml(firstChapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
+        if (!chapterUpdated) return true;
+
+        UpdateChapterLastModified(firstChapter, forceUpdate || chapterUpdated);
+
+        var volumeUpdated = UpdateVolumeCoverImage(firstVolume, chapterUpdated || forceUpdate, forceColorScape);
+        UpdateSeriesCoverImage(series, volumeUpdated || forceUpdate, forceColorScape);
+
+        return true;
+    }
+
+    private bool UpdateGdsChapterCoverFromYaml(Chapter chapter, bool forceUpdate, EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
+    {
+        var firstFile = chapter.Files.MinBy(x => x.Chapter);
+        if (firstFile == null) return false;
+
+        if (!cacheHelper.ShouldUpdateCoverImage(
+                directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, chapter.CoverImage),
+                firstFile, chapter.Created, forceUpdate, chapter.CoverImageLocked))
+        {
+            return false;
+        }
+
+        if (!GdsMetadataParser.TryGetCoverBase64(firstFile.FilePath, out var encodedImage)) return false;
+
+        var thumbnailWidth = coverImageSize.GetDimensions().Width;
+        var coverImage = imageService.CreateThumbnailFromBase64(encodedImage,
+            ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), encodeFormat, thumbnailWidth);
+        if (string.IsNullOrEmpty(coverImage)) return false;
+
+        chapter.CoverImage = coverImage;
+        imageService.UpdateColorScape(chapter);
+        unitOfWork.ChapterRepository.Update(chapter);
+        _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+
+        return true;
+    }
+
+    private bool TryApplyGdsFolderCover(Series series, bool forceUpdate, bool forceColorScape)
+    {
+        if (string.IsNullOrWhiteSpace(series.FolderPath)) return false;
+
+        var coverFilePath = Path.Join(series.FolderPath, "cover.jpg");
+        var newCoverImage = "_s" + series.Id + ".jpg";
+        if (!File.Exists(coverFilePath))
+        {
+            coverFilePath = Path.Join(series.FolderPath, "cover.png");
+            newCoverImage = "_s" + series.Id + ".png";
+        }
+        if (!File.Exists(coverFilePath))
+        {
+            coverFilePath = Path.Join(series.FolderPath, "cover.webp");
+            newCoverImage = "_s" + series.Id + ".webp";
+        }
+
+        var configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
+        if (!File.Exists(coverFilePath))
+        {
+            if (File.Exists(configCoverFilePath))
+            {
+                File.Delete(configCoverFilePath);
+            }
+
+            return false;
+        }
+
+        var shouldCopy = forceUpdate || !File.Exists(configCoverFilePath) ||
+                         new FileInfo(coverFilePath).Length != new FileInfo(configCoverFilePath).Length;
+
+        var allEntitiesAlreadyUseCover = series.CoverImage == newCoverImage &&
+                                         series.Volumes.All(volume => volume.CoverImage == newCoverImage &&
+                                                                      volume.Chapters.All(chapter => chapter.CoverImage == newCoverImage));
+        var needsColorScape = NeedsColorSpace(series, forceColorScape) ||
+                              series.Volumes.Any(volume => NeedsColorSpace(volume, forceColorScape) ||
+                                                           volume.Chapters.Any(chapter => NeedsColorSpace(chapter, forceColorScape)));
+        if (!shouldCopy && allEntitiesAlreadyUseCover && !needsColorScape)
+        {
+            return true;
+        }
+
+        if (shouldCopy)
+        {
+            File.Copy(coverFilePath, configCoverFilePath, true);
+        }
+
+        if (!File.Exists(configCoverFilePath)) return false;
+
+        var shouldUpdateSeriesColor = shouldCopy || series.CoverImage != newCoverImage ||
+                                      NeedsColorSpace(series, forceColorScape);
+        series.CoverImage = newCoverImage;
+        if (shouldUpdateSeriesColor)
+        {
+            imageService.UpdateColorScape(series);
+        }
+        unitOfWork.SeriesRepository.Update(series);
+        _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+
+        foreach (var volume in series.Volumes)
+        {
+            var shouldUpdateVolumeColor = shouldCopy || volume.CoverImage != newCoverImage ||
+                                          NeedsColorSpace(volume, forceColorScape);
+            volume.CoverImage = newCoverImage;
+            if (shouldUpdateVolumeColor)
+            {
+                imageService.UpdateColorScape(volume);
+            }
+            unitOfWork.VolumeRepository.Update(volume);
+            _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
+
+            foreach (var chapter in volume.Chapters)
+            {
+                var shouldUpdateChapterColor = shouldCopy || chapter.CoverImage != newCoverImage ||
+                                               NeedsColorSpace(chapter, forceColorScape);
+                chapter.CoverImage = newCoverImage;
+                if (shouldUpdateChapterColor)
+                {
+                    imageService.UpdateColorScape(chapter);
+                }
+                unitOfWork.ChapterRepository.Update(chapter);
+                _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+            }
+        }
+
+        return true;
     }
 
 

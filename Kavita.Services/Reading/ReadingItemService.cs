@@ -4,6 +4,7 @@ using Kavita.API.Services;
 using Kavita.Models.Entities.Enums;
 using Kavita.Models.Metadata;
 using Kavita.Models.Parser;
+using Kavita.Services.Helpers;
 using Kavita.Services.Scanner;
 using Microsoft.Extensions.Logging;
 
@@ -21,6 +22,7 @@ public class ReadingItemService : IReadingItemService
     private readonly ImageParser _imageParser;
     private readonly BookParser _bookParser;
     private readonly PdfParser _pdfParser;
+    private readonly GdsParser _gdsParser;
     private readonly IMediaErrorService _mediaErrorService;
 
     public ReadingItemService(IArchiveService archiveService, IBookService bookService, IImageService imageService,
@@ -38,6 +40,7 @@ public class ReadingItemService : IReadingItemService
         _bookParser = new BookParser(directoryService, bookService, _basicParser);
         _comicVineParser = new ComicVineParser(directoryService);
         _pdfParser = new PdfParser(directoryService);
+        _gdsParser = new GdsParser(directoryService, _imageParser);
 
     }
 
@@ -47,21 +50,21 @@ public class ReadingItemService : IReadingItemService
     /// <param name="filePath">Fully qualified path of file</param>
     /// <param name="enableMetadata">If false, returns null</param>
     /// <returns></returns>
-    private ComicInfo? GetComicInfo(string filePath, bool enableMetadata)
+    private ComicInfo? GetComicInfo(string filePath, bool enableMetadata, LibraryType type)
     {
-        if (!enableMetadata) return null;
+        ComicInfo? info = null;
 
-        if (Parser.IsEpub(filePath) || Parser.IsPdf(filePath))
+        if (enableMetadata && (Parser.IsEpub(filePath) || Parser.IsPdf(filePath)))
         {
-            return _bookService.GetComicInfo(filePath);
+            info = _bookService.GetComicInfo(filePath);
         }
 
-        if (Parser.IsComicInfoExtension(filePath))
+        if (enableMetadata && Parser.IsComicInfoExtension(filePath))
         {
-            return _archiveService.GetComicInfo(filePath);
+            info = _archiveService.GetComicInfo(filePath);
         }
 
-        return null;
+        return type == LibraryType.GDS ? GdsMetadataParser.GetComicInfo(filePath, info) : info;
     }
 
     /// <summary>
@@ -74,6 +77,11 @@ public class ReadingItemService : IReadingItemService
     /// <param name="enableMetadata">Enable Metadata parsing overriding filename parsing</param>
     public ParserInfo? ParseFile(string path, string rootPath, string libraryRoot, LibraryType type, bool enableMetadata)
     {
+        if (type == LibraryType.GDS && Parser.IsCoverImage(Path.GetFileName(path)))
+        {
+            return null;
+        }
+
         try
         {
             var info = Parse(path, rootPath, libraryRoot, type, enableMetadata);
@@ -117,6 +125,10 @@ public class ReadingItemService : IReadingItemService
             case MangaFormat.Epub:
             {
                 return _bookService.GetNumberOfPages(filePath);
+            }
+            case MangaFormat.Text:
+            {
+                return _bookService.GetNumberOfPagesText(filePath);
             }
             case MangaFormat.Image:
             {
@@ -185,25 +197,34 @@ public class ReadingItemService : IReadingItemService
     /// <returns></returns>
     private ParserInfo? Parse(string path, string rootPath, string libraryRoot, LibraryType type, bool enableMetadata)
     {
+        if (type == LibraryType.GDS)
+        {
+            return _gdsParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata, type));
+        }
+
         if (_comicVineParser.IsApplicable(path, type))
         {
-            return _comicVineParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata));
+            return _comicVineParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata, type));
         }
         if (_imageParser.IsApplicable(path, type))
         {
-            return _imageParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata));
+            return _imageParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata, type));
         }
         if (_bookParser.IsApplicable(path, type))
         {
-            return _bookParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata));
+            return _bookParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata, type));
         }
         if (_pdfParser.IsApplicable(path, type))
         {
-            return _pdfParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata));
+            return _pdfParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata, type));
+        }
+        if (_gdsParser.IsApplicable(path, type))
+        {
+            return _gdsParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata, type));
         }
         if (_basicParser.IsApplicable(path, type))
         {
-            return _basicParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata));
+            return _basicParser.Parse(path, rootPath, libraryRoot, type, enableMetadata, GetComicInfo(path, enableMetadata, type));
         }
 
         return null;

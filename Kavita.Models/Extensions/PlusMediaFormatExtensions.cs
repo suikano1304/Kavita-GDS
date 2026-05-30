@@ -19,6 +19,7 @@ public static class PlusMediaFormatExtensions
             LibraryType.Book => PlusMediaFormat.Book,
             LibraryType.Image => PlusMediaFormat.Manga,
             LibraryType.ComicVine => PlusMediaFormat.Comic,
+            LibraryType.GDS => seriesFormat is MangaFormat.Text ? PlusMediaFormat.LightNovel : PlusMediaFormat.Manga,
             _ => throw new ArgumentOutOfRangeException(nameof(libraryType), libraryType, null)
         };
     }
@@ -27,7 +28,7 @@ public static class PlusMediaFormatExtensions
     {
         return plusMediaFormat switch
         {
-            PlusMediaFormat.Manga => [LibraryType.Manga, LibraryType.Image],
+            PlusMediaFormat.Manga => [LibraryType.Manga, LibraryType.Image, LibraryType.GDS],
             PlusMediaFormat.Comic => [LibraryType.Comic, LibraryType.ComicVine],
             PlusMediaFormat.LightNovel => [LibraryType.LightNovel, LibraryType.Book, LibraryType.Manga],
             PlusMediaFormat.Book => [LibraryType.LightNovel, LibraryType.Book],

@@ -887,7 +887,7 @@ public class ProcessSeries(
 
             if (skipExpensiveFileStats && !fileService.HasFileBeenModifiedSince(existingFile.FilePath, existingFile.LastModified))
             {
-                existingFile.Pages = GetFastGdsPageCount(existingFile.Pages, info.Format);
+                existingFile.Pages = GetGdsPageCount(info.FullFilePath, info.Format, existingFile.Pages);
                 existingFile.Extension = fileInfo.Extension.ToLowerInvariant();
                 existingFile.FileName = Parser.RemoveExtensionIfSupported(existingFile.FilePath);
                 existingFile.FilePath = Parser.NormalizePath(existingFile.FilePath);
@@ -903,7 +903,7 @@ public class ProcessSeries(
             }
 
             existingFile.Pages = skipExpensiveFileStats
-                ? GetFastGdsPageCount(existingFile.Pages, info.Format)
+                ? GetGdsPageCount(info.FullFilePath, info.Format, existingFile.Pages)
                 : readingItemService.GetNumberOfPages(info.FullFilePath, info.Format);
             existingFile.Extension = fileInfo.Extension.ToLowerInvariant();
             existingFile.FileName = Parser.RemoveExtensionIfSupported(existingFile.FilePath);
@@ -920,7 +920,7 @@ public class ProcessSeries(
         {
 
             var fileBuilder = new MangaFileBuilder(info.FullFilePath, info.Format,
-                    skipExpensiveFileStats ? GetFastGdsPageCount(0, info.Format) : readingItemService.GetNumberOfPages(info.FullFilePath, info.Format))
+                    skipExpensiveFileStats ? GetGdsPageCount(info.FullFilePath, info.Format, 0) : readingItemService.GetNumberOfPages(info.FullFilePath, info.Format))
                 .WithExtension(fileInfo.Extension)
                 .WithBytes(fileInfo.Length);
             if (!skipExpensiveFileStats)
@@ -932,9 +932,14 @@ public class ProcessSeries(
         }
     }
 
-    private static int GetFastGdsPageCount(int existingPages, MangaFormat format)
+    private int GetGdsPageCount(string filePath, MangaFormat format, int existingPages)
     {
         if (existingPages > 0) return existingPages;
+
+        if (format == MangaFormat.Archive)
+        {
+            return readingItemService.GetNumberOfPages(filePath, format);
+        }
 
         return format is MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text ? 1 : 0;
     }
