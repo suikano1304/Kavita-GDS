@@ -55,6 +55,7 @@ public partial class BookService(
     public const string BookReaderBodyScope = "//BODY/APP-ROOT[1]/DIV[1]/DIV[1]/DIV[1]/APP-BOOK-READER[1]/DIV[1]/DIV[2]/DIV[1]/DIV[1]/DIV[1]";
 
     private readonly PdfComicInfoExtractor _pdfComicInfoExtractor = new(logger, mediaErrorService);
+    private const int TextLinesPerPage = 1000;
 
     /// <summary>
     /// Setup the most lenient book parsing options possible as people have some really bad epubs
@@ -906,6 +907,27 @@ public partial class BookService(
         return 0;
     }
 
+    public int GetNumberOfPagesText(string filePath)
+    {
+        if (!Parser.IsText(filePath)) return 0;
+
+        try
+        {
+            var lines = File.ReadAllLines(filePath, Encoding.UTF8);
+            var pages = lines.Length / TextLinesPerPage;
+            if (lines.Length % TextLinesPerPage > 0) pages += 1;
+            return pages;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[GetNumberOfPagesText] There was an exception getting number of pages, defaulting to 0");
+            mediaErrorService.ReportMediaIssue(filePath, MediaErrorProducer.BookService,
+                "There was an exception getting number of pages, defaulting to 0", ex);
+        }
+
+        return 0;
+    }
+
     private static string EscapeTags(string content)
     {
         content = Regex.Replace(content, @"<script(.*)(/>)", "<script$1></script>", RegexOptions.None, Parser.RegexTimeout);
@@ -1602,6 +1624,19 @@ public partial class BookService(
     public async Task<ICollection<BookChapterItem>> GenerateTableOfContents(Chapter chapter,
         CancellationToken ct = default)
     {
+        if (chapter.Files.FirstOrDefault()?.Format == MangaFormat.Text)
+        {
+            return Enumerable.Range(0, Math.Max(chapter.Pages, 0))
+                .Select(page => new BookChapterItem
+                {
+                    Title = $"{page + 1} Page",
+                    Page = page,
+                    Part = string.Empty,
+                    Children = []
+                })
+                .ToList();
+        }
+
         using var book = await EpubReader.OpenBookAsync(chapter.Files.ElementAt(0).FilePath, LenientBookReaderOptions);
         if (book == null) return [];
 
@@ -1791,6 +1826,52 @@ public partial class BookService(
             logger.LogError(ex, "There was an issue reading one of the pages for {Book}", book.FilePath);
             await mediaErrorService.ReportMediaIssueAsync(book.FilePath ?? string.Empty, MediaErrorProducer.BookService,
                 "There was an issue reading one of the pages for", ex, ct);
+        }
+
+        throw new KavitaException("epub-html-missing");
+    }
+
+    public async Task<string> GetBookPageText(int page, int chapterId, string cachedTextPath, CancellationToken ct = default)
+    {
+        try
+        {
+            var lines = await File.ReadAllLinesAsync(cachedTextPath, Encoding.UTF8, ct);
+            var startLine = page * TextLinesPerPage;
+            var endLine = Math.Min(startLine + TextLinesPerPage, lines.Length);
+            if (startLine < 0 || startLine >= lines.Length || startLine >= endLine) return string.Empty;
+
+            var content = new StringBuilder();
+            for (var i = startLine; i < endLine; i++)
+            {
+                var line = lines[i];
+                if (string.IsNullOrEmpty(line))
+                {
+                    content.Append("<p>&nbsp;</p>");
+                    continue;
+                }
+
+                if (line.StartsWith(' '))
+                {
+                    var leadingSpaces = line.TakeWhile(c => c == ' ').Count();
+                    content.Append("<p>");
+                    content.Append(string.Concat(Enumerable.Repeat("&nbsp;", leadingSpaces)));
+                    content.Append(System.Net.WebUtility.HtmlEncode(line.TrimStart()));
+                    content.Append("</p>");
+                    continue;
+                }
+
+                content.Append("<p>");
+                content.Append(System.Net.WebUtility.HtmlEncode(line));
+                content.Append("</p>");
+            }
+
+            return content.ToString();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "There was an issue reading text page {Page} for chapter {ChapterId} from {Book}", page, chapterId, cachedTextPath);
+            await mediaErrorService.ReportMediaIssueAsync(cachedTextPath, MediaErrorProducer.BookService,
+                "There was an issue reading one of the text pages for", ex, ct);
         }
 
         throw new KavitaException("epub-html-missing");

@@ -30,13 +30,14 @@ public static partial class Parser
     public const string ArchiveFileExtensions = @"\.cbz|\.zip|\.rar|\.cbr|\.tar.gz|\.7zip|\.7z|\.cb7|\.cbt";
     public const string EpubFileExtension = @"\.epub";
     public const string PdfFileExtension = @"\.pdf";
+    public const string TextFileExtension = @"\.txt";
     private const string BookFileExtensions = EpubFileExtension + "|" + PdfFileExtension;
     private const string XmlRegexExtensions = @"\.xml";
     public const string MacOsMetadataFileStartsWith = @"._";
     public const string FontFileExtensions = @"\.[woff2|ttf|otf|woff]";
 
     public const string SupportedExtensions =
-        ArchiveFileExtensions + "|" + ImageFileExtensions + "|" + BookFileExtensions;
+        ArchiveFileExtensions + "|" + ImageFileExtensions + "|" + BookFileExtensions + "|" + TextFileExtension;
 
     private const RegexOptions MatchOptions =
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant;
@@ -103,6 +104,8 @@ public static partial class Parser
     private static readonly Regex XmlRegex = new(XmlRegexExtensions,
         MatchOptions, RegexTimeout);
     private static readonly Regex BookFileRegex = new(BookFileExtensions,
+        MatchOptions, RegexTimeout);
+    private static readonly Regex TextFileRegex = new(TextFileExtension,
         MatchOptions, RegexTimeout);
     private static readonly Regex CoverImageRegex = new(@"(?<!back[\s_-])(?<!\(back )(?<!back)(?:^|[^a-zA-Z0-9])(!?cover|folder)(?![a-zA-Z0-9]|s\b)",
         MatchOptions, RegexTimeout);
@@ -686,6 +689,19 @@ public static partial class Parser
             MatchOptions, RegexTimeout),
     ];
 
+    private static readonly Regex[] GdsRegex =
+    [
+        new Regex(
+            @"^(?<Volume>\d+(\.\d+)?)\s",
+            MatchOptions, RegexTimeout),
+        new Regex(
+            @"(.*?)\s?(?<Volume>\d+(\.\d+)?)(회|화|장|권)",
+            MatchOptions, RegexTimeout),
+        new Regex(
+            @"([^#|\d])(?<Volume>\d+(\.\d+)?)(#\d+)?$",
+            MatchOptions, RegexTimeout),
+    ];
+
     private static readonly Regex MangaEditionRegex = new Regex(
         // Tenjo Tenge {Full Contact Edition} v01 (2011) (Digital) (ASTC).cbz
         // To Love Ru v01 Uncensored (Ch.001-007)
@@ -734,6 +750,7 @@ public static partial class Parser
         if (IsImage(filePath)) return MangaFormat.Image;
         if (IsEpub(filePath)) return MangaFormat.Epub;
         if (IsPdf(filePath)) return MangaFormat.Pdf;
+        if (IsText(filePath)) return MangaFormat.Text;
         return MangaFormat.Unknown;
     }
 
@@ -836,6 +853,24 @@ public static partial class Parser
         return LooseLeafVolume;
     }
 
+    public static string ParseGdsVolume(string filename)
+    {
+        foreach (var regex in GdsRegex)
+        {
+            var matches = regex.Matches(filename.Replace("_", " "));
+            foreach (var group in matches.Select(match => match.Groups))
+            {
+                if (!group["Volume"].Success || group["Volume"] == Match.Empty) continue;
+
+                var value = group["Volume"].Value;
+                var hasPart = group["Part"].Success;
+                return FormatValue(value, hasPart);
+            }
+        }
+
+        return LooseLeafVolume;
+    }
+
 
     private static string FormatValue(string value, bool hasPart)
     {
@@ -882,6 +917,7 @@ public static partial class Parser
             LibraryType.Image => ParseMangaVolume(filename),
             LibraryType.LightNovel => ParseMangaVolume(filename),
             LibraryType.ComicVine => ParseComicVolume(filename),
+            LibraryType.GDS => ParseGdsVolume(filename),
             _ => LooseLeafVolume
         };
     }
@@ -1026,6 +1062,11 @@ public static partial class Parser
     public static bool IsBook(string filePath)
     {
         return BookFileRegex.IsMatch(Path.GetExtension(filePath));
+    }
+
+    public static bool IsText(string filePath)
+    {
+        return TextFileRegex.IsMatch(Path.GetExtension(filePath));
     }
 
     public static bool IsImage(string filePath)

@@ -129,7 +129,7 @@ export class ReaderService {
   getNavigationArray(libraryId: number, seriesId: number, chapterId: number, format: MangaFormat) {
     if (format === undefined) format = MangaFormat.ARCHIVE;
 
-    if (format === MangaFormat.EPUB) {
+    if (format === MangaFormat.EPUB || format === MangaFormat.TEXT) {
       return ['library', libraryId, 'series', seriesId, 'book', chapterId];
     } else if (format === MangaFormat.PDF) {
       return ['library', libraryId, 'series', seriesId, 'pdf', chapterId];

@@ -35,4 +35,6 @@ public enum LibraryType
     /// </summary>
     [Description("Comic")]
     ComicVine = 5,
+    [Description("GDS")]
+    GDS = 6,
 }
