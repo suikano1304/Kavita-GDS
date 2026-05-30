@@ -1032,6 +1032,7 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
         {
             case LibraryType.Image:
             case LibraryType.Manga:
+            case LibraryType.GDS:
                 return "Chapter" + (includeSpace ? " " : string.Empty);
             case LibraryType.Comic:
             case LibraryType.ComicVine:
