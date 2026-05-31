@@ -258,8 +258,7 @@ public class MetadataService(
         var chapterUpdated = UpdateGdsChapterCoverFromYaml(firstChapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
         if (!chapterUpdated)
         {
-            TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
-            return true;
+            return TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
         }
 
         UpdateChapterLastModified(firstChapter, forceUpdate || chapterUpdated);
