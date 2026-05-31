@@ -952,14 +952,27 @@ public class ProcessSeries(
 
     private int GetGdsPageCount(string filePath, MangaFormat format, int existingPages)
     {
-        if (existingPages > 0) return existingPages;
+        var isGdsMountPath = IsGdsMountPath(filePath);
+        if (existingPages > 0 && isGdsMountPath) return existingPages;
 
         if (format == MangaFormat.Archive)
         {
             return readingItemService.GetNumberOfPages(filePath, format);
         }
 
+        if (!isGdsMountPath && format is (MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text))
+        {
+            return readingItemService.GetNumberOfPages(filePath, format);
+        }
+
         return format is MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text ? 1 : 0;
+    }
+
+    private static bool IsGdsMountPath(string filePath)
+    {
+        var normalizedPath = Parser.NormalizePath(filePath);
+        return normalizedPath.StartsWith("/mnt/gds/", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(normalizedPath, "/mnt/gds", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task UpdateChapterFromComicInfo(UpdateChapterComicInfoArgs args)
