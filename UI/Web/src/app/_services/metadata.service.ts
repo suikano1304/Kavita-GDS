@@ -177,7 +177,7 @@ export class MetadataService {
       combination: FilterCombination.And,
       limitTo: 0,
       sortOptions: {
-        isAscending: true,
+        isAscending: this.getDefaultSortAscending(entityType),
         sortField: this.getDefaultSortField(entityType) as TSort
       }
     };
@@ -199,13 +199,24 @@ export class MetadataService {
   getDefaultSortField(entityType: ValidFilterEntity) {
     switch (entityType) {
       case 'series':
-        return SeriesSortField.SortName;
+        return SeriesSortField.LastModified;
       case 'person':
         return PersonSortField.Name;
       case 'annotation':
         return AnnotationsSortField.Owner;
       case 'readinglist':
         return ReadingListSortField.Title;
+    }
+  }
+
+  getDefaultSortAscending(entityType: ValidFilterEntity) {
+    switch (entityType) {
+      case 'series':
+        return false;
+      case 'person':
+      case 'annotation':
+      case 'readinglist':
+        return true;
     }
   }
 

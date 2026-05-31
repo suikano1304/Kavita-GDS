@@ -168,13 +168,13 @@ export class MetadataFilterComponent<TFilter extends number = number, TSort exte
     const defaultSortField = this.sortFieldOptions()[0].value;
 
     this.sortGroup = new FormGroup({
-      sortField: new FormControl({value: this.filterV2?.sortOptions?.sortField || defaultSortField, disabled: this.filterSettings().sortDisabled}, []),
-      limitTo: new FormControl(this.filterV2?.limitTo || 0, []),
-      name: new FormControl(this.filterV2?.name || '', [])
+      sortField: new FormControl({value: this.filterV2?.sortOptions?.sortField ?? defaultSortField, disabled: this.filterSettings().sortDisabled}, []),
+      limitTo: new FormControl(this.filterV2?.limitTo ?? 0, []),
+      name: new FormControl(this.filterV2?.name ?? '', [])
     });
 
     if (this.filterSettings()?.presetsV2?.sortOptions) {
-      this.isAscendingSort = this.filterSettings()?.presetsV2?.sortOptions!.isAscending || true;
+      this.isAscendingSort = this.filterSettings()?.presetsV2?.sortOptions!.isAscending ?? true;
     }
 
     this.cdRef.markForCheck();

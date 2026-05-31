@@ -18,11 +18,11 @@ public static class SeriesSortExtensions
     /// <returns></returns>
     public static IQueryable<Series> Sort(this IQueryable<Series> query, int userId, SeriesSortOptionDto? sortOptions)
     {
-        // If no sort options, default to using SortName
+        // If no sort options, default to most recently modified series first.
         sortOptions ??= new SeriesSortOptionDto()
         {
-            IsAscending = true,
-            SortField = SeriesSortField.SortName
+            IsAscending = false,
+            SortField = SeriesSortField.LastModifiedDate
         };
 
         query = sortOptions.SortField switch
