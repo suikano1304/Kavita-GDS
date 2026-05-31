@@ -833,6 +833,7 @@ public class ProcessSeries(
             .Distinct()
             .ToList();
 
+        var seenFilesInVolume = new HashSet<string>();
         foreach (var existingChapter in existingChapters)
         {
             var chapterFileDirectories = existingChapter.Files
@@ -845,7 +846,12 @@ public class ProcessSeries(
             if (hasMatchingDirectory)
             {
                 existingChapter.Files = existingChapter.Files
-                    .Where(f => parsedInfos.Any(p => Parser.NormalizePath(p.FullFilePath) == Parser.NormalizePath(f.FilePath)))
+                    .Where(f =>
+                    {
+                        var normalizedPath = Parser.NormalizePath(f.FilePath);
+                        return parsedInfos.Any(p => Parser.NormalizePath(p.FullFilePath) == normalizedPath)
+                               && seenFilesInVolume.Add(normalizedPath);
+                    })
                     .OrderByNatural(f => f.FilePath)
                     .ToList();
 
