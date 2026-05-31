@@ -91,49 +91,113 @@ public static class GdsMetadataParser
         if (string.IsNullOrEmpty(yamlPath)) return false;
 
         var fileName = Path.GetFileName(filePath);
-        var quotedFileName = "'" + fileName.Replace("'", "''") + "':";
-        var plainFileName = fileName + ":";
+        try
+        {
+            var yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
+            if (!TryGetMap(yaml, "files", out var files)) return false;
 
+            foreach (var (sourceKey, value) in files)
+            {
+                if (!string.Equals(sourceKey.ToString()?.Trim(), fileName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (value is not Dictionary<object, object?> fileMetadata) return false;
+                if (!TryGetScalar(fileMetadata, "cover", out var cover)) return false;
+
+                return TryNormalizeBase64Cover(cover, out encodedImage);
+            }
+        }
+        catch (YamlDotNet.Core.YamlException)
+        {
+            return TryGetCoverBase64FromLines(yamlPath, fileName, out encodedImage);
+        }
+
+        return TryGetCoverBase64FromLines(yamlPath, fileName, out encodedImage);
+    }
+
+    private static bool TryGetCoverBase64FromLines(string yamlPath, string fileName, out string encodedImage)
+    {
+        encodedImage = string.Empty;
         var inFiles = false;
         var inTargetFile = false;
-        var linesAfterFiles = 0;
+
         foreach (var line in File.ReadLines(yamlPath))
         {
-            var trimmed = line.Trim();
             if (!inFiles)
             {
-                inFiles = string.Equals(trimmed, "files:", StringComparison.OrdinalIgnoreCase);
+                if (TryParseIndentedKey(line, 0, out var rootKey) &&
+                    string.Equals(rootKey, "files", StringComparison.OrdinalIgnoreCase))
+                {
+                    inFiles = true;
+                }
+
                 continue;
             }
 
-            linesAfterFiles++;
-            if (linesAfterFiles > 40) return false;
-
-            if (trimmed.StartsWith("cover:", StringComparison.OrdinalIgnoreCase))
+            if (!string.IsNullOrWhiteSpace(line) && !char.IsWhiteSpace(line[0]))
             {
-                return TryNormalizeBase64Cover(trimmed["cover:".Length..], out encodedImage);
+                return false;
             }
 
-            if (!inTargetFile)
+            if (TryParseIndentedKey(line, 4, out var candidateFile))
             {
-                inTargetFile = string.Equals(trimmed, quotedFileName, StringComparison.OrdinalIgnoreCase) ||
-                               string.Equals(trimmed, plainFileName, StringComparison.OrdinalIgnoreCase);
+                inTargetFile = string.Equals(UnquoteYamlScalar(candidateFile), fileName, StringComparison.OrdinalIgnoreCase);
                 continue;
             }
 
-            if (line.Length > 0 && !char.IsWhiteSpace(line[0])) return false;
-            if (line.StartsWith("    ", StringComparison.Ordinal) && !line.StartsWith("        ", StringComparison.Ordinal)) return false;
-            if (!trimmed.StartsWith("cover:", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!inTargetFile) continue;
 
-            return TryNormalizeBase64Cover(trimmed["cover:".Length..], out encodedImage);
+            if (TryParseIndentedScalar(line, 8, "cover", out var cover))
+            {
+                return TryNormalizeBase64Cover(cover, out encodedImage);
+            }
         }
 
         return false;
     }
 
+    private static bool TryParseIndentedKey(string line, int indent, out string key)
+    {
+        key = string.Empty;
+        if (!HasIndent(line, indent)) return false;
+
+        var trimmed = line.Trim();
+        if (!trimmed.EndsWith(":", StringComparison.Ordinal)) return false;
+
+        key = trimmed[..^1].Trim();
+        return !string.IsNullOrWhiteSpace(key);
+    }
+
+    private static bool TryParseIndentedScalar(string line, int indent, string key, out string value)
+    {
+        value = string.Empty;
+        if (!HasIndent(line, indent)) return false;
+
+        var trimmed = line.Trim();
+        var prefix = key + ":";
+        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+
+        value = trimmed[prefix.Length..].Trim();
+        return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static bool HasIndent(string line, int indent)
+    {
+        if (line.Length < indent) return false;
+        for (var i = 0; i < indent; i++)
+        {
+            if (line[i] != ' ') return false;
+        }
+
+        return line.Length == indent || line[indent] != ' ';
+    }
+
+    private static string UnquoteYamlScalar(string value)
+    {
+        return value.Trim().Trim('"').Trim('\'');
+    }
+
     private static bool TryNormalizeBase64Cover(string value, out string encodedImage)
     {
-        encodedImage = value.Trim().Trim('"').Trim('\'');
+        encodedImage = UnquoteYamlScalar(value);
         if (string.IsNullOrWhiteSpace(encodedImage)) return false;
         if (string.Equals(encodedImage, "TEXT", StringComparison.OrdinalIgnoreCase)) return false;
         if (encodedImage.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||

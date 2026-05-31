@@ -196,6 +196,7 @@ public class ArchiveService(
                     using var archive = ZipFile.OpenRead(archivePath);
 
                     var entryName = FindCoverImageFilename(archivePath, archive.Entries.Select(e => e.FullName));
+                    if (entryName == null) return string.Empty;
                     var entry = archive.Entries.Single(e => e.FullName == entryName);
 
                     using var stream = entry.Open();

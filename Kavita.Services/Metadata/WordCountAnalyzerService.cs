@@ -14,6 +14,7 @@ using Kavita.Common.Helpers;
 using Kavita.Models.DTOs.SignalR;
 using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
+using Kavita.Services.Helpers;
 using Kavita.Services.Reading;
 using Microsoft.Extensions.Logging;
 using VersOne.Epub;
@@ -28,11 +29,53 @@ public class WordCountAnalyzerService(
     IUnitOfWork unitOfWork,
     IEventHub eventHub,
     ICacheHelper cacheHelper,
-    IMediaErrorService mediaErrorService)
+    IMediaErrorService mediaErrorService,
+    IDirectoryService directoryService)
     : IWordCountAnalyzerService
 {
     public const int AverageCharactersPerWord = 5;
 
+    private sealed class EpubBookLease(EpubBookRef? book, string? repairedPath) : IDisposable
+    {
+        public EpubBookRef? Book { get; } = book;
+
+        public void Dispose()
+        {
+            Book?.Dispose();
+            EpubManifestRepairHelper.DeleteQuietly(repairedPath);
+        }
+    }
+
+    private async Task<EpubBookLease> OpenEpubBookAsync(string filePath)
+    {
+        try
+        {
+            return new EpubBookLease(await EpubReader.OpenBookAsync(filePath, BookService.LenientBookReaderOptions), null);
+        }
+        catch (EpubPackageException ex)
+        {
+            var repairDirectory = directoryService.FileSystem.Path.Join(directoryService.TempDirectory, "epub-manifest-repair");
+            if (!EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(filePath, repairDirectory,
+                    out var repairedPath))
+            {
+                throw;
+            }
+
+            try
+            {
+                logger.LogWarning(
+                    "[WordCountAnalyzerService] Repaired duplicate EPUB manifest items in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
+                    filePath, ex.Message);
+                return new EpubBookLease(
+                    await EpubReader.OpenBookAsync(repairedPath, BookService.LenientBookReaderOptions), repairedPath);
+            }
+            catch
+            {
+                EpubManifestRepairHelper.DeleteQuietly(repairedPath);
+                throw;
+            }
+        }
+    }
 
     [DisableConcurrentExecution(timeoutInSeconds: 60 * 60 * 60)]
     [AutomaticRetry(Attempts = 2, OnAttemptsExceeded = AttemptsExceededAction.Delete)]
@@ -172,7 +215,9 @@ public class WordCountAnalyzerService(
                         try
                         {
                             // default: Replace with BookService method, we will loose progress but these tasks are usually fast
-                            using var book = await EpubReader.OpenBookAsync(filePath, BookService.LenientBookReaderOptions);
+                            using var bookLease = await OpenEpubBookAsync(filePath);
+                            var book = bookLease.Book;
+                            if (book == null) return;
 
                             var totalPages = book.Content.Html.Local;
                             foreach (var bookPage in totalPages)

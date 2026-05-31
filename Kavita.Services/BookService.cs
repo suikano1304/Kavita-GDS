@@ -102,6 +102,78 @@ public partial class BookService(
         }
     };
 
+    private sealed class EpubBookLease(EpubBookRef? book, string? repairedPath) : IDisposable
+    {
+        public EpubBookRef? Book { get; } = book;
+
+        public void Dispose()
+        {
+            Book?.Dispose();
+            EpubManifestRepairHelper.DeleteQuietly(repairedPath);
+        }
+    }
+
+    private string EpubManifestRepairTempDirectory =>
+        Path.Join(directoryService.TempDirectory, "epub-manifest-repair");
+
+    private EpubBookLease OpenEpubBook(string filePath, EpubReaderOptions options)
+    {
+        try
+        {
+            return new EpubBookLease(EpubReader.OpenBook(filePath, options), null);
+        }
+        catch (EpubPackageException ex)
+        {
+            if (!EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(filePath,
+                    EpubManifestRepairTempDirectory, out var repairedPath))
+            {
+                throw;
+            }
+
+            try
+            {
+                logger.LogWarning(
+                    "[BookService] Repaired duplicate EPUB manifest items in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
+                    filePath, ex.Message);
+                return new EpubBookLease(EpubReader.OpenBook(repairedPath, options), repairedPath);
+            }
+            catch
+            {
+                EpubManifestRepairHelper.DeleteQuietly(repairedPath);
+                throw;
+            }
+        }
+    }
+
+    private async Task<EpubBookLease> OpenEpubBookAsync(string filePath, EpubReaderOptions options)
+    {
+        try
+        {
+            return new EpubBookLease(await EpubReader.OpenBookAsync(filePath, options), null);
+        }
+        catch (EpubPackageException ex)
+        {
+            if (!EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(filePath,
+                    EpubManifestRepairTempDirectory, out var repairedPath))
+            {
+                throw;
+            }
+
+            try
+            {
+                logger.LogWarning(
+                    "[BookService] Repaired duplicate EPUB manifest items in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
+                    filePath, ex.Message);
+                return new EpubBookLease(await EpubReader.OpenBookAsync(repairedPath, options), repairedPath);
+            }
+            catch
+            {
+                EpubManifestRepairHelper.DeleteQuietly(repairedPath);
+                throw;
+            }
+        }
+    }
+
     private static bool HasClickableHrefPart(HtmlNode anchor)
     {
         return (anchor.GetAttributeValue("href", string.Empty).Contains('#')
@@ -257,7 +329,7 @@ public partial class BookService(
         {
             if (!match.Success) continue;
             var importFile = match.Groups["Filename"].Value;
-            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + prepend + importFile);
+            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + NormalizeContentKey(prepend + importFile));
         }
     }
 
@@ -267,7 +339,7 @@ public partial class BookService(
         {
             if (!match.Success) continue;
             var importFile = match.Groups["Filename"].Value;
-            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + prepend + importFile);
+            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + NormalizeContentKey(prepend + importFile));
         }
     }
 
@@ -492,11 +564,12 @@ public partial class BookService(
 
     private ComicInfo? GetEpubComicInfo(string filePath)
     {
-        EpubBookRef? epubBook = null;
+        EpubBookLease? epubBookLease = null;
 
         try
         {
-            epubBook = OpenEpubWithFallback(filePath, epubBook);
+            epubBookLease = OpenEpubWithFallback(filePath);
+            var epubBook = epubBookLease.Book;
             if (epubBook == null) return null;
 
             var info = BuildBaseComicInfo(epubBook);
@@ -517,7 +590,7 @@ public partial class BookService(
         }
         finally
         {
-            epubBook?.Dispose();
+            epubBookLease?.Dispose();
         }
 
         return null;
@@ -717,12 +790,11 @@ public partial class BookService(
         }
     }
 
-    private EpubBookRef? OpenEpubWithFallback(string filePath, EpubBookRef? epubBook)
+    private EpubBookLease OpenEpubWithFallback(string filePath)
     {
-        // default: Refactor this to use the Async version
         try
         {
-            epubBook = EpubReader.OpenBook(filePath, BookReaderOptions);
+            return OpenEpubBook(filePath, BookReaderOptions);
         }
         catch (Exception ex)
         {
@@ -732,12 +804,8 @@ public partial class BookService(
             mediaErrorService.ReportMediaIssue(filePath, MediaErrorProducer.BookService,
                 "There was an exception parsing metadata", ex);
         }
-        finally
-        {
-            epubBook ??= EpubReader.OpenBook(filePath, LenientBookReaderOptions);
-        }
 
-        return epubBook;
+        return OpenEpubBook(filePath, LenientBookReaderOptions);
     }
 
     public ComicInfo? GetComicInfo(string filePath)
@@ -894,7 +962,9 @@ public partial class BookService(
                 return docReader.GetPageCount();
             }
 
-            using var epubBook = EpubReader.OpenBook(filePath, LenientBookReaderOptions);
+            using var epubLease = OpenEpubBook(filePath, LenientBookReaderOptions);
+            var epubBook = epubLease.Book;
+            if (epubBook == null) return 0;
             return epubBook.GetReadingOrder().Count;
         }
         catch (Exception ex)
@@ -945,6 +1015,30 @@ public partial class BookService(
         return key.Replace("../", string.Empty);
     }
 
+    public static string NormalizeContentKey(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return key;
+        if (key.StartsWith("http", StringComparison.OrdinalIgnoreCase) || key.StartsWith("//", StringComparison.Ordinal))
+        {
+            return key;
+        }
+
+        var segments = new Stack<string>();
+        foreach (var segment in key.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == ".") continue;
+            if (segment == "..")
+            {
+                if (segments.Count > 0) segments.Pop();
+                continue;
+            }
+
+            segments.Push(segment);
+        }
+
+        return string.Join("/", segments.Reverse());
+    }
+
     public async Task<Dictionary<string, int>> CreateKeyToPageMappingAsync(EpubBookRef book,
         CancellationToken ct = default)
     {
@@ -967,7 +1061,8 @@ public partial class BookService(
         var ret = new Dictionary<int, int>();
         try
         {
-            using var book = await EpubReader.OpenBookAsync(bookFilePath, LenientBookReaderOptions);
+            using var bookLease = await OpenEpubBookAsync(bookFilePath, LenientBookReaderOptions);
+            var book = bookLease.Book;
             if (book == null) return null;
 
             var mappings = await CreateKeyToPageMappingAsync(book, ct);
@@ -1070,7 +1165,8 @@ public partial class BookService(
 
         try
         {
-            using var book = await EpubReader.OpenBookAsync(bookFilePath, LenientBookReaderOptions);
+            using var bookLease = await OpenEpubBookAsync(bookFilePath, LenientBookReaderOptions);
+            var book = bookLease.Book;
             if (book == null) return 0;
 
             var doc = new HtmlDocument { OptionFixNestedTags = true };
@@ -1238,7 +1334,9 @@ public partial class BookService(
     public async Task<string> CopyImageToTempFromBook(int chapterId, BookmarkDto bookmarkDto, string cachedBookPath,
         CancellationToken ct = default)
     {
-        using var book = await EpubReader.OpenBookAsync(cachedBookPath, LenientBookReaderOptions);
+        using var bookLease = await OpenEpubBookAsync(cachedBookPath, LenientBookReaderOptions);
+        var book = bookLease.Book;
+        if (book == null) return string.Empty;
 
         var counter = 0;
         var doc = new HtmlDocument { OptionFixNestedTags = true };
@@ -1357,7 +1455,9 @@ public partial class BookService(
     public async Task<BookResourceResultDto> GetResourceAsync(string bookFilePath, string requestedKey,
         CancellationToken ct = default)
     {
-        using var book = await EpubReader.OpenBookAsync(bookFilePath, LenientBookReaderOptions);
+        using var bookLease = await OpenEpubBookAsync(bookFilePath, LenientBookReaderOptions);
+        var book = bookLease.Book;
+        if (book == null) return BookResourceResultDto.Error("file-missing");
         var key = CoalesceKeyForAnyFile(book, requestedKey);
 
         if (!book.Content.AllFiles.ContainsLocalFileRefWithKey(key))
@@ -1383,7 +1483,9 @@ public partial class BookService(
 
         try
         {
-            using var epubBook = EpubReader.OpenBook(filePath, LenientBookReaderOptions);
+            using var epubLease = OpenEpubBook(filePath, LenientBookReaderOptions);
+            var epubBook = epubLease.Book;
+            if (epubBook == null) return null;
 
             // <meta content="The Dark Tower" name="calibre:series"/>
             // <meta content="Wolves of the Calla" name="calibre:title_sort"/>
@@ -1600,6 +1702,16 @@ public partial class BookService(
     {
         if (book.Content.AllFiles.ContainsLocalFileRefWithKey(key)) return key;
 
+        var normalizedKey = NormalizeContentKey(key);
+        if (book.Content.AllFiles.ContainsLocalFileRefWithKey(normalizedKey)) return normalizedKey;
+
+        var normalizedFileName = Path.GetFileName(normalizedKey);
+        var correctedFile = book.Content.AllFiles.Local.SingleOrDefault(file =>
+            string.Equals(NormalizeContentKey(file.FilePath), normalizedKey, StringComparison.Ordinal) ||
+            string.Equals(Path.GetFileName(file.FilePath), normalizedFileName, StringComparison.Ordinal) ||
+            string.Equals(file.Key, normalizedFileName, StringComparison.Ordinal));
+        if (correctedFile != null) return correctedFile.Key;
+
         var cleanedKey = CleanContentKeys(key);
         if (book.Content.AllFiles.ContainsLocalFileRefWithKey(cleanedKey)) return cleanedKey;
 
@@ -1637,7 +1749,8 @@ public partial class BookService(
                 .ToList();
         }
 
-        using var book = await EpubReader.OpenBookAsync(chapter.Files.ElementAt(0).FilePath, LenientBookReaderOptions);
+        using var bookLease = await OpenEpubBookAsync(chapter.Files.ElementAt(0).FilePath, LenientBookReaderOptions);
+        var book = bookLease.Book;
         if (book == null) return [];
 
         var mappings = await CreateKeyToPageMappingAsync(book, ct);
@@ -1776,7 +1889,9 @@ public partial class BookService(
             .First(k => k is { Name: AuthKeyHelper.ImageOnlyKeyName, Provider: AuthKeyProvider.System })
             .Key;
 
-        using var book = await EpubReader.OpenBookAsync(cachedEpubPath, LenientBookReaderOptions);
+        using var bookLease = await OpenEpubBookAsync(cachedEpubPath, LenientBookReaderOptions);
+        var book = bookLease.Book;
+        if (book == null) throw new KavitaException("epub-html-missing");
         var mappings = await CreateKeyToPageMappingAsync(book, ct);
         var apiBase = baseUrl + "book/" + chapterId + "/" + string.Format(BookApiUrl, authKey);
 
@@ -1894,7 +2009,8 @@ public partial class BookService(
             return GetPdfCoverImage(fileFilePath, fileName, outputDirectory, encodeFormat, size);
         }
 
-        using var epubBook = EpubReader.OpenBook(fileFilePath, LenientBookReaderOptions);
+        using var epubLease = OpenEpubBook(fileFilePath, LenientBookReaderOptions);
+        var epubBook = epubLease.Book;
         if (epubBook == null) return string.Empty;
 
         try

@@ -199,7 +199,7 @@ public class MetadataService(
                 return;
             }
 
-            if (series.Library?.Type == LibraryType.GDS && ProcessGdsSeriesCoverGen(series, forceUpdate, encodeFormat, coverImageSize, forceColorScape))
+            if (series.Library?.Type == LibraryType.GDS && await ProcessGdsSeriesCoverGen(series, forceUpdate, encodeFormat, coverImageSize, forceColorScape))
             {
                 return;
             }
@@ -244,7 +244,7 @@ public class MetadataService(
         }
     }
 
-    private bool ProcessGdsSeriesCoverGen(Series series, bool forceUpdate, EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
+    private async Task<bool> ProcessGdsSeriesCoverGen(Series series, bool forceUpdate, EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
     {
         series.Volumes ??= [];
         var firstVolume = series.Volumes.MinBy(volume => volume.MinNumber);
@@ -255,16 +255,51 @@ public class MetadataService(
                            firstVolume.Chapters.MinBy(chapter => chapter.SortOrder, ChapterSortComparerDefaultFirst.Default);
         if (firstChapter == null) return false;
 
-        var chapterUpdated = UpdateGdsChapterCoverFromYaml(firstChapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
-        if (!chapterUpdated)
+        var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
+        if (firstFile?.Format == MangaFormat.Text)
         {
             return TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
         }
 
-        UpdateChapterLastModified(firstChapter, forceUpdate || chapterUpdated);
+        var totalVolumes = series.Volumes.Count;
+        var volumeIndex = 0;
+        var firstVolumeUpdated = false;
+        foreach (var volume in series.Volumes)
+        {
+            volume.Chapters ??= [];
 
-        var volumeUpdated = UpdateVolumeCoverImage(firstVolume, chapterUpdated || forceUpdate, forceColorScape);
-        UpdateSeriesCoverImage(series, volumeUpdated || forceUpdate, forceColorScape);
+            var firstChapterUpdated = false;
+            var chapterIndex = 0;
+            foreach (var chapter in volume.Chapters)
+            {
+                var chapterUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
+                if (!chapterUpdated)
+                {
+                    chapterUpdated = UpdateChapterCoverImage(chapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
+                }
+
+                UpdateChapterLastModified(chapter, forceUpdate || chapterUpdated);
+                if (chapterIndex == 0 && chapterUpdated)
+                {
+                    firstChapterUpdated = true;
+                }
+
+                chapterIndex++;
+            }
+
+            var volumeUpdated = UpdateVolumeCoverImage(volume, firstChapterUpdated || forceUpdate, forceColorScape);
+            if (volumeIndex == 0 && volumeUpdated)
+            {
+                firstVolumeUpdated = true;
+            }
+
+            await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+                MessageFactory.CoverUpdateProgressEvent(series.LibraryId, volumeIndex / (float) totalVolumes, ProgressEventType.Started, series.Name));
+
+            volumeIndex++;
+        }
+
+        UpdateSeriesCoverImage(series, firstVolumeUpdated || forceUpdate, forceColorScape);
 
         return true;
     }
