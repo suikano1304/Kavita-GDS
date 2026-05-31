@@ -7,6 +7,7 @@ using Kavita.API.Services.SignalR;
 using Kavita.Common.Extensions;
 using Kavita.Database.Tests;
 using Kavita.Models.Builders;
+using Kavita.Models.DTOs.SignalR;
 using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
 using Kavita.Services.Builders;
@@ -171,6 +172,47 @@ public class WordCountAnalysisTests(ITestOutputHelper outputHelper): AbstractDbT
         Assert.Equal(MinHoursToRead, chapter2.MinHoursToRead);
         Assert.Equal(AvgHoursToRead, chapter2.AvgHoursToRead);
         Assert.Equal(MaxHoursToRead, chapter2.MaxHoursToRead);
+    }
+
+    [Fact]
+    public async Task ReadingTimeShouldSkipNonEpubFilesInEpubSeries()
+    {
+        var (unitOfWork, context, mapper) = await CreateDatabase();
+
+        var pdfFile = new MangaFileBuilder(
+            Path.Join(_testDirectory, "test.pdf"),
+            MangaFormat.Pdf,
+            10).Build();
+
+        var chapter = new ChapterBuilder("1")
+            .WithFile(pdfFile)
+            .WithPages(10)
+            .Build();
+
+        var series = new SeriesBuilder("Test Series")
+            .WithFormat(MangaFormat.Epub)
+            .WithVolume(new VolumeBuilder(Parser.LooseLeafVolume)
+                .WithChapter(chapter)
+                .Build())
+            .Build();
+
+        context.Library.Add(new LibraryBuilder("Test", LibraryType.Book)
+            .WithSeries(series)
+            .Build());
+
+        await context.SaveChangesAsync();
+
+        var cacheService = new CacheHelper(new FileService());
+        var eventHub = Substitute.For<IEventHub>();
+        var service = new WordCountAnalyzerService(Substitute.For<ILogger<WordCountAnalyzerService>>(), unitOfWork,
+            eventHub, cacheService, Substitute.For<IMediaErrorService>());
+
+        await service.ScanSeries(1, 1);
+
+        Assert.Equal(0, chapter.WordCount);
+        Assert.NotEqual(default, pdfFile.LastFileAnalysis);
+        await eventHub.DidNotReceive().SendMessageAsync(MessageFactory.Error,
+            Arg.Any<SignalRMessage>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
 

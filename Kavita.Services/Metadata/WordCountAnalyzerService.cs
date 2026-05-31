@@ -160,6 +160,13 @@ public class WordCountAnalyzerService(
                     var fileCounter = 1;
                     foreach (var file in chapter.Files)
                     {
+                        if (file.Format != MangaFormat.Epub)
+                        {
+                            UpdateFileAnalysis(file);
+                            fileCounter++;
+                            continue;
+                        }
+
                         var filePath = file.FilePath;
                         var pageCounter = 1;
                         try
