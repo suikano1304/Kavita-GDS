@@ -185,11 +185,21 @@ public class ParseScannedFiles
                 return false;
             }
 
+            if (library.Type == LibraryType.GDS && seriesList.Any(series => series.HasZeroPageFiles))
+            {
+                return false;
+            }
+
             if (matchedByDirectoryName)
             {
                 var directoryLastWriteTime = _directoryService.GetLastWriteTime(directory).Truncate(TimeSpan.TicksPerSecond);
                 return seriesList.All(series => series.LastScanned.Truncate(TimeSpan.TicksPerSecond) >= directoryLastWriteTime);
             }
+        }
+
+        if (library.Type == LibraryType.GDS && seriesList.Any(series => series.HasZeroPageFiles))
+        {
+            return false;
         }
 
         // if (forceCheck)

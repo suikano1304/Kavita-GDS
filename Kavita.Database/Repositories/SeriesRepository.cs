@@ -1744,7 +1744,8 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
                 FolderPath = s.FolderPath,
                 LowestFolderPath = s.LowestFolderPath,
                 Format = s.Format,
-                LibraryRoots = s.Library.Folders.Select(f => f.Path)
+                LibraryRoots = s.Library.Folders.Select(f => f.Path),
+                HasZeroPageFiles = s.Volumes.SelectMany(v => v.Chapters).SelectMany(c => c.Files).Any(f => f.Pages == 0)
             })
             .ToListAsync(ct);
 
