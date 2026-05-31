@@ -75,4 +75,5 @@ public class SeriesModified
     public DateTime LastScanned { get; set; }
     public MangaFormat Format { get; set; }
     public IEnumerable<string> LibraryRoots { get; set; } = ArraySegment<string>.Empty;
+    public bool HasZeroPageFiles { get; set; }
 }
