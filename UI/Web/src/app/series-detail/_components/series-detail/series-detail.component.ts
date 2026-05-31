@@ -279,6 +279,7 @@ class SeriesDetailComponent implements OnInit, AfterViewInit {
           break;
         case LibraryType.Manga:
         case LibraryType.Images:
+        case LibraryType.GDS:
           chapterLocaleKey = 'common.chapter-num-shorthand';
           break;
       }
