@@ -152,8 +152,9 @@ export class CardDetailLayoutComponent<TFilter extends number, TSort extends num
 
     const isNonStandardEntity = !entityType || entityType === 'other';
 
-    const defaultOptions = isNonStandardEntity ? SeriesSortField.SortName : this.metadataService.getDefaultSortField(entityType);
-    return (defaultOptions !== filter?.sortOptions?.sortField) || !filter?.sortOptions?.isAscending;
+    const defaultSortField = isNonStandardEntity ? SeriesSortField.SortName : this.metadataService.getDefaultSortField(entityType);
+    const defaultIsAscending = isNonStandardEntity ? true : this.metadataService.getDefaultSortAscending(entityType);
+    return (defaultSortField !== filter?.sortOptions?.sortField) || defaultIsAscending !== filter?.sortOptions?.isAscending;
   });
 
   trackItem = (index: number, item: any) => this.trackByIdentity()(index, item);
