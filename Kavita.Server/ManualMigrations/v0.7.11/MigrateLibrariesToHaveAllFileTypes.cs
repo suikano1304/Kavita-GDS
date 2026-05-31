@@ -27,6 +27,7 @@ public class MigrateLibrariesToHaveAllFileTypes : ManualMigration
             {
                 case LibraryType.Manga:
                 case LibraryType.Comic:
+                case LibraryType.GDS:
                     library.LibraryFileTypes.Add(new LibraryFileTypeGroup()
                     {
                         FileTypeGroup = FileTypeGroup.Archive
@@ -43,6 +44,13 @@ public class MigrateLibrariesToHaveAllFileTypes : ManualMigration
                     {
                         FileTypeGroup = FileTypeGroup.Pdf
                     });
+                    if (library.Type == LibraryType.GDS)
+                    {
+                        library.LibraryFileTypes.Add(new LibraryFileTypeGroup()
+                        {
+                            FileTypeGroup = FileTypeGroup.Text
+                        });
+                    }
                     break;
                 case LibraryType.Book:
                     library.LibraryFileTypes.Add(new LibraryFileTypeGroup()
