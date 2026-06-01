@@ -52,7 +52,7 @@ public class WordCountAnalyzerService(
         {
             return new EpubBookLease(await EpubReader.OpenBookAsync(filePath, BookService.LenientBookReaderOptions), null);
         }
-        catch (EpubPackageException ex)
+        catch (EpubReaderException ex)
         {
             var repairDirectory = directoryService.FileSystem.Path.Join(directoryService.TempDirectory, "epub-manifest-repair");
             if (!EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(filePath, repairDirectory,
@@ -64,7 +64,7 @@ public class WordCountAnalyzerService(
             try
             {
                 logger.LogWarning(
-                    "[WordCountAnalyzerService] Repaired duplicate EPUB manifest items in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
+                    "[WordCountAnalyzerService] Repaired EPUB manifest in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
                     filePath, ex.Message);
                 return new EpubBookLease(
                     await EpubReader.OpenBookAsync(repairedPath, BookService.LenientBookReaderOptions), repairedPath);

@@ -194,9 +194,9 @@ public class MetadataService(
         logger.LogDebug("[MetadataService] Processing cover image generation for series: {SeriesName}", series.OriginalName);
         try
         {
-            if (series.Library?.Type == LibraryType.GDS && TryApplyGdsFolderCover(series, forceUpdate, forceColorScape))
+            if (series.Library?.Type == LibraryType.GDS)
             {
-                return;
+                TryApplyGdsFolderCover(series, forceUpdate, forceColorScape);
             }
 
             if (series.Library?.Type == LibraryType.GDS && await ProcessGdsSeriesCoverGen(series, forceUpdate, encodeFormat, coverImageSize, forceColorScape))
@@ -433,13 +433,9 @@ public class MetadataService(
         var shouldCopy = forceUpdate || !File.Exists(configCoverFilePath) ||
                          new FileInfo(coverFilePath).Length != new FileInfo(configCoverFilePath).Length;
 
-        var allEntitiesAlreadyUseCover = series.CoverImage == newCoverImage &&
-                                         series.Volumes.All(volume => volume.CoverImage == newCoverImage &&
-                                                                      volume.Chapters.All(chapter => chapter.CoverImage == newCoverImage));
-        var needsColorScape = NeedsColorSpace(series, forceColorScape) ||
-                              series.Volumes.Any(volume => NeedsColorSpace(volume, forceColorScape) ||
-                                                           volume.Chapters.Any(chapter => NeedsColorSpace(chapter, forceColorScape)));
-        if (!shouldCopy && allEntitiesAlreadyUseCover && !needsColorScape)
+        var seriesAlreadyUsesCover = series.CoverImage == newCoverImage;
+        var needsColorScape = NeedsColorSpace(series, forceColorScape);
+        if (!shouldCopy && seriesAlreadyUsesCover && !needsColorScape)
         {
             return true;
         }
@@ -460,32 +456,6 @@ public class MetadataService(
         }
         unitOfWork.SeriesRepository.Update(series);
         _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
-
-        foreach (var volume in series.Volumes)
-        {
-            var shouldUpdateVolumeColor = shouldCopy || volume.CoverImage != newCoverImage ||
-                                          NeedsColorSpace(volume, forceColorScape);
-            volume.CoverImage = newCoverImage;
-            if (shouldUpdateVolumeColor)
-            {
-                imageService.UpdateColorScape(volume);
-            }
-            unitOfWork.VolumeRepository.Update(volume);
-            _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
-
-            foreach (var chapter in volume.Chapters)
-            {
-                var shouldUpdateChapterColor = shouldCopy || chapter.CoverImage != newCoverImage ||
-                                               NeedsColorSpace(chapter, forceColorScape);
-                chapter.CoverImage = newCoverImage;
-                if (shouldUpdateChapterColor)
-                {
-                    imageService.UpdateColorScape(chapter);
-                }
-                unitOfWork.ChapterRepository.Update(chapter);
-                _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
-            }
-        }
 
         return true;
     }

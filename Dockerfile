@@ -26,11 +26,13 @@ COPY Kavita.Server/config/appsettings.json /tmp/config/appsettings.json
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-  && apt-get install -y libicu-dev libgdiplus curl tzdata fontconfig \
+  && apt-get install -y libicu-dev libgdiplus curl tzdata fontconfig sqlite3 \
   && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /usr/share/fonts/truetype/nanum
+COPY ["UI/Web/src/assets/fonts/Nanum Gothic/NanumGothic-Regular.ttf", "/usr/share/fonts/truetype/nanum/NanumGothic-Regular.ttf"]
 COPY ["UI/Web/src/assets/fonts/Nanum Gothic/NanumGothic-Bold.ttf", "/usr/share/fonts/truetype/nanum/NanumGothic-Bold.ttf"]
+COPY ["UI/Web/src/assets/fonts/Nanum Gothic/NanumGothic-ExtraBold.ttf", "/usr/share/fonts/truetype/nanum/NanumGothic-ExtraBold.ttf"]
 RUN fc-cache -f || true
 
 COPY entrypoint.sh /entrypoint.sh
