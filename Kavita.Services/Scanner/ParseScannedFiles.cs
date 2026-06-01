@@ -90,6 +90,11 @@ public class ParseScannedFiles
     private async Task<IList<ScanResult>> ScanDirectories(string folderPath, IDictionary<string, IList<SeriesModified>> seriesPaths,
         Library library, bool forceCheck, GlobMatcher matcher, List<ScanResult> result, string fileExtensions)
     {
+        if (library.Type == LibraryType.GDS)
+        {
+            return await ScanDirectoriesBottomUp(folderPath, seriesPaths, library, forceCheck, matcher, result, fileExtensions);
+        }
+
         var allDirectories = _directoryService.GetAllDirectories(folderPath, matcher)
             .Select(Parser.NormalizePath)
             .OrderByDescending(d => d.Length)
@@ -134,6 +139,70 @@ public class ParseScannedFiles
         }
 
         return result;
+    }
+
+    private async Task<IList<ScanResult>> ScanDirectoriesBottomUp(string folderPath, IDictionary<string, IList<SeriesModified>> seriesPaths,
+        Library library, bool forceCheck, GlobMatcher matcher, List<ScanResult> result, string fileExtensions)
+    {
+        var processedDirs = new HashSet<string>();
+        var processedDirectoryCount = 0;
+
+        _logger.LogDebug("[ScannerService] Step 1.C Streaming bottom-up GDS directory scan for {FolderPath}", folderPath);
+
+        foreach (var directory in EnumerateDirectoriesBottomUp(folderPath, matcher))
+        {
+            processedDirectoryCount++;
+
+            if (HasProcessedDescendant(processedDirs, directory))
+            {
+                var hasChanged = !HasSeriesFolderNotChangedSinceLastScan(library, seriesPaths, directory, forceCheck);
+                CheckSurfaceFiles(result, directory, folderPath, fileExtensions, matcher, hasChanged);
+                continue;
+            }
+
+            if (directory.EndsWith("Specials", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogDebug("Skipping {Directory} as it ends with 'Specials'", directory);
+                continue;
+            }
+
+            await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+                MessageFactory.FileScanProgressEvent(directory, library.Name, ProgressEventType.Updated));
+
+            if (HasSeriesFolderNotChangedSinceLastScan(library, seriesPaths, directory, forceCheck))
+            {
+                HandleUnchangedFolder(result, folderPath, directory);
+            }
+            else
+            {
+                PerformFullScan(result, directory, folderPath, fileExtensions, matcher);
+            }
+
+            processedDirs.Add(directory);
+        }
+
+        _logger.LogDebug("[ScannerService] Step 1.C Processed {DirectoryCount} streamed GDS directories for {FolderPath}",
+            processedDirectoryCount, folderPath);
+
+        return result;
+    }
+
+    private IEnumerable<string> EnumerateDirectoriesBottomUp(string folderPath, GlobMatcher matcher)
+    {
+        foreach (var subdirectory in _directoryService.GetDirectories(folderPath, matcher))
+        {
+            foreach (var childDirectory in EnumerateDirectoriesBottomUp(subdirectory, matcher))
+            {
+                yield return childDirectory;
+            }
+
+            yield return Parser.NormalizePath(subdirectory);
+        }
+    }
+
+    private static bool HasProcessedDescendant(HashSet<string> processedDirs, string directory)
+    {
+        return processedDirs.Any(d => d.StartsWith(directory + Path.AltDirectorySeparatorChar) || d.Equals(directory));
     }
 
     /// <summary>
@@ -387,21 +456,20 @@ public class ParseScannedFiles
     /// <param name="scannedSeries">A concurrent dictionary to store the tracked series</param>
     public void TrackSeriesAcrossScanResults(IList<ScanResult> scanResults, ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, LibraryType libraryType)
     {
-        // Flatten all ParserInfos from scanResults
-        var allInfos = scanResults.SelectMany(sr => sr.ParserInfos).ToList();
-
-        // Iterate through each ParserInfo and track the series
-        foreach (var info in allInfos)
+        foreach (var scanResult in scanResults)
         {
-            if (info == null) continue;
+            foreach (var info in scanResult.ParserInfos)
+            {
+                if (info == null) continue;
 
-            try
-            {
-                TrackSeries(scannedSeries, info, libraryType);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[ScannerService] Exception occurred during tracking {FilePath}. Skipping this file", info?.FullFilePath);
+                try
+                {
+                    TrackSeries(scannedSeries, info, libraryType);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[ScannerService] Exception occurred during tracking {FilePath}. Skipping this file", info?.FullFilePath);
+                }
             }
         }
     }
@@ -864,10 +932,9 @@ public class ParseScannedFiles
         await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
             MessageFactory.FileScanProgressEvent($"{fileCount} files in {normalizedFolder}", library.Name, ProgressEventType.Updated));
 
-        // Parse files into ParserInfos
-        if (fileCount < 100)
+        // GDS mounts can expose very large remote directories. Avoid creating one task per file there.
+        if (library.Type == LibraryType.GDS || fileCount < 100)
         {
-            // Process files sequentially
             result.ParserInfos = files
                 .Select(file => _readingItemService.ParseFile(file, normalizedFolder, result.LibraryRoot, library.Type, library.EnableMetadata))
                 .Where(info => info != null)
@@ -903,6 +970,8 @@ public class ParseScannedFiles
             var infos = await Task.WhenAll(tasks);
             result.ParserInfos = infos.Where(info => info != null).ToList()!;
         }
+
+        result.Files = ArraySegment<string>.Empty;
     }
 
 
