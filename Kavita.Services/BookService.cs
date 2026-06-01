@@ -122,7 +122,7 @@ public partial class BookService(
         {
             return new EpubBookLease(EpubReader.OpenBook(filePath, options), null);
         }
-        catch (EpubPackageException ex)
+        catch (EpubReaderException ex)
         {
             if (!EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(filePath,
                     EpubManifestRepairTempDirectory, out var repairedPath))
@@ -133,7 +133,7 @@ public partial class BookService(
             try
             {
                 logger.LogWarning(
-                    "[BookService] Repaired duplicate EPUB manifest items in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
+                    "[BookService] Repaired EPUB manifest in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
                     filePath, ex.Message);
                 return new EpubBookLease(EpubReader.OpenBook(repairedPath, options), repairedPath);
             }
@@ -151,7 +151,7 @@ public partial class BookService(
         {
             return new EpubBookLease(await EpubReader.OpenBookAsync(filePath, options), null);
         }
-        catch (EpubPackageException ex)
+        catch (EpubReaderException ex)
         {
             if (!EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(filePath,
                     EpubManifestRepairTempDirectory, out var repairedPath))
@@ -162,7 +162,7 @@ public partial class BookService(
             try
             {
                 logger.LogWarning(
-                    "[BookService] Repaired duplicate EPUB manifest items in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
+                    "[BookService] Repaired EPUB manifest in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
                     filePath, ex.Message);
                 return new EpubBookLease(await EpubReader.OpenBookAsync(repairedPath, options), repairedPath);
             }

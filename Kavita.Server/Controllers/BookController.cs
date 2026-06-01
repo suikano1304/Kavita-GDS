@@ -45,7 +45,7 @@ public class BookController(
         {
             return new EpubBookLease(await EpubReader.OpenBookAsync(filePath, BookService.LenientBookReaderOptions), null);
         }
-        catch (EpubPackageException)
+        catch (EpubReaderException)
         {
             var repairDirectory = directoryService.FileSystem.Path.Join(directoryService.TempDirectory, "epub-manifest-repair");
             if (!EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(filePath, repairDirectory,
