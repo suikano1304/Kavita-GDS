@@ -19,6 +19,7 @@ using Kavita.Models.DTOs.KavitaPlus.Metadata;
 using Kavita.Models.DTOs.Settings;
 using Kavita.Models.DTOs.SignalR;
 using Kavita.Models.Entities;
+using Kavita.Models.Entities.Enums;
 using Kavita.Models.Parser;
 using Kavita.Services.Helpers;
 using Kavita.Services.Plus;
@@ -680,6 +681,11 @@ public class ScannerService(
     /// <returns>Total amount of processed files</returns>
     private async Task<int> ProcessParserInfo(MetadataSettingsDto settings, IList<IList<ParserInfo>> toProcess, Library library, bool forceUpdate)
     {
+        if (library.Type == LibraryType.GDS)
+        {
+            return await ProcessParserInfoSequential(settings, toProcess, library, forceUpdate);
+        }
+
         var channel = Channel.CreateUnbounded<int>();
 
         var serverSettings = await unitOfWork.SettingsRepository.GetSettingsDtoAsync();
@@ -707,6 +713,79 @@ public class ScannerService(
             totalIoTime, avgTimePerThread);
 
         return (int) dbTask.Result;
+    }
+
+    /// <summary>
+    /// GDS libraries can contain very large remote/rclone-backed sets. Processing DB updates,
+    /// cover extraction, and word-count analysis in parallel can push RSS high enough for OOM.
+    /// Keep GDS scans sequential so each series releases archive/EPUB/image resources before
+    /// the next series starts.
+    /// </summary>
+    private async Task<int> ProcessParserInfoSequential(MetadataSettingsDto settings, IList<IList<ParserInfo>> toProcess,
+        Library library, bool forceUpdate)
+    {
+        var sw = Stopwatch.StartNew();
+        var serverSettings = await unitOfWork.SettingsRepository.GetSettingsDtoAsync();
+        var totalFiles = 0;
+        var seriesLeftToProcess = toProcess.Count;
+        var totalSeriesToProcess = toProcess.Count;
+        var processedSeriesCount = 0;
+
+        logger.LogInformation(
+            "[ScannerService] Using low-memory sequential GDS scan path for {LibraryName}. Series to process: {SeriesCount}",
+            library.Name, totalSeriesToProcess);
+
+        foreach (var pSeries in toProcess)
+        {
+            totalFiles += pSeries.Count;
+
+            int? seriesId;
+            using (var scope = scopeFactory.CreateScope())
+            {
+                var scopedUnitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                var processSeries = scope.ServiceProvider.GetRequiredService<IProcessSeries>();
+
+                var scopedLibrary = (await scopedUnitOfWork.LibraryRepository.GetLibraryForIdAsync(library.Id,
+                    LibraryIncludes.Folders | LibraryIncludes.FileTypes | LibraryIncludes.ExcludePatterns))!;
+
+                seriesId = await processSeries.ProcessSeriesAsync(settings, pSeries, new ProcessSeriesArgs
+                {
+                    Library = scopedLibrary,
+                    LeftToProcess = seriesLeftToProcess,
+                    TotalToProcess = totalSeriesToProcess,
+                    ForceUpdate = forceUpdate,
+                });
+            }
+
+            if (seriesId != null)
+            {
+                using var scope = scopeFactory.CreateScope();
+                var scopedMetadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
+                var scopedWordCountAnalyzerService = scope.ServiceProvider.GetRequiredService<IWordCountAnalyzerService>();
+
+                await scopedMetadataService.GenerateCoversForSeries(serverSettings, library.Id, seriesId.Value, false, false);
+                await scopedWordCountAnalyzerService.ScanSeries(library.Id, seriesId.Value, forceUpdate);
+            }
+
+            processedSeriesCount++;
+            seriesLeftToProcess--;
+
+            if (processedSeriesCount % 25 == 0)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                logger.LogDebug("[ScannerService] Low-memory GDS scan processed {Processed}/{Total} series for {LibraryName}",
+                    processedSeriesCount, totalSeriesToProcess, library.Name);
+            }
+        }
+
+        await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+            MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Ended));
+
+        logger.LogDebug("[ScannerService] Finished low-memory GDS scan path for {Count} series in {Elapsed}ms",
+            toProcess.Count, sw.ElapsedMilliseconds);
+
+        return totalFiles;
     }
 
     /// <summary>
