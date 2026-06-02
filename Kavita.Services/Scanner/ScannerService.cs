@@ -717,9 +717,10 @@ public class ScannerService(
 
     /// <summary>
     /// GDS libraries can contain very large remote/rclone-backed sets. Processing DB updates,
-    /// cover extraction, and word-count analysis in parallel can push RSS high enough for OOM.
-    /// Keep GDS scans sequential so each series releases archive/EPUB/image resources before
-    /// the next series starts.
+    /// and cover extraction in parallel can push RSS high enough for OOM. Keep GDS scans
+    /// sequential so each series releases archive/EPUB/image resources before the next series
+    /// starts. Word-count analysis is intentionally skipped here; it can re-read large remote
+    /// EPUBs for minutes per series and is not required for scan/import/cover regeneration.
     /// </summary>
     private async Task<int> ProcessParserInfoSequential(MetadataSettingsDto settings, IList<IList<ParserInfo>> toProcess,
         Library library, bool forceUpdate)
@@ -761,10 +762,8 @@ public class ScannerService(
             {
                 using var scope = scopeFactory.CreateScope();
                 var scopedMetadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
-                var scopedWordCountAnalyzerService = scope.ServiceProvider.GetRequiredService<IWordCountAnalyzerService>();
 
                 await scopedMetadataService.GenerateCoversForSeries(serverSettings, library.Id, seriesId.Value, false, false);
-                await scopedWordCountAnalyzerService.ScanSeries(library.Id, seriesId.Value, forceUpdate);
             }
 
             processedSeriesCount++;
