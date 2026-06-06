@@ -23,8 +23,17 @@ public static class GdsMetadataParser
         var yamlPath = GetMetadataPath(directory);
         if (string.IsNullOrEmpty(yamlPath)) return baseInfo;
 
-        var yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
-        if (!TryGetMap(yaml, "meta", out var meta)) return baseInfo;
+        Dictionary<object, object?>? yaml;
+        try
+        {
+            yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
+        }
+        catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException or InvalidOperationException or ArgumentException)
+        {
+            return BuildFallbackComicInfo(filePath, baseInfo);
+        }
+
+        if (yaml == null || !TryGetMap(yaml, "meta", out var meta)) return baseInfo;
 
         var info = baseInfo ?? new ComicInfo();
 
@@ -75,6 +84,18 @@ public static class GdsMetadataParser
         {
             if (int.TryParse(value, out var day)) info.Day = day;
         });
+
+        info.CleanComicInfo();
+        return info;
+    }
+
+    private static ComicInfo BuildFallbackComicInfo(string filePath, ComicInfo? baseInfo)
+    {
+        var info = baseInfo ?? new ComicInfo();
+        if (string.IsNullOrWhiteSpace(info.Title))
+        {
+            info.Title = BuildTitleFromFileName(filePath);
+        }
 
         info.CleanComicInfo();
         return info;

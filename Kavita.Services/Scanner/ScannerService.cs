@@ -577,6 +577,8 @@ public class ScannerService(
         await metadataService.RemoveAbandonedMetadataKeys();
 
         BackgroundJob.Enqueue(() => directoryService.ClearDirectory(directoryService.CacheDirectory));
+        logger.LogInformation("[ScannerService] Scan library job completed for {LibraryName} in {ElapsedScanTime} milliseconds",
+            library.Name, sw.ElapsedMilliseconds);
     }
 
     private async Task RemoveSeriesNotFound(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, Library library)
