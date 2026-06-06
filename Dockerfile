@@ -42,10 +42,13 @@ EXPOSE 5000
 
 WORKDIR /kavita
 
-HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=3 CMD curl -fsS http://localhost:5000/api/health || exit 1
+HEALTHCHECK --interval=30s --timeout=15s --start-period=300s --retries=3 CMD curl -fsS http://localhost:5000/api/health || exit 1
 
 # Enable detection of running in a container
 ENV DOTNET_RUNNING_IN_CONTAINER=true
+# Keep qemu ARM32 CoreCLR startup stable for linux/arm/v7 smoke tests.
+ENV DOTNET_EnableWriteXorExecute=0
+ENV COMPlus_EnableWriteXorExecute=0
 # Set the time zone
 ENV TZ=UTC
 
