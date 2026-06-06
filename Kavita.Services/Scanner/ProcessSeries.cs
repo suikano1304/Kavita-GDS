@@ -953,19 +953,41 @@ public class ProcessSeries(
     private int GetGdsPageCount(string filePath, MangaFormat format, int existingPages)
     {
         var isGdsMountPath = IsGdsMountPath(filePath);
-        if (existingPages > 0 && isGdsMountPath) return existingPages;
-
-        if (format == MangaFormat.Archive)
+        if (isGdsMountPath)
         {
-            return readingItemService.GetNumberOfPages(filePath, format);
+            if (format is MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text)
+            {
+                if (existingPages > 1) return existingPages;
+            }
+            else if (existingPages > 0)
+            {
+                return existingPages;
+            }
         }
 
-        if (!isGdsMountPath && format is (MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text))
+        if (format is MangaFormat.Archive or MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text)
         {
-            return readingItemService.GetNumberOfPages(filePath, format);
+            var pages = readingItemService.GetNumberOfPages(filePath, format);
+            if (pages > 0) return pages;
+
+            if (existingPages > 0)
+            {
+                logger.LogWarning(
+                    "[ScannerService] Unable to refresh page count for {FilePath}. Preserving existing page count {PageCount}",
+                    filePath, existingPages);
+                return existingPages;
+            }
+
+            logger.LogWarning("[ScannerService] Unable to determine page count for {FilePath}. Defaulting to 0", filePath);
+            return 0;
         }
 
-        return format is MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text ? 1 : 0;
+        if (format == MangaFormat.Image)
+        {
+            return 1;
+        }
+
+        return existingPages > 0 ? existingPages : 0;
     }
 
     private static bool IsGdsMountPath(string filePath)

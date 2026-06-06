@@ -96,7 +96,7 @@ public class BookController(
                 if (book == null) return NotFound();
 
                 bookTitle = book.Title;
-                var pageCount = book.GetReadingOrder().Count;
+                var pageCount = bookService.GetNumberOfPages(file);
                 if (pageCount > 1 && dto.Pages <= 1)
                 {
                     await UpdateBookPageCountAsync(chapterId, dto.VolumeId, dto.SeriesId, pageCount);

@@ -194,12 +194,12 @@ public class MetadataService(
         logger.LogDebug("[MetadataService] Processing cover image generation for series: {SeriesName}", series.OriginalName);
         try
         {
-            if (series.Library?.Type == LibraryType.GDS)
-            {
-                TryApplyGdsFolderCover(series, forceUpdate, forceColorScape);
-            }
+            var preserveGdsSeriesCover = series.Library?.Type == LibraryType.GDS &&
+                                         TryApplyGdsFolderCover(series, forceUpdate, forceColorScape);
 
-            if (series.Library?.Type == LibraryType.GDS && await ProcessGdsSeriesCoverGen(series, forceUpdate, encodeFormat, coverImageSize, forceColorScape))
+            if (series.Library?.Type == LibraryType.GDS &&
+                await ProcessGdsSeriesCoverGen(series, forceUpdate, encodeFormat, coverImageSize, forceColorScape,
+                    preserveGdsSeriesCover))
             {
                 return;
             }
@@ -244,7 +244,8 @@ public class MetadataService(
         }
     }
 
-    private async Task<bool> ProcessGdsSeriesCoverGen(Series series, bool forceUpdate, EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
+    private async Task<bool> ProcessGdsSeriesCoverGen(Series series, bool forceUpdate, EncodeFormat encodeFormat,
+        CoverImageSize coverImageSize, bool forceColorScape, bool preserveSeriesCover)
     {
         series.Volumes ??= [];
         var firstVolume = series.Volumes.MinBy(volume => volume.MinNumber);
@@ -258,7 +259,8 @@ public class MetadataService(
         var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
         if (firstFile?.Format == MangaFormat.Text)
         {
-            return TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
+            return TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize,
+                forceColorScape, preserveSeriesCover);
         }
 
         var totalVolumes = series.Volumes.Count;
@@ -299,7 +301,10 @@ public class MetadataService(
             volumeIndex++;
         }
 
-        UpdateSeriesCoverImage(series, firstVolumeUpdated || forceUpdate, forceColorScape);
+        if (!preserveSeriesCover)
+        {
+            UpdateSeriesCoverImage(series, firstVolumeUpdated || forceUpdate, forceColorScape);
+        }
 
         return true;
     }
@@ -332,13 +337,13 @@ public class MetadataService(
     }
 
     private bool TryApplyGdsTextTitleCover(Series series, Chapter firstChapter, bool forceUpdate,
-        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
+        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape, bool preserveSeriesCover)
     {
         var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
         if (firstFile?.Format != MangaFormat.Text) return false;
-        if (series.CoverImageLocked && !forceUpdate) return false;
+        if (series.CoverImageLocked && !forceUpdate && !preserveSeriesCover) return false;
 
-        if (!forceUpdate && !string.IsNullOrWhiteSpace(series.CoverImage) &&
+        if (!preserveSeriesCover && !forceUpdate && !string.IsNullOrWhiteSpace(series.CoverImage) &&
             File.Exists(Path.Join(directoryService.CoverImageDirectory, series.CoverImage)))
         {
             if (NeedsColorSpace(series, forceColorScape))
@@ -365,14 +370,17 @@ public class MetadataService(
 
         if (!File.Exists(configCoverFilePath)) return false;
 
-        var shouldUpdateSeriesColor = series.CoverImage != newCoverImage || NeedsColorSpace(series, forceColorScape);
-        series.CoverImage = newCoverImage;
-        if (shouldUpdateSeriesColor)
+        if (!preserveSeriesCover)
         {
-            imageService.UpdateColorScape(series);
+            var shouldUpdateSeriesColor = series.CoverImage != newCoverImage || NeedsColorSpace(series, forceColorScape);
+            series.CoverImage = newCoverImage;
+            if (shouldUpdateSeriesColor)
+            {
+                imageService.UpdateColorScape(series);
+            }
+            unitOfWork.SeriesRepository.Update(series);
+            _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
         }
-        unitOfWork.SeriesRepository.Update(series);
-        _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
 
         foreach (var volume in series.Volumes)
         {
