@@ -52,6 +52,42 @@ public class GdsMetadataParserTests : IDisposable
         Assert.Equal(string.Empty, encodedImage);
     }
 
+    [Theory]
+    [InlineData("TEXT")]
+    [InlineData("https://example.test/cover.jpg")]
+    public void TryGetCoverBase64_ShouldReturnFalse_WhenYamlCoverIsNotEmbeddedImage(string cover)
+    {
+        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), $$"""
+            files:
+                'sample.epub':
+                    cover: {{cover}}
+                    page: 1
+            """);
+
+        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
+
+        Assert.False(result);
+        Assert.Equal(string.Empty, encodedImage);
+    }
+
+    [Fact]
+    public void TryGetCoverBase64_ShouldUseExactFileNameMatch()
+    {
+        const string pngBase64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), $"""
+            files:
+                'not-sample.epub':
+                    cover: data:image/png;base64,{pngBase64}
+                    page: 1
+            """);
+
+        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
+
+        Assert.False(result);
+        Assert.Equal(string.Empty, encodedImage);
+    }
+
     [Fact]
     public void TryGetCoverBase64_ShouldUseLineFallback_WhenYamlParserCannotReadDocument()
     {

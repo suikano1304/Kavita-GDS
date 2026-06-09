@@ -228,10 +228,16 @@ public static class GdsMetadataParser
     {
         encodedImage = UnquoteYamlScalar(value);
         if (string.IsNullOrWhiteSpace(encodedImage)) return false;
-        if (string.Equals(encodedImage, "TEXT", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.Equals(encodedImage, "TEXT", StringComparison.OrdinalIgnoreCase))
+        {
+            encodedImage = string.Empty;
+            return false;
+        }
+
         if (encodedImage.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             encodedImage.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
+            encodedImage = string.Empty;
             return false;
         }
 
