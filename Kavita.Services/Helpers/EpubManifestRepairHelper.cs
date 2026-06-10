@@ -34,8 +34,12 @@ public static class EpubManifestRepairHelper
             }
 
             var repairedManifest = RepairDuplicateManifestItems(opfDocument);
+            var repairedMediaTypes = NormalizeImageMediaTypes(opfDocument);
+            var repairedMissingReferences = RepairMissingManifestReferences(opfDocument, source, opfPath);
+            var repairedSpine = RemoveMissingSpineItemRefs(opfDocument);
             var synthesizedEntries = RepairMissingEpub3NavDocument(opfDocument, source, opfPath);
-            if (!repairedManifest && synthesizedEntries.Count == 0) return false;
+            if (!repairedManifest && !repairedMediaTypes && !repairedMissingReferences && !repairedSpine &&
+                synthesizedEntries.Count == 0) return false;
 
             repairedPath = Path.Join(tempDirectory, $"epub-manifest-repair-{Guid.NewGuid():N}.epub");
             using var repaired = ZipFile.Open(repairedPath, ZipArchiveMode.Create);
@@ -167,6 +171,186 @@ public static class EpubManifestRepairHelper
         }
 
         return duplicates.Count > 0;
+    }
+
+    private static bool NormalizeImageMediaTypes(XDocument opfDocument)
+    {
+        var root = opfDocument.Root;
+        if (root == null) return false;
+
+        var opfNamespace = root.Name.Namespace;
+        var manifest = root.Element(opfNamespace + "manifest");
+        if (manifest == null) return false;
+
+        var repaired = false;
+        foreach (var item in manifest.Elements(opfNamespace + "item"))
+        {
+            var mediaType = item.Attribute("media-type")?.Value;
+            if (!string.Equals(mediaType, "image/jpg", StringComparison.OrdinalIgnoreCase)) continue;
+
+            item.SetAttributeValue("media-type", "image/jpeg");
+            repaired = true;
+        }
+
+        return repaired;
+    }
+
+    private static bool RepairMissingManifestReferences(XDocument opfDocument, ZipArchive source, string opfPath)
+    {
+        var root = opfDocument.Root;
+        if (root == null) return false;
+
+        var opfNamespace = root.Name.Namespace;
+        var manifest = root.Element(opfNamespace + "manifest");
+        if (manifest == null) return false;
+
+        var repaired = false;
+        var manifestItems = manifest.Elements(opfNamespace + "item").ToList();
+        var manifestById = manifestItems
+            .Where(item => !string.IsNullOrWhiteSpace(item.Attribute("id")?.Value))
+            .GroupBy(item => item.Attribute("id")!.Value, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        var manifestHrefs = manifestItems
+            .Select(item => item.Attribute("href")?.Value)
+            .Where(href => !string.IsNullOrWhiteSpace(href))
+            .Select(href => StripFragment(href!))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var coverMetaItems = root.Descendants()
+            .Where(element => element.Name.LocalName == "meta")
+            .Where(element => string.Equals(element.Attribute("name")?.Value, "cover", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var coverMeta in coverMetaItems)
+        {
+            var content = coverMeta.Attribute("content")?.Value;
+            if (string.IsNullOrWhiteSpace(content)) continue;
+
+            if (manifestById.TryGetValue(content, out var manifestItem))
+            {
+                var href = manifestItem.Attribute("href")?.Value;
+                if (!string.IsNullOrWhiteSpace(href) && EntryExistsForHref(source, opfPath, href)) continue;
+
+                coverMeta.Remove();
+                repaired = true;
+                continue;
+            }
+
+            if (!EntryExistsForHref(source, opfPath, content))
+            {
+                coverMeta.Remove();
+                repaired = true;
+                continue;
+            }
+
+            var coverId = GetUniqueManifestId(manifestItems, "kavita-cover");
+            manifest.Add(new XElement(opfNamespace + "item",
+                new XAttribute("href", StripFragment(content)),
+                new XAttribute("id", coverId),
+                new XAttribute("media-type", GetMediaType(content))));
+            coverMeta.SetAttributeValue("content", coverId);
+            manifestItems.Add(manifest.Elements(opfNamespace + "item").Last());
+            manifestHrefs.Add(StripFragment(content));
+            repaired = true;
+        }
+
+        var guide = root.Element(opfNamespace + "guide");
+        if (guide == null) return repaired;
+
+        foreach (var reference in guide.Elements(opfNamespace + "reference").ToList())
+        {
+            var href = reference.Attribute("href")?.Value;
+            if (string.IsNullOrWhiteSpace(href)) continue;
+
+            var hrefWithoutFragment = StripFragment(href);
+            if (manifestHrefs.Contains(hrefWithoutFragment)) continue;
+
+            if (!EntryExistsForHref(source, opfPath, hrefWithoutFragment))
+            {
+                reference.Remove();
+                repaired = true;
+                continue;
+            }
+
+            var id = GetUniqueManifestId(manifestItems, "kavita-guide");
+            manifest.Add(new XElement(opfNamespace + "item",
+                new XAttribute("href", hrefWithoutFragment),
+                new XAttribute("id", id),
+                new XAttribute("media-type", GetMediaType(hrefWithoutFragment))));
+            manifestItems.Add(manifest.Elements(opfNamespace + "item").Last());
+            manifestHrefs.Add(hrefWithoutFragment);
+            repaired = true;
+        }
+
+        return repaired;
+    }
+
+    private static bool RemoveMissingSpineItemRefs(XDocument opfDocument)
+    {
+        var root = opfDocument.Root;
+        if (root == null) return false;
+
+        var opfNamespace = root.Name.Namespace;
+        var manifest = root.Element(opfNamespace + "manifest");
+        var spine = root.Element(opfNamespace + "spine");
+        if (manifest == null || spine == null) return false;
+
+        var manifestIds = manifest.Elements(opfNamespace + "item")
+            .Select(item => item.Attribute("id")?.Value)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var itemRefs = spine.Elements(opfNamespace + "itemref").ToList();
+        var missingItemRefs = itemRefs
+            .Where(itemref =>
+            {
+                var idref = itemref.Attribute("idref")?.Value;
+                return string.IsNullOrWhiteSpace(idref) || !manifestIds.Contains(idref);
+            })
+            .ToList();
+        if (missingItemRefs.Count == 0 || missingItemRefs.Count == itemRefs.Count) return false;
+
+        foreach (var itemref in missingItemRefs)
+        {
+            itemref.Remove();
+        }
+
+        return true;
+    }
+
+    private static bool EntryExistsForHref(ZipArchive source, string opfPath, string href)
+    {
+        var archivePath = GetArchivePathForHref(opfPath, href);
+        return source.GetEntry(archivePath) != null ||
+               source.Entries.Any(entry => string.Equals(entry.FullName, archivePath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string GetArchivePathForHref(string opfPath, string href)
+    {
+        var hrefWithoutFragment = StripFragment(href).Replace('\\', '/');
+        var opfDirectory = Path.GetDirectoryName(opfPath)?.Replace('\\', '/') ?? string.Empty;
+        return string.IsNullOrWhiteSpace(opfDirectory) ? hrefWithoutFragment : $"{opfDirectory}/{hrefWithoutFragment}";
+    }
+
+    private static string StripFragment(string href)
+    {
+        var hashIndex = href.IndexOf('#', StringComparison.Ordinal);
+        return hashIndex < 0 ? href : href[..hashIndex];
+    }
+
+    private static string GetMediaType(string href)
+    {
+        return Path.GetExtension(StripFragment(href)).ToLowerInvariant() switch
+        {
+            ".xhtml" or ".html" or ".htm" => "application/xhtml+xml",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".svg" => "image/svg+xml",
+            ".css" => "text/css",
+            ".ncx" => "application/x-dtbncx+xml",
+            _ => "application/octet-stream"
+        };
     }
 
     private static Dictionary<string, XDocument> RepairMissingEpub3NavDocument(
