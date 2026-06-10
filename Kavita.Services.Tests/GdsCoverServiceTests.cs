@@ -152,6 +152,31 @@ public sealed class GdsCoverServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessSeriesCoverGen_TextVolumeAndEpubVolumes_PrefersEpubMediaCoverForSeries()
+    {
+        var textFile = CreateMediaFile("text.txt", MangaFormat.Text, bytes: 100);
+        var epubFile = CreateMediaFile("book.epub", MangaFormat.Epub, bytes: 100);
+        File.WriteAllText(Path.Join(_coverDirectory, "v1_c1.png"), string.Empty);
+        _readingItemService.GetCoverImage(epubFile.FilePath, "v2_c2", MangaFormat.Epub, EncodeFormat.PNG, CoverImageSize.Default)
+            .Returns("epub-cover.png");
+
+        var textChapter = CreateChapter(1, "1", textFile);
+        var epubChapter = CreateChapter(2, "2", epubFile);
+        var textVolume = CreateVolume(1, textChapter);
+        var epubVolume = CreateVolume(2, epubChapter);
+        var series = CreateSeries(1, textVolume, epubVolume);
+
+        var result = await _service.ProcessSeriesCoverGen(series, false, EncodeFormat.PNG, CoverImageSize.Default);
+
+        Assert.True(result.Handled);
+        Assert.Equal("v1_c1.png", textChapter.CoverImage);
+        Assert.Equal("v1_c1.png", textVolume.CoverImage);
+        Assert.Equal("epub-cover.png", epubChapter.CoverImage);
+        Assert.Equal("epub-cover.png", epubVolume.CoverImage);
+        Assert.Equal("epub-cover.png", series.CoverImage);
+    }
+
+    [Fact]
     public async Task ProcessSeriesCoverGen_TextOnly_UsesTextTitleCoverAsRepresentativeWhenNoMediaExists()
     {
         var textFile = CreateMediaFile("text.txt", MangaFormat.Text, bytes: 100);
@@ -239,13 +264,13 @@ public sealed class GdsCoverServiceTests : IDisposable
         return volume;
     }
 
-    private static Series CreateSeries(int id, Volume volume)
+    private static Series CreateSeries(int id, params Volume[] volumes)
     {
         var series = new SeriesBuilder("Series")
             .WithLibraryId(1)
             .WithFormat(MangaFormat.Epub)
-            .WithVolume(volume)
             .Build();
+        series.Volumes = volumes.ToList();
         series.Id = id;
         return series;
     }
