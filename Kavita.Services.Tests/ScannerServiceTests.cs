@@ -146,6 +146,22 @@ public class ScannerServiceTests: AbstractDbTest
     }
 
     [Fact]
+    public void ShouldRunWordCountAnalysisAfterScan_SkipsGdsLibraries()
+    {
+        Assert.False(ScannerService.ShouldRunWordCountAnalysisAfterScan(LibraryType.GDS));
+        Assert.True(ScannerService.ShouldRunWordCountAnalysisAfterScan(LibraryType.Book));
+        Assert.True(ScannerService.ShouldRunWordCountAnalysisAfterScan(LibraryType.Manga));
+    }
+
+    [Fact]
+    public void ShouldRunGlobalPostScanCleanup_SkipsGdsLibraries()
+    {
+        Assert.False(ScannerService.ShouldRunGlobalPostScanCleanup(LibraryType.GDS));
+        Assert.True(ScannerService.ShouldRunGlobalPostScanCleanup(LibraryType.Book));
+        Assert.True(ScannerService.ShouldRunGlobalPostScanCleanup(LibraryType.Manga));
+    }
+
+    [Fact]
     public void ResolveGdsMixedRootLowestFolder_PreservesExistingConcreteDirectory()
     {
         const string existingLowest = "/fixtures/gds/text/Series A";
