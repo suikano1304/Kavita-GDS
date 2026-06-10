@@ -280,6 +280,12 @@ public class ProcessSeries(
     {
         var libraryFolders = library.Folders.Select(l => Parser.NormalizePath(l.Path)).ToList();
         var seriesFiles = parsedInfos.Select(f => Parser.NormalizePath(f.FullFilePath)).ToList();
+        var fileDirectories = seriesFiles
+            .Select(Path.GetDirectoryName)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Select(Parser.NormalizePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var seriesDirs = directoryService.FindHighestDirectoriesFromFiles(libraryFolders, seriesFiles);
         if (seriesDirs.Keys.Count == 0)
         {
@@ -301,12 +307,39 @@ public class ProcessSeries(
             }
         }
 
+        if (library.Type == LibraryType.GDS && fileDirectories.Count > 1)
+        {
+            series.LowestFolderPath = ResolveGdsMixedRootLowestFolder(series.LowestFolderPath, fileDirectories);
+            logger.LogInformation(
+                "[ScannerService] {SeriesName} spans {RootCount} GDS file directories. Preserving concrete LowestFolderPath as {LowestFolderPath}",
+                series.Name, fileDirectories.Count, series.LowestFolderPath);
+            return;
+        }
+
         var lowestFolder = directoryService.FindLowestDirectoriesFromFiles(libraryFolders, seriesFiles);
         if (!string.IsNullOrEmpty(lowestFolder))
         {
             series.LowestFolderPath = lowestFolder;
             logger.LogDebug("Updating {Series} LowestFolderPath to {FolderPath}", series.Name, series.LowestFolderPath);
         }
+    }
+
+    internal static string ResolveGdsMixedRootLowestFolder(string? existingLowestFolderPath, IList<string> fileDirectories)
+    {
+        var normalizedDirectories = fileDirectories
+            .Select(Parser.NormalizePath)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var normalizedExisting = Parser.NormalizePath(existingLowestFolderPath ?? string.Empty);
+        if (!string.IsNullOrEmpty(normalizedExisting) &&
+            normalizedDirectories.Contains(normalizedExisting, StringComparer.OrdinalIgnoreCase))
+        {
+            return normalizedExisting;
+        }
+
+        return normalizedDirectories.FirstOrDefault() ?? normalizedExisting;
     }
 
 

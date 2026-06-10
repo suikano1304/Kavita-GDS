@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Hangfire;
@@ -208,33 +209,8 @@ public class ScannerService(
             return;
         }
 
-        // TODO: We need to refactor this to handle the path changes better
-        var folderPath = series.LowestFolderPath ?? series.FolderPath;
-        if (string.IsNullOrEmpty(folderPath) || !directoryService.Exists(folderPath))
-        {
-            // We don't care if it's multiple due to new scan loop enforcing all in one root directory
-            var files = await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(seriesId);
-            var seriesDirs = directoryService.FindHighestDirectoriesFromFiles(libraryPaths,
-                files.Select(f => f.FilePath).ToList());
-            if (seriesDirs.Keys.Count == 0)
-            {
-                logger.LogCritical("Scan Series has files spread outside a main series folder. Defaulting to library folder (this is expensive)");
-                await eventHub.SendMessageAsync(MessageFactory.Info, MessageFactory.InfoEvent($"{series.Name} is not organized well and scan series will be expensive!", "Scan Series has files spread outside a main series folder. Defaulting to library folder (this is expensive)"));
-                seriesDirs = directoryService.FindHighestDirectoriesFromFiles(libraryPaths, files.Select(f => f.FilePath).ToList());
-            }
-
-            folderPath = seriesDirs.Keys.FirstOrDefault();
-
-            // We should check if folderPath is a library folder path and if so, return early and tell user to correct their setup.
-            if (!string.IsNullOrEmpty(folderPath) && libraryPaths.Contains(folderPath))
-            {
-                logger.LogCritical("[ScannerSeries] {SeriesName} scan aborted. Files for series are not in a nested folder under library path. Correct this and rescan", series.Name);
-                await eventHub.SendMessageAsync(MessageFactory.Error, MessageFactory.ErrorEvent($"{series.Name} scan aborted", "Files for series are not in a nested folder under library path. Correct this and rescan."));
-                return;
-            }
-        }
-
-        if (string.IsNullOrEmpty(folderPath))
+        var scanFolders = await ResolveSeriesScanFolders(series, libraryPaths);
+        if (scanFolders.Count == 0)
         {
             logger.LogCritical("[ScannerSeries] Scan Series could not find a single, valid folder root for files");
             await eventHub.SendMessageAsync(MessageFactory.Error, MessageFactory.ErrorEvent($"{series.Name} scan aborted", "Scan Series could not find a single, valid folder root for files"));
@@ -244,14 +220,21 @@ public class ScannerService(
         await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
             MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Started, series.Name, 1));
 
-        logger.LogInformation("Beginning file scan on {SeriesName}", series.Name);
-        var (scanElapsedTime, parsedSeries) = await ScanFiles(library, [folderPath],
+        logger.LogInformation("[ScannerService] Beginning series file scan on {SeriesName}. Roots: {RootCount}; {Roots}",
+            series.Name, scanFolders.Count, string.Join(", ", scanFolders));
+        var (scanElapsedTime, parsedSeries) = await ScanFiles(library, scanFolders,
             false, true);
 
-        logger.LogInformation("ScanFiles for {Series} took {Time} milliseconds", series.Name, scanElapsedTime);
+        logger.LogInformation("[ScannerService] Series file scan for {Series} finished in {Time} milliseconds. Parsed series: {ParsedSeriesCount}",
+            series.Name, scanElapsedTime, parsedSeries.Count);
 
-        // Remove any parsedSeries keys that don't belong to our series. This can occur when users store 2 series in the same folder
-        RemoveParsedInfosNotForSeries(parsedSeries, series);
+        var existingSeriesFormats = (await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(series.Id))
+            .Select(f => f.Format)
+            .ToHashSet();
+
+        // Remove any parsedSeries keys that don't belong to our series. This can occur when users store 2 series in the same folder.
+        // GDS can intentionally merge TXT/EPUB/PDF variants into one logical series, so keep matching existing file formats for later batching.
+        RemoveParsedInfosNotForSeries(parsedSeries, series, library.Type, existingSeriesFormats);
 
         // If nothing was found, first validate any of the files still exist. If they don't then we have a deletion and can skip the rest of the logic flow
         if (parsedSeries.Count == 0)
@@ -286,13 +269,8 @@ public class ScannerService(
         }
 
         // At this point, parsedSeries will have at least one key then we can perform the update. If it still doesn't, just return and don't do anything
-        // Don't allow any processing on files that aren't part of this series
-        var toProcess = parsedSeries.Keys.Where(key =>
-            key.NormalizedName.Equals(series.NormalizedName) ||
-            key.NormalizedName.Equals(series.OriginalName?.ToNormalized()))
-            .ToList();
-
-        var toProcessList = toProcess.Select(k => parsedSeries[k]).ToList();
+        // Don't allow any processing on files that aren't part of this series.
+        var toProcessList = BuildSeriesProcessBatches(parsedSeries, series, library.Type, existingSeriesFormats);
         var totalCount = toProcessList.Count;
         var current = 0;
 
@@ -324,14 +302,127 @@ public class ScannerService(
             }
         }
 
+        logger.LogInformation(
+            "[ScannerService] Scan series work completed for {SeriesName} in {ElapsedScanTime} milliseconds. Processed groups: {ProcessedCount}",
+            series.Name, sw.ElapsedMilliseconds, totalCount);
+
         // Tell UI that this series is done
         await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
             MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Ended, series.Name));
 
-        await metadataService.RemoveAbandonedMetadataKeys();
-
+        logger.LogInformation("[ScannerService] Starting post-scan cleanup for {SeriesName}", series.Name);
+        BackgroundJob.Enqueue<IMetadataService>(service => service.RemoveAbandonedMetadataKeys(CancellationToken.None));
         BackgroundJob.Enqueue(() => cacheService.CleanupChapters(existingChapterIdsToClean));
         BackgroundJob.Enqueue(() => directoryService.ClearDirectory(directoryService.CacheDirectory));
+
+        logger.LogInformation("[ScannerService] Post-scan cleanup enqueued for {SeriesName}. Scan series job completed in {ElapsedScanTime} milliseconds",
+            series.Name, sw.ElapsedMilliseconds);
+    }
+
+    private async Task<IList<string>> ResolveSeriesScanFolders(Series series, IList<string> libraryPaths)
+    {
+        var files = await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(series.Id);
+        var fileDirectories = files
+            .Select(f => directoryService.FileSystem.FileInfo.New(f.FilePath).Directory?.FullName ?? string.Empty)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Select(Parser.NormalizePath)
+            .Distinct()
+            .Where(directoryService.Exists)
+            .ToList();
+
+        var normalizedLibraryPaths = libraryPaths
+            .Select(Parser.NormalizePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var resolvedFolders = ResolveSeriesScanFoldersFromFileDirectories(series.LowestFolderPath ?? series.FolderPath,
+            fileDirectories, normalizedLibraryPaths);
+
+        if (fileDirectories.Any(normalizedLibraryPaths.Contains))
+        {
+            logger.LogCritical(
+                "[ScannerSeries] {SeriesName} scan aborted. One or more files are directly under a library root, which would require an expensive broad scan",
+                series.Name);
+            await eventHub.SendMessageAsync(MessageFactory.Error,
+                MessageFactory.ErrorEvent($"{series.Name} scan aborted",
+                    "One or more files are directly under a library root. Put files in a dedicated series folder or run a library scan."));
+            return [];
+        }
+
+        if (resolvedFolders.Count > 0)
+        {
+            var storedFolder = Parser.NormalizePath(series.LowestFolderPath ?? series.FolderPath ?? string.Empty);
+            if (!string.IsNullOrEmpty(storedFolder) && !resolvedFolders.Contains(storedFolder, StringComparer.OrdinalIgnoreCase))
+            {
+                logger.LogWarning(
+                    "[ScannerSeries] {SeriesName} stored folder path '{StoredFolder}' does not match actual file directories. Scanning {RootCount} file directory roots instead: {Roots}",
+                    series.Name, storedFolder, resolvedFolders.Count, string.Join(", ", resolvedFolders));
+            }
+
+            if (resolvedFolders.Count > 1)
+            {
+                logger.LogInformation(
+                    "[ScannerSeries] {SeriesName} spans {RootCount} file directory roots. ScanSeries will scan only those exact roots, not the stored common/category folder",
+                    series.Name, resolvedFolders.Count);
+            }
+
+            return resolvedFolders;
+        }
+
+        var fallbackFolder = Parser.NormalizePath(series.LowestFolderPath ?? series.FolderPath ?? string.Empty);
+        if (string.IsNullOrEmpty(fallbackFolder) || !directoryService.Exists(fallbackFolder))
+        {
+            return [];
+        }
+
+        if (normalizedLibraryPaths.Contains(fallbackFolder))
+        {
+            logger.LogCritical(
+                "[ScannerSeries] {SeriesName} scan aborted. Stored folder path is a library root and would require an expensive broad scan",
+                series.Name);
+            await eventHub.SendMessageAsync(MessageFactory.Error,
+                MessageFactory.ErrorEvent($"{series.Name} scan aborted",
+                    "Stored folder path is a library root. Put files in a dedicated series folder or run a library scan."));
+            return [];
+        }
+
+        logger.LogWarning(
+            "[ScannerSeries] {SeriesName} has no existing MangaFile directories. Falling back to stored folder path: {FolderPath}",
+            series.Name, fallbackFolder);
+        return [fallbackFolder];
+    }
+
+    internal static IList<string> ResolveSeriesScanFoldersFromFileDirectories(string? storedFolderPath,
+        IList<string> fileDirectories, ISet<string> normalizedLibraryPaths)
+    {
+        var normalizedStoredFolder = Parser.NormalizePath(storedFolderPath ?? string.Empty);
+        var normalizedFileDirectories = fileDirectories
+            .Select(Parser.NormalizePath)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (normalizedFileDirectories.Count == 0 || normalizedFileDirectories.Any(normalizedLibraryPaths.Contains))
+        {
+            return [];
+        }
+
+        if (string.IsNullOrEmpty(normalizedStoredFolder))
+        {
+            return normalizedFileDirectories;
+        }
+
+        if (normalizedLibraryPaths.Contains(normalizedStoredFolder))
+        {
+            return normalizedFileDirectories;
+        }
+
+        if (normalizedFileDirectories.Count == 1 &&
+            normalizedFileDirectories.Contains(normalizedStoredFolder, StringComparer.OrdinalIgnoreCase))
+        {
+            return [normalizedStoredFolder];
+        }
+
+        return normalizedFileDirectories;
     }
 
     private static Dictionary<ParsedSeries, IList<ParserInfo>> TrackFoundSeriesAndFiles(IList<ScannedSeriesResult> seenSeries)
@@ -414,10 +505,46 @@ public class ScannerService(
         return ScanCancelReason.NoCancel;
     }
 
-    private static void RemoveParsedInfosNotForSeries(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, Series series)
+    internal static IList<IList<ParserInfo>> BuildSeriesProcessBatches(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries,
+        Series series, LibraryType libraryType, ISet<MangaFormat> existingSeriesFormats)
     {
-        var keys = parsedSeries.Keys;
-        foreach (var key in keys.Where(key => !SeriesHelper.FindSeries(series, key)))
+        var matchingSeries = parsedSeries
+            .Where(kvp => IsParsedSeriesMatchForScanSeries(series, kvp.Key, libraryType, existingSeriesFormats))
+            .ToList();
+
+        if (libraryType != LibraryType.GDS)
+        {
+            return matchingSeries.Select(kvp => kvp.Value).ToList();
+        }
+
+        var mergedFiles = matchingSeries
+            .SelectMany(kvp => kvp.Value)
+            .GroupBy(info => Parser.NormalizePath(info.FullFilePath))
+            .Select(group => group.First())
+            .ToList();
+
+        return mergedFiles.Count == 0 ? [] : [mergedFiles];
+    }
+
+    private static bool IsParsedSeriesMatchForScanSeries(Series series, ParsedSeries parsedSeries,
+        LibraryType libraryType, ISet<MangaFormat> existingSeriesFormats)
+    {
+        if (SeriesHelper.FindSeries(series, parsedSeries)) return true;
+
+        if (libraryType != LibraryType.GDS || !existingSeriesFormats.Contains(parsedSeries.Format)) return false;
+
+        return parsedSeries.NormalizedName.Equals(series.NormalizedName) ||
+               (!string.IsNullOrEmpty(series.LocalizedName) &&
+                parsedSeries.NormalizedName.Equals(series.LocalizedName.ToNormalized())) ||
+               (!string.IsNullOrEmpty(series.OriginalName) &&
+                parsedSeries.NormalizedName.Equals(series.OriginalName.ToNormalized()));
+    }
+
+    private static void RemoveParsedInfosNotForSeries(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries,
+        Series series, LibraryType libraryType, ISet<MangaFormat> existingSeriesFormats)
+    {
+        var keys = parsedSeries.Keys.ToList();
+        foreach (var key in keys.Where(key => !IsParsedSeriesMatchForScanSeries(series, key, libraryType, existingSeriesFormats)))
         {
             parsedSeries.Remove(key);
         }
@@ -892,12 +1019,16 @@ public class ScannerService(
         var scanner = new ParseScannedFiles(logger, directoryService, readingItemService, eventHub, mediaErrorService);
         var scanWatch = Stopwatch.StartNew();
 
+        logger.LogInformation("[ScannerService] ScanFiles starting for {LibraryName}. Roots: {RootCount}; LibraryScan: {IsLibraryScan}; Force: {ForceChecks}",
+            library.Name, dirs.Count, isLibraryScan, forceChecks);
         var processedSeries = await scanner.ScanLibrariesForSeries(library, dirs,
             isLibraryScan, await unitOfWork.SeriesRepository.GetFolderPathMapAsync(library.Id), forceChecks);
 
         var scanElapsedTime = scanWatch.ElapsedMilliseconds;
 
         var parsedSeries = TrackFoundSeriesAndFiles(processedSeries);
+        logger.LogInformation("[ScannerService] ScanFiles finished for {LibraryName}. Roots: {RootCount}; Parsed series: {ParsedSeriesCount}; Elapsed: {Elapsed} ms",
+            library.Name, dirs.Count, parsedSeries.Count, scanElapsedTime);
 
         return Tuple.Create(scanElapsedTime, parsedSeries);
     }
