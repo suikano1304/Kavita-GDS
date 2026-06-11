@@ -2143,6 +2143,7 @@
         "confirm-delete-smart-filter": "이 스마트 필터를 삭제하시겠습니까?",
         "smart-filter-deleted": "스마트 필터가 삭제되었습니다",
         "smart-filter-updated": "스마트 필터 생성/업데이트 되었습니다",
+        "default-filter-updated": "기본 필터가 업데이트되었습니다",
         "external-source-already-exists": "이름/호스트/API 키가 동일한 외부 소스가 이미 존재합니다",
         "collection-tag-deleted": "컬렉션 태그가 삭제되었습니다",
         "force-kavita+-refresh-success": "Kavita+ 외부 메타데이터가 무효화되었습니다",
