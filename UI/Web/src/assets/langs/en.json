@@ -4287,6 +4287,7 @@
         "confirm-delete-smart-filter": "Are you sure you want to delete this Smart Filter?",
         "smart-filter-deleted": "Smart Filter Deleted",
         "smart-filter-updated": "Created/Updated smart filter",
+        "default-filter-updated": "Default filter updated",
         "external-source-already-exists": "An External Source already exists with the same Name/Host/API Key",
         "tokens-expired": "One or more Connection tokens have expired. Scrobbling/Syncing are paused until you re-generate it in Kavita+ > Connections",
         "collection-tag-deleted": "Collection Tag deleted",
