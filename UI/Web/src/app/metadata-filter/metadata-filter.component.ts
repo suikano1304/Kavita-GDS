@@ -230,6 +230,10 @@ export class MetadataFilterComponent<TFilter extends number = number, TSort exte
     this.cdRef.markForCheck();
   }
 
+  isSaveDisabled() {
+    return this.filterSettings().saveDisabled;
+  }
+
   save() {
     if (!this.filterV2) return;
     this.filterV2.name = this.sortGroup.get('name')?.value?.trim() || '';
