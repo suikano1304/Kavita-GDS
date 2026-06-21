@@ -1802,7 +1802,8 @@ public partial class BookService(
     public async Task<ICollection<BookChapterItem>> GenerateTableOfContents(Chapter chapter,
         CancellationToken ct = default)
     {
-        if (chapter.Files.FirstOrDefault()?.Format == MangaFormat.Text)
+        var readingFile = ChapterFileSelector.GetBestReadingFile(chapter.Files);
+        if (readingFile?.Format == MangaFormat.Text)
         {
             return Enumerable.Range(0, Math.Max(chapter.Pages, 0))
                 .Select(page => new BookChapterItem
@@ -1815,7 +1816,9 @@ public partial class BookService(
                 .ToList();
         }
 
-        using var bookLease = await OpenEpubBookAsync(chapter.Files.ElementAt(0).FilePath, LenientBookReaderOptions);
+        if (readingFile == null) return [];
+
+        using var bookLease = await OpenEpubBookAsync(readingFile.FilePath, LenientBookReaderOptions);
         var book = bookLease.Book;
         if (book == null) return [];
 
