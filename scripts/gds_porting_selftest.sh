@@ -23,6 +23,7 @@ bash -n \
   "${script_dir}/gds_patch_stack_summary.sh" \
   "${script_dir}/gds_export_patch_stack.sh" \
   "${script_dir}/gds_apply_patch_stack.sh" \
+  "${script_dir}/gds_prepare_next_port.sh" \
   "${script_dir}/gds_porting_selftest.sh"
 
 echo "== summary =="

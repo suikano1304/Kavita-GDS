@@ -92,7 +92,23 @@ rollout:
    original patch stack. Do not commit generated patch exports unless
    intentionally preparing release assets or an issue reproduction bundle.
 
-9. Apply an exported stack to a fresh upstream worktree when preparing the next
+9. For the next upstream base, prepare a fresh port worktree from the current
+   committed GDS stack.
+
+   ```bash
+   scripts/gds_prepare_next_port.sh \
+     upstream/develop \
+     upstream/develop \
+     /tmp/kavita-gds-next-port \
+     codex/gds-next-port
+   ```
+
+   The first ref is the base used by the current patch stack. The second ref is
+   the new upstream target base. They are the same only for a same-base smoke.
+   The helper refuses to run with uncommitted changes because `git format-patch`
+   would not include them.
+
+10. Apply an exported stack to a fresh upstream worktree when preparing the next
    base port.
 
    ```bash
@@ -108,7 +124,7 @@ rollout:
    the conflict area in the local audit. When the export and target use the same
    base commit, the helper also checks final tree equality against the manifest.
 
-10. Run source validation before Docker packaging.
+11. Run source validation before Docker packaging.
 
    ```bash
    dotnet build Kavita.sln --no-restore -maxcpucount:1 /p:UseSharedCompilation=false
@@ -116,7 +132,7 @@ rollout:
      --no-build --filter 'FullyQualifiedName~GDS|FullyQualifiedName~Cover|FullyQualifiedName~Scanner'
    ```
 
-11. Build packages once per RID from the same source tree.
+12. Build packages once per RID from the same source tree.
 
    ```bash
    bash build.sh linux-x64
@@ -124,11 +140,11 @@ rollout:
    bash build.sh linux-arm
    ```
 
-12. Use one Dockerfile/build context that selects the correct RID output by
+13. Use one Dockerfile/build context that selects the correct RID output by
    `TARGETPLATFORM`. Do not fork the Dockerfile per architecture unless it is
    strictly a packaging fix and does not change application source behavior.
 
-13. Validate in stages:
+14. Validate in stages:
 
     - source build and focused service tests
     - amd64 fresh startup smoke
@@ -138,7 +154,7 @@ rollout:
     - ARMv7 runtime smoke, only if armv7 will be published
     - production targeted validation
 
-14. Publish only after the local regression matrix has `FAIL=0` and every
+15. Publish only after the local regression matrix has `FAIL=0` and every
     published platform has a successful runtime smoke.
 
 ## Conflict Policy
