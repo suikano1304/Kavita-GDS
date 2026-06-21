@@ -12,6 +12,7 @@ using Kavita.Common.Extensions;
 using Kavita.Models.DTOs.Reader;
 using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
+using Kavita.Services.Helpers;
 using Kavita.Services.Scanner;
 using Microsoft.Extensions.Logging;
 using NetVips;
@@ -109,11 +110,14 @@ public class CacheService(
     /// <returns></returns>
     public string GetCachedFile(Chapter chapter)
     {
+        var file = ChapterFileSelector.GetBestReadingFile(chapter.Files);
+        if (file == null) return string.Empty;
+
         var extractPath = GetCachePath(chapter.Id);
-        var path = Path.Join(extractPath, directoryService.FileSystem.Path.GetFileName(chapter.Files.First().FilePath));
+        var path = Path.Join(extractPath, directoryService.FileSystem.Path.GetFileName(file.FilePath));
         if (!(directoryService.FileSystem.FileInfo.New(path).Exists))
         {
-            path = chapter.Files.First().FilePath;
+            path = file.FilePath;
         }
         return path;
     }
@@ -195,6 +199,7 @@ public class CacheService(
         var removeNonImages = true;
         var fileCount = files.Count;
         var extraPath = string.Empty;
+        var bookFileCached = false;
         var extractDi = directoryService.FileSystem.DirectoryInfo.New(extractPath);
 
         if (files[0].Format == MangaFormat.Image)
@@ -241,15 +246,22 @@ public class CacheService(
                 case MangaFormat.Epub:
                 case MangaFormat.Pdf:
                 {
+                    if (bookFileCached) continue;
+
+                    var readerFile = ChapterFileSelector.GetBestReadingFile(files);
+                    if (readerFile == null) continue;
+
                     if (extractPdfImages)
                     {
-                        readingItemService.Extract(file.FilePath, Path.Join(extractPath, extraPath), file.Format);
+                        readingItemService.Extract(readerFile.FilePath, Path.Join(extractPath, extraPath), readerFile.Format);
+                        bookFileCached = true;
                         break;
                     }
                     removeNonImages = false;
 
                     directoryService.ExistOrCreate(extractPath);
-                    directoryService.CopyFileToDirectory(files[0].FilePath, extractPath);
+                    directoryService.CopyFileToDirectory(readerFile.FilePath, extractPath);
+                    bookFileCached = true;
                     break;
                 }
             }

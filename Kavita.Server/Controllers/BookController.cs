@@ -87,10 +87,10 @@ public class BookController(
         {
             case MangaFormat.Epub:
             {
-                var mangaFile = (await unitOfWork.ChapterRepository.GetFilesForChapterAsync(chapterId))[0];
-                await cacheService.Ensure(chapterId);
+                var chapter = await cacheService.Ensure(chapterId);
+                if (chapter == null) return NotFound();
 
-                var file = cacheService.GetCachedFile(chapterId, mangaFile.FilePath);
+                var file = cacheService.GetCachedFile(chapter);
                 using var bookLease = await OpenEpubBookAsync(file);
                 var book = bookLease.Book;
                 if (book == null) return NotFound();
@@ -107,10 +107,10 @@ public class BookController(
             }
             case MangaFormat.Pdf:
             {
-                var mangaFile = (await unitOfWork.ChapterRepository.GetFilesForChapterAsync(chapterId))[0];
-                await cacheService.Ensure(chapterId);
+                var chapter = await cacheService.Ensure(chapterId);
+                if (chapter == null) return NotFound();
 
-                var file = cacheService.GetCachedFile(chapterId, mangaFile.FilePath);
+                var file = cacheService.GetCachedFile(chapter);
                 if (string.IsNullOrEmpty(bookTitle))
                 {
                     // Override with filename
@@ -194,7 +194,10 @@ public class BookController(
         var chapter = await cacheService.Ensure(chapterId);
         if (chapter == null) return BadRequest(await localizationService.GetAsync("en", "chapter-doesnt-exist"));
 
-        var cachedFilePath = Path.Join(cacheService.GetCachePath(chapterId), Path.GetFileName(chapter.Files.ElementAt(0).FilePath));
+        var mangaFile = ChapterFileSelector.GetBestReadingFile(chapter.Files);
+        if (mangaFile == null) return BadRequest(await localizationService.GetAsync("en", "chapter-doesnt-exist"));
+
+        var cachedFilePath = Path.Join(cacheService.GetCachePath(chapterId), Path.GetFileName(mangaFile.FilePath));
         var result = await bookService.GetResourceAsync(cachedFilePath, file);
 
         if (!result.IsSuccess) return BadRequest(await localizationService.GetAsync("en", result.ErrorMessage));
@@ -248,7 +251,7 @@ public class BookController(
 
         try
         {
-            if (chapter.Files.FirstOrDefault()?.Format == MangaFormat.Text)
+            if (ChapterFileSelector.GetBestReadingFile(chapter.Files)?.Format == MangaFormat.Text)
             {
                 return Ok(await bookService.GetBookPageText(page, chapterId, path));
             }

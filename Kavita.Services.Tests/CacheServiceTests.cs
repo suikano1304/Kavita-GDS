@@ -2,6 +2,7 @@
 using Kavita.API.Services;
 using Kavita.Database.Tests;
 using Kavita.Models.Builders;
+using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
 using Kavita.Models.Metadata;
 using Kavita.Models.Parser;
@@ -162,7 +163,7 @@ public class CacheServiceTests(ITestOutputHelper outputHelper): AbstractDbTest(o
     #region GetCachedEpubFile
 
     [Fact]
-    public async Task GetCachedEpubFile_ShouldReturnFirstEpub()
+    public async Task GetCachedEpubFile_ShouldReturnFirstEpubWhenNoFileAnalysisExists()
     {
         var (unitOfWork, context, _) = await CreateDatabase();
 
@@ -183,6 +184,57 @@ public class CacheServiceTests(ITestOutputHelper outputHelper): AbstractDbTest(o
             .Build();
         cs.GetCachedFile(c);
         Assert.Equal($"{DataDirectory}1.epub", cs.GetCachedFile(c));
+    }
+
+    [Fact]
+    public async Task GetCachedEpubFile_ShouldPreferReadableEpub()
+    {
+        var (unitOfWork, context, _) = await CreateDatabase();
+
+        var filesystem = CreateFileSystem();
+        filesystem.AddDirectory($"{CacheDirectory}1/");
+        filesystem.AddFile($"{DataDirectory}1.epub", new MockFileData(""));
+        filesystem.AddFile($"{DataDirectory}2.epub", new MockFileData("valid"));
+        var ds = new DirectoryService(Substitute.For<ILogger<DirectoryService>>(), filesystem);
+        var cs = new CacheService(_logger, unitOfWork, ds,
+            new ReadingItemService(Substitute.For<IArchiveService>(),
+                Substitute.For<IBookService>(), Substitute.For<IImageService>(), ds, Substitute.For<ILogger<ReadingItemService>>(),
+                Substitute.For<IMediaErrorService>()),
+            Substitute.For<IBookmarkService>(), Substitute.For<ILocalizationService>());
+
+        var c = new ChapterBuilder("1")
+            .WithFile(new MangaFileBuilder($"{DataDirectory}1.epub", MangaFormat.Epub).WithBytes(0).WithPages(0).WithId(1).Build())
+            .WithFile(new MangaFileBuilder($"{DataDirectory}2.epub", MangaFormat.Epub).WithBytes(5).WithPages(16).WithId(2).Build())
+            .Build();
+
+        Assert.Equal($"{DataDirectory}2.epub", cs.GetCachedFile(c));
+    }
+
+    [Fact]
+    public async Task ExtractChapterFiles_ShouldCopyReadableEpubWhenFirstFileIsEmpty()
+    {
+        var (unitOfWork, context, _) = await CreateDatabase();
+
+        var filesystem = CreateFileSystem();
+        filesystem.AddFile($"{DataDirectory}1.epub", new MockFileData(""));
+        filesystem.AddFile($"{DataDirectory}2.epub", new MockFileData("valid"));
+        var ds = new DirectoryService(Substitute.For<ILogger<DirectoryService>>(), filesystem);
+        var cs = new CacheService(_logger, unitOfWork, ds,
+            new ReadingItemService(Substitute.For<IArchiveService>(),
+                Substitute.For<IBookService>(), Substitute.For<IImageService>(), ds, Substitute.For<ILogger<ReadingItemService>>(),
+                Substitute.For<IMediaErrorService>()),
+            Substitute.For<IBookmarkService>(), Substitute.For<ILocalizationService>());
+
+        var files = new List<MangaFile>
+        {
+            new MangaFileBuilder($"{DataDirectory}1.epub", MangaFormat.Epub).WithBytes(0).WithPages(0).WithId(1).Build(),
+            new MangaFileBuilder($"{DataDirectory}2.epub", MangaFormat.Epub).WithBytes(5).WithPages(16).WithId(2).Build()
+        };
+
+        await cs.ExtractChapterFiles($"{CacheDirectory}1/", files);
+
+        Assert.False(filesystem.FileExists($"{CacheDirectory}1/1.epub"));
+        Assert.True(filesystem.FileExists($"{CacheDirectory}1/2.epub"));
     }
 
     #endregion
