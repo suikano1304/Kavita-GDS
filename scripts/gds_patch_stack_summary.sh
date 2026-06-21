@@ -5,6 +5,15 @@ base_ref="${1:-upstream/develop}"
 
 git rev-parse --is-inside-work-tree >/dev/null
 
+touched_files() {
+  {
+    git diff --name-only "${base_ref}..HEAD"
+    git diff --name-only
+    git diff --cached --name-only
+    git ls-files --others --exclude-standard
+  } | sort -u
+}
+
 echo "base_ref=${base_ref}"
 echo "base_commit=$(git rev-parse "${base_ref}")"
 echo "head_commit=$(git rev-parse HEAD)"
@@ -23,11 +32,12 @@ echo "== Untracked files =="
 git ls-files --others --exclude-standard
 echo
 
+echo "== Worktree changes =="
+git status --short
+echo
+
 echo "== GDS-sensitive files touched =="
-{
-  git diff --name-only "${base_ref}..HEAD"
-  git ls-files --others --exclude-standard
-} | sort -u | rg \
+touched_files | rg \
   '(^Kavita\.(API|Server|Services|Models|Database)|^UI/|^Dockerfile$|^build\.sh$|^copy_runtime\.sh$|^docs/|^scripts/)' \
   || true
 echo
@@ -42,15 +52,12 @@ private_patterns=(
   "series$(printf '%s' 'Id=')"
 )
 private_pattern="$(IFS='|'; echo "${private_patterns[*]}")"
-if {
-  git diff --name-only "${base_ref}..HEAD"
-  git ls-files --others --exclude-standard
-} | sort -u | rg '(^docs/|README|CHANGELOG|RELEASE|BUILD|USAGE)' >/tmp/gds-doc-files.$$; then
-  if xargs -r rg -n "${private_pattern}" < /tmp/gds-doc-files.$$; then
-    rm -f /tmp/gds-doc-files.$$
+doc_files="$(mktemp /tmp/gds-doc-files.XXXXXX)"
+trap 'rm -f "${doc_files}"' EXIT
+if touched_files | rg -i '(^docs/|README|CHANGELOG|RELEASE|BUILD|USAGE)' >"${doc_files}"; then
+  if xargs -r rg -n "${private_pattern}" < "${doc_files}"; then
     echo "privacy_scan=FAIL"
     exit 1
   fi
 fi
-rm -f /tmp/gds-doc-files.$$
 echo "privacy_scan=PASS"
