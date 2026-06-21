@@ -12,6 +12,7 @@
 - `FAIL`은 release/production 반영을 막는다.
 - `NOT RETESTED WITH REASON`은 이유와 재검증 조건을 기록해야 하며, 무기한 PASS처럼 취급하지 않는다.
 - source-only 문제도 server가 Fatal/SQLite/database-lock 없이 reader/API/scan 경로를 견디는지 확인한다.
+- 새 upstream 버전으로 포팅할 때는 official upstream base 위에 하나의 GDS patch stack을 얹은 형태인지 확인한다. 이전 GDS 릴리스를 장기 base로 삼아 upstream 변경을 부분 복사하는 방식은 release gate를 통과한 것으로 보지 않는다.
 - 이번 release 검증 중 새롭게 발견된 code-fixable 회귀나 current-version failure는 기본적으로 차후 릴리즈로 미루지 않는다. 로컬 매트릭스에 기록하고, 필요한 경우 공개 체크리스트에는 익명화된 issue class만 추가한 뒤, 현재 release candidate에 패치하고 재검증한다.
 - `FUTURE POLICY`는 명시적인 제품/정책 결정 항목에만 사용한다. correctness, crash, reader/API, scan, cache, SQLite, startup, health, operational stability failure는 현재 candidate에서 수정/검증하거나 `FAIL` release blocker로 남긴다.
 - 새 버전마다 공개 저장소 밖의 로컬 감사 문서에 상태표를 남긴다.
@@ -59,18 +60,30 @@ issue class | previous status | current version result | validation method | blo
 ## 표준 실행 절차
 
 1. 로컬 회귀 매트릭스, 최신 로컬 full-matrix audit, 이 공개 체크리스트를 읽고 시작 로그에 문서 목록을 남긴다.
-2. unit/service tests를 먼저 실행한다.
-3. 운영 `kavita`는 건드리지 않는다.
-4. `kavita-test`만 새 이미지로 재생성한다.
-5. production DB clone과 원본 GDS 상대 폴더 구조를 보존한 copied fixture를 사용한다.
-6. GDS fixture와 source mount는 read-only bind로 유지한다.
-7. extended verifier와 로컬 매트릭스 issue class별 상태표를 실행/작성한다.
-8. 운영 targeted validation은 필요한 항목만 수행한다.
-9. 운영 broad scan/full verifier는 CPU, health, WebUI, Plex/Jellyfin, host I/O gate를 통과하고 필요성이 있을 때만 수행한다.
-10. `linux/arm64`와 `linux/arm/v7` smoke test를 실행한다.
-11. GHCR version tag와 `latest` manifest를 확인한다.
-12. `kavita-test`, ARM smoke containers, BuildKit을 정지한다.
-13. 결과를 release notes와 검증 기록에 남긴다.
+2. official upstream base ref/commit과 fork patch stack head commit을 기록한다.
+3. patch-stack summary/privacy scan을 실행하고, export/apply self-test가 같은 base에서 tree equality `PASS`를 내는지 확인한다.
+4. unit/service tests를 먼저 실행한다.
+5. 운영 `kavita`는 건드리지 않는다.
+6. `kavita-test`만 새 이미지로 재생성한다.
+7. production DB clone과 원본 GDS 상대 폴더 구조를 보존한 copied fixture를 사용한다.
+8. GDS fixture와 source mount는 read-only bind로 유지한다.
+9. extended verifier와 로컬 매트릭스 issue class별 상태표를 실행/작성한다.
+10. 운영 targeted validation은 필요한 항목만 수행한다.
+11. 운영 broad scan/full verifier는 CPU, health, WebUI, Plex/Jellyfin, host I/O gate를 통과하고 필요성이 있을 때만 수행한다.
+12. `linux/arm64`와 `linux/arm/v7` smoke test를 실행한다.
+13. GHCR version tag와 `latest` manifest를 확인한다.
+14. `kavita-test`, ARM smoke containers, BuildKit을 정지한다.
+15. 결과를 release notes와 검증 기록에 남긴다.
+
+## Upstream Base + GDS Patch Stack Gate
+
+새 upstream 버전으로 올릴 때는 다음을 release blocker로 취급한다.
+
+- source branch가 official upstream base에서 시작되었고, GDS 변경이 fork-only patch stack으로만 올라가 있는지 확인한다.
+- upstream scanner/auth/migration/reader/UI 변경은 기본적으로 보존하고, GDS 회귀 매트릭스가 요구하는 동작만 override한다.
+- patch-stack helper self-test가 export, apply, public-doc privacy scan, same-base tree equality를 통과해야 한다.
+- architecture별 차이는 source patch가 아니라 RID package와 Docker `TARGETPLATFORM` 선택으로만 처리한다.
+- 어떤 architecture도 `/api/health` runtime smoke가 통과하기 전에는 GHCR version/latest manifest에 포함하지 않는다.
 
 ## Extended Verifier
 
