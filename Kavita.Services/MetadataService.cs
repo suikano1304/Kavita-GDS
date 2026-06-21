@@ -10,6 +10,7 @@ using Kavita.API.Database;
 using Kavita.API.Services;
 using Kavita.API.Services.Helpers;
 using Kavita.API.Services.SignalR;
+using Kavita.Common;
 using Kavita.Common.Extensions;
 using Kavita.Common.Helpers;
 using Kavita.Models.DTOs.Settings;
@@ -69,12 +70,23 @@ public class MetadataService(
             return false;
         }
 
-
         logger.LogDebug("[MetadataService] Generating cover image for {File}", firstFile.FilePath);
 
-        chapter.CoverImage = readingItemService.GetCoverImage(firstFile.FilePath,
-            ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), firstFile.Format, encodeFormat, coverImageSize);
+        string coverImage;
+        try
+        {
+            coverImage = readingItemService.GetCoverImage(firstFile.FilePath,
+                ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), firstFile.Format, encodeFormat, coverImageSize);
+        }
+        catch (Exception ex) when (ex is KavitaException or InvalidDataException or IOException or InvalidOperationException)
+        {
+            logger.LogWarning(ex, "[MetadataService] Failed to generate cover image for {File}", firstFile.FilePath);
+            return false;
+        }
 
+        if (string.IsNullOrEmpty(coverImage)) return false;
+
+        chapter.CoverImage = coverImage;
         imageService.UpdateColorScape(chapter);
 
         unitOfWork.ChapterRepository.Update(chapter);
@@ -141,6 +153,7 @@ public class MetadataService(
             volume.CoverImage = firstChapter.CoverImage;
         }
         imageService.UpdateColorScape(volume);
+        unitOfWork.VolumeRepository.Update(volume);
 
         _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
 
@@ -178,6 +191,7 @@ public class MetadataService(
         }
 
         imageService.UpdateColorScape(series);
+        unitOfWork.SeriesRepository.Update(series);
 
         _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
     }
@@ -274,10 +288,11 @@ public class MetadataService(
             var chapterIndex = 0;
             foreach (var chapter in volume.Chapters)
             {
-                var chapterUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
+                var forceChapterCoverUpdate = forceUpdate;
+                var chapterUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceChapterCoverUpdate, encodeFormat, coverImageSize, forceColorScape);
                 if (!chapterUpdated)
                 {
-                    chapterUpdated = UpdateChapterCoverImage(chapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
+                    chapterUpdated = UpdateGdsChapterCoverFromMediaFiles(chapter, forceChapterCoverUpdate, encodeFormat, coverImageSize, forceColorScape);
                 }
 
                 UpdateChapterLastModified(chapter, forceUpdate || chapterUpdated);
@@ -321,19 +336,83 @@ public class MetadataService(
             return false;
         }
 
-        if (!GdsMetadataParser.TryGetCoverBase64(firstFile.FilePath, out var encodedImage)) return false;
+        foreach (var file in chapter.Files.Where(x => x.Bytes > 0).OrderBy(x => x.Chapter).ThenBy(x => x.FilePath))
+        {
+            if (!GdsMetadataParser.TryGetCoverBase64(file.FilePath, out var encodedImage)) continue;
 
-        var thumbnailWidth = coverImageSize.GetDimensions().Width;
-        var coverImage = imageService.CreateThumbnailFromBase64(encodedImage,
-            ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), encodeFormat, thumbnailWidth);
-        if (string.IsNullOrEmpty(coverImage)) return false;
+            var thumbnailWidth = coverImageSize.GetDimensions().Width;
+            string coverImage;
+            try
+            {
+                coverImage = imageService.CreateThumbnailFromBase64(encodedImage,
+                    ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), encodeFormat, thumbnailWidth);
+            }
+            catch (KavitaException ex)
+            {
+                logger.LogWarning(ex, "[MetadataService] Invalid GDS YAML cover for {File}", file.FilePath);
+                continue;
+            }
 
-        chapter.CoverImage = coverImage;
-        imageService.UpdateColorScape(chapter);
-        unitOfWork.ChapterRepository.Update(chapter);
-        _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+            if (string.IsNullOrEmpty(coverImage)) continue;
 
-        return true;
+            chapter.CoverImage = coverImage;
+            imageService.UpdateColorScape(chapter);
+            unitOfWork.ChapterRepository.Update(chapter);
+            _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool UpdateGdsChapterCoverFromMediaFiles(Chapter chapter, bool forceUpdate, EncodeFormat encodeFormat,
+        CoverImageSize coverImageSize, bool forceColorScape)
+    {
+        var firstFile = chapter.Files.MinBy(x => x.Chapter);
+        if (firstFile == null) return false;
+
+        if (!cacheHelper.ShouldUpdateCoverImage(
+                directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, chapter.CoverImage),
+                firstFile, chapter.Created, forceUpdate, chapter.CoverImageLocked))
+        {
+            if (NeedsColorSpace(chapter, forceColorScape))
+            {
+                imageService.UpdateColorScape(chapter);
+                unitOfWork.ChapterRepository.Update(chapter);
+                _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+            }
+
+            return false;
+        }
+
+        foreach (var file in chapter.Files.Where(x => x.Bytes > 0).OrderBy(x => x.Chapter).ThenBy(x => x.FilePath))
+        {
+            logger.LogDebug("[MetadataService] Generating GDS cover image for {File}", file.FilePath);
+
+            string coverImage;
+            try
+            {
+                coverImage = readingItemService.GetCoverImage(file.FilePath,
+                    ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), file.Format, encodeFormat, coverImageSize);
+            }
+            catch (Exception ex) when (ex is KavitaException or InvalidDataException or IOException or InvalidOperationException)
+            {
+                logger.LogWarning(ex, "[MetadataService] Failed to generate GDS cover image for {File}", file.FilePath);
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(coverImage)) continue;
+
+            chapter.CoverImage = coverImage;
+            imageService.UpdateColorScape(chapter);
+            unitOfWork.ChapterRepository.Update(chapter);
+            _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+
+            return true;
+        }
+
+        return false;
     }
 
     private bool TryApplyGdsTextTitleCover(Series series, Chapter firstChapter, bool forceUpdate,

@@ -115,6 +115,7 @@ public static class GdsMetadataParser
         try
         {
             var yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
+            if (yaml == null) return false;
             if (!TryGetMap(yaml, "files", out var files)) return false;
 
             foreach (var (sourceKey, value) in files)
@@ -126,7 +127,7 @@ public static class GdsMetadataParser
                 return TryNormalizeBase64Cover(cover, out encodedImage);
             }
         }
-        catch (YamlDotNet.Core.YamlException)
+        catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException or InvalidOperationException or ArgumentException)
         {
             return TryGetCoverBase64FromLines(yamlPath, fileName, out encodedImage);
         }
@@ -140,36 +141,43 @@ public static class GdsMetadataParser
         var inFiles = false;
         var inTargetFile = false;
 
-        foreach (var line in File.ReadLines(yamlPath))
+        try
         {
-            if (!inFiles)
+            foreach (var line in File.ReadLines(yamlPath))
             {
-                if (TryParseIndentedKey(line, 0, out var rootKey) &&
-                    string.Equals(rootKey, "files", StringComparison.OrdinalIgnoreCase))
+                if (!inFiles)
                 {
-                    inFiles = true;
+                    if (TryParseIndentedKey(line, 0, out var rootKey) &&
+                        string.Equals(rootKey, "files", StringComparison.OrdinalIgnoreCase))
+                    {
+                        inFiles = true;
+                    }
+
+                    continue;
                 }
 
-                continue;
-            }
+                if (!string.IsNullOrWhiteSpace(line) && !char.IsWhiteSpace(line[0]))
+                {
+                    return false;
+                }
 
-            if (!string.IsNullOrWhiteSpace(line) && !char.IsWhiteSpace(line[0]))
-            {
-                return false;
-            }
+                if (TryParseIndentedKey(line, 4, out var candidateFile))
+                {
+                    inTargetFile = string.Equals(UnquoteYamlScalar(candidateFile), fileName, StringComparison.OrdinalIgnoreCase);
+                    continue;
+                }
 
-            if (TryParseIndentedKey(line, 4, out var candidateFile))
-            {
-                inTargetFile = string.Equals(UnquoteYamlScalar(candidateFile), fileName, StringComparison.OrdinalIgnoreCase);
-                continue;
-            }
+                if (!inTargetFile) continue;
 
-            if (!inTargetFile) continue;
-
-            if (TryParseIndentedScalar(line, 8, "cover", out var cover))
-            {
-                return TryNormalizeBase64Cover(cover, out encodedImage);
+                if (TryParseIndentedScalar(line, 8, "cover", out var cover))
+                {
+                    return TryNormalizeBase64Cover(cover, out encodedImage);
+                }
             }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
+        {
+            return false;
         }
 
         return false;

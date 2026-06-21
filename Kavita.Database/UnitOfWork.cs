@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Data;
 using System.Threading;
 using System.Threading.Tasks;
 using AutoMapper;
@@ -88,16 +87,9 @@ public class UnitOfWork : IUnitOfWork
     public IReadingListRemapRuleRepository RemapRuleRepository { get; }
     public IKavitaPlusAuditRepository KavitaPlusAuditRepository { get; }
 
-    /// <summary>
-    /// Commits pending changes inside an IMMEDIATE SQLite transaction so writer contention
-    /// waits on the writer lock (via busy_timeout) instead of failing with SQLITE_BUSY_SNAPSHOT.
-    /// </summary>
     public async Task<bool> CommitAsync(CancellationToken ct = default)
     {
-        await using var tx = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
-        var result = await _context.SaveChangesAsync(ct) > 0;
-        await tx.CommitAsync(ct);
-        return result;
+        return await _context.SaveChangesAsync(ct) > 0;
     }
 
     /// <summary>
