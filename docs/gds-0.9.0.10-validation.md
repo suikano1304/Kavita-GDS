@@ -37,10 +37,15 @@ Passed:
 
 Not yet passed:
 
-- ARMv7 runtime smoke, if armv7 remains part of the release manifest.
 - GHCR manifest publish/inspection.
 - Production targeted validation.
 - Final release cleanup.
+
+Platform scope:
+
+- Initial publish scope is amd64 and ARM64.
+- ARMv7 is excluded from the initial `0.9.0.10` manifest unless it is built and
+  runtime-smoked separately.
 
 ## Reader And Scan Coverage
 
