@@ -14,13 +14,14 @@ restarted during this validation.
 - Scanner, reader, cache, cover, metadata-filter, and GDS library behavior after
   the upstream rebase.
 - amd64 source build, test, package, Docker image startup, production-clone
-  reader/API smoke, and copied original-layout fixture scan.
+  reader/API smoke, copied original-layout fixture scan, and ARM64 runtime
+  smoke.
 - Patch-stack helper workflow for future upstream ports.
 
 ## Result
 
-The amd64 candidate is viable for continued validation, but it is not a
-production rollout or publish candidate yet.
+The amd64 and ARM64 candidate images are viable for continued validation, but
+this is not a production rollout or publish candidate yet.
 
 Passed:
 
@@ -31,11 +32,11 @@ Passed:
 - Production-clone reader/API smoke passed for representative GDS formats.
 - Windows/off-host amd64 fresh-container smoke passed.
 - Windows/off-host copied original-layout fixture scan passed.
+- Windows/off-host ARM64 qemu fresh-container smoke passed.
 - Patch-stack export/apply self-test passed with same-base tree equality.
 
 Not yet passed:
 
-- ARM64 runtime smoke.
 - ARMv7 runtime smoke, if armv7 remains part of the release manifest.
 - GHCR manifest publish/inspection.
 - Production targeted validation.
@@ -75,8 +76,8 @@ public-doc privacy checks, and removes temporary artifacts.
   off-host or copied-fixture paths.
 - Broad real-media scans were deferred because media-host I/O pressure remained
   high.
-- ARM images must not be added to a published manifest until runtime smoke
-  reaches `/api/health`.
+- ARMv7 must not be added to a published manifest unless its own runtime smoke
+  reaches `/api/health`. ARM64 has passed off-host qemu `/api/health` smoke.
 
 ## Release Decision
 
