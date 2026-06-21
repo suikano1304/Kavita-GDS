@@ -184,3 +184,5 @@ The `0.9.0.10` port was built by creating an upstream-based worktree and
 reapplying the existing GDS patch stack. The amd64 source/build/runtime and
 copied-fixture gates passed. ARM64 runtime smoke remains inconclusive until a
 stable qemu or native ARM validation path reaches `/api/health`.
+
+See `docs/gds-0.9.0.10-validation.md` for the public-safe validation summary.
