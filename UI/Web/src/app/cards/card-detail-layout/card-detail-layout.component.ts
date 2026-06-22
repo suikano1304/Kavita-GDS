@@ -193,7 +193,11 @@ export class CardDetailLayoutComponent<TFilter extends number, TSort extends num
 
 
   scrollTo(jumpKey: JumpKey) {
-    let targetIndex = this.items().findIndex(item => this.getJumpKeyForItem(item) === jumpKey.key);
+    let targetIndex = jumpKey.index ?? -1;
+
+    if (targetIndex < 0) {
+      targetIndex = this.items().findIndex(item => this.getJumpKeyForItem(item) === jumpKey.key);
+    }
 
     if (targetIndex < 0) {
       const keys = this.jumpBarKeys();

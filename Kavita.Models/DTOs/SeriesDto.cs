@@ -61,6 +61,8 @@ public sealed record SeriesDto : IHasReadTimeEstimate, IHasCoverImage, IHasMetad
     public MangaFormat Format { get; set; }
     /// <inheritdoc cref="API.Entities.Series.Created"/>
     public DateTime Created { get; set; }
+    /// <inheritdoc cref="API.Entities.Series.LastModified"/>
+    public DateTime LastModified { get; set; }
 
     /// <inheritdoc cref="API.Entities.Series.SortNameLocked"/>
     public bool SortNameLocked { get; set; }
@@ -78,6 +80,8 @@ public sealed record SeriesDto : IHasReadTimeEstimate, IHasCoverImage, IHasMetad
     public int MaxHoursToRead { get; set; }
     /// <inheritdoc cref="IHasReadTimeEstimate.AvgHoursToRead"/>
     public float AvgHoursToRead { get; set; }
+    /// <inheritdoc cref="API.Entities.Metadata.SeriesMetadata.ReleaseYear"/>
+    public int ReleaseYear { get; set; }
     /// <inheritdoc cref="API.Entities.Series.FolderPath"/>
     public string FolderPath { get; set; } = default!;
     /// <inheritdoc cref="API.Entities.Series.LowestFolderPath"/>

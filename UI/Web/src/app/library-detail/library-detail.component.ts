@@ -200,7 +200,7 @@ export class LibraryDetailComponent implements OnInit {
         this.series.set([...series.result]);
         this.pagination = series.pagination;
         this.loadingSeries = false;
-        this.jumpKeys.set(this.jumpbarService.getJumpKeys(series.result, s => s.sortName));
+        this.jumpKeys.set(this.jumpbarService.getSeriesJumpKeys(series.result, this.filter?.sortOptions));
         this.cdRef.markForCheck();
       });
   }

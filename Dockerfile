@@ -19,6 +19,7 @@ RUN chmod +x /Kavita/Kavita
 FROM ubuntu:noble
 
 COPY --from=copytask /Kavita /kavita
+RUN rm -rf /kavita/wwwroot/*
 COPY --from=copytask /files/wwwroot /kavita/wwwroot
 COPY Kavita.Server/config/appsettings.json /tmp/config/appsettings.json
 

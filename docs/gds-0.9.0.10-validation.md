@@ -118,3 +118,54 @@ Validation completed before production promotion:
 The release manifest must still include only platforms that have passed pushed
 image startup smoke for this RC. ARM64 and ARMv7 remain release gates, not source
 differences.
+
+## 2026-06-23 `9.0.10-3` JumpBar addendum
+
+This patch keeps the official Kavita `0.9.0.10` base and the `9.0.10-2` GDS
+patch stack, then adds WebUI/runtime fixes for the right-side card-list JumpBar.
+
+Changes:
+
+- Series card-list DTOs expose `LastModified` and metadata `ReleaseYear` so the
+  WebUI can build sort-aware JumpBar targets from the same fields users are
+  sorting by.
+- Series list views now request sort-aware JumpBar keys. Title sorting keeps
+  alphabetic initials; date and numeric sorts use sampled positions from the
+  actual sorted list so large same-value buckets can still be navigated.
+- The virtualized card layout scrolls directly to a JumpBar key's sampled item
+  index when present.
+- Runtime Docker images clear old `wwwroot` files before copying the production
+  UI bundle, preventing stale lazy chunks from surviving between releases.
+- Repeated long labels, such as many entries from the same last-modified date,
+  render the first full label and compact markers for following jump points while
+  keeping the original label as the tooltip.
+
+Validation before promotion:
+
+- `git diff --check` passed.
+- Angular `npm run build` and `npm run prod` passed with only existing Sass,
+  style-budget, and CommonJS warnings.
+- `dotnet build Kavita.Models/Kavita.Models.csproj --no-restore` passed for the
+  DTO/profile changes.
+- `kavita-test` ran the candidate image at `https://tkavita.suikano.net` and
+  reached local/routed `/api/health` `Ok` with Docker health `healthy`.
+
+The release manifest must include `linux/amd64`, `linux/arm64`, and
+`linux/arm/v7` only after pushed-image startup smoke reaches `/api/health`.
+
+Release result:
+
+- GHCR `ghcr.io/suikano1304/kavita-gds:9.0.10-3` and `latest` point to the
+  same multi-arch digest:
+  `sha256:b3f9ed89796cbdfb24e0dee44bbf7a8d5a4bd72cdd3333f333110cc5836da8dd`.
+- Platform manifests:
+  - `linux/amd64`:
+    `sha256:a450319e5aa1c2d8e2cd1ae1a0b67db18f471b5b8a278e096344d1119b194c4d`
+  - `linux/arm64`:
+    `sha256:20736a7f473005c37b365a5570cbf47034a46bec11514f48514cc03617a78419`
+  - `linux/arm/v7`:
+    `sha256:b49075079765946a3ba672ab21124e009275f961a87a1dd54383b1d44ad6b1d9`
+- Pushed-image smoke reached `/api/health` `Ok` on all three platforms.
+- Production was promoted to
+  `ghcr.io/suikano1304/kavita-gds:9.0.10-3` after a SQLite online backup and
+  `quick_check`; local and routed production health returned `Ok`.
