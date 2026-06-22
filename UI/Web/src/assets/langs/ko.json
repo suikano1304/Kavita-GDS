@@ -415,7 +415,7 @@
         "hiatus": "휴재",
         "completed": "완결",
         "cancelled": "연재중단",
-        "ended": "누락"
+        "ended": "종료"
     },
     "person-role-pipe": {
         "artist": "작가(그림) / 아티스트",

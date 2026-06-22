@@ -14,6 +14,13 @@ namespace Kavita.Services.Scanner;
 /// </summary>
 public class GdsParser(IDirectoryService directoryService, IDefaultParser imageParser) : DefaultParser(directoryService)
 {
+    private const RegexOptions MatchOptions =
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant;
+
+    private static readonly Regex EndMarkerRangeRegex = new(
+        @"(?:^|[^\d#])(?<Range>\d+(?:\.\d+)?-\d+(?:\.\d+)?)(?=$|[\s_@~\-\[\]\(\)])",
+        MatchOptions, Parser.RegexTimeout);
+
     private static readonly HashSet<string> FormatFolderNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "archive", "archives", "book", "books", "cbz", "comic", "comics", "epub", "image", "images",
@@ -43,7 +50,13 @@ public class GdsParser(IDirectoryService directoryService, IDefaultParser imageP
             Chapters = Parser.DefaultChapter,
             Volumes = Parser.ParseVolume(fileName, type),
             Edition = string.Empty,
+            HasEndMarker = Parser.HasEndMarker(fileName),
         };
+
+        if (ret.HasEndMarker && Parser.IsLooseLeafVolume(ret.Volumes))
+        {
+            ret.Chapters = ParseEndMarkerRange(fileName);
+        }
 
         var parentFolder = GetSeriesFolderName(filePath);
         parentFolder = Regex.Replace(parentFolder, @"\[.*?\]", string.Empty, RegexOptions.None, Parser.RegexTimeout).Trim();
@@ -51,7 +64,7 @@ public class GdsParser(IDirectoryService directoryService, IDefaultParser imageP
         parentFolder = Regex.Replace(parentFolder, @"\s~{1,2}$", string.Empty, RegexOptions.None, Parser.RegexTimeout).Trim();
         ret.Series = parentFolder;
 
-        ret.IsSpecial = ret.Volumes == Parser.LooseLeafVolume;
+        ret.IsSpecial = ret.Volumes == Parser.LooseLeafVolume && Parser.IsDefaultChapter(ret.Chapters);
         if (Path.Exists(Path.Join(libraryRoot, ".special")) ||
             Path.Exists(Path.Join(Path.GetDirectoryName(filePath), ".special")))
         {
@@ -59,7 +72,14 @@ public class GdsParser(IDirectoryService directoryService, IDefaultParser imageP
             ret.Volumes = Parser.LooseLeafVolume;
         }
 
+        FinalizeNumbers(ret);
         return ret.Series == string.Empty ? null : ret;
+    }
+
+    private static string ParseEndMarkerRange(string fileName)
+    {
+        var match = EndMarkerRangeRegex.Match(fileName.Replace("_", " "));
+        return match.Success ? match.Groups["Range"].Value : Parser.DefaultChapter;
     }
 
     private static string GetSeriesFolderName(string filePath)

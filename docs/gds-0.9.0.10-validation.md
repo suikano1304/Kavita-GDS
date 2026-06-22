@@ -90,3 +90,31 @@ Do not publish or roll this candidate into production until every release blocke
 is resolved. In particular, each architecture included in the release manifest
 must pass runtime health smoke, and the local regression matrix must have no
 `FAIL` entries.
+
+## 2026-06-23 `9.0.10-2` RC addendum
+
+This RC keeps the official Kavita `0.9.0.10` base and adds a small GDS patch
+set for production-reported web-novel and WebUI behavior:
+
+- Improved Korean/Japanese completion marker parsing for web-novel filenames,
+  including bracketed markers and end-marker ranges while avoiding title-internal
+  false positives.
+- Fixed the WebUI right-side JumpBar/list click behavior so it scrolls by the
+  visible item key even when the current list is sorted by fields such as title
+  or last modified.
+- Corrected the Korean label for `PublicationStatus.Ended` from a missing-data
+  wording to an ended/closed wording.
+
+Validation completed before production promotion:
+
+- Focused parser unit tests passed for bracketed markers, separated markers,
+  range markers, and title-only false-positive cases.
+- The amd64 package and local Docker image started successfully and reached
+  `/api/health`.
+- A production DB metadata backfill was applied only after SQLite online backup,
+  stopped-copy backup, WAL checkpoint, and `quick_check`.
+- Production health remained `Ok` after promotion and after the backfill.
+
+The release manifest must still include only platforms that have passed pushed
+image startup smoke for this RC. ARM64 and ARMv7 remain release gates, not source
+differences.

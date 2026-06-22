@@ -90,8 +90,7 @@
   <ng-template #jumpBar>
     <div class="jump-bar">
       @for(jumpKey of jumpBarKeysToRender(); track jumpKey.key; let i = $index) {
-        <button class="btn btn-link flip-button" [ngClass]="{'disabled': hasCustomSort()}"
-          (click)="scrollTo(jumpKey)">
+        <button class="btn btn-link flip-button" (click)="scrollTo(jumpKey)">
           <div class="flip-button-inner">
             <div class="flip-button-front">{{jumpKey.title}}</div>
             <div class="flip-button-back">{{jumpKey.size}}</div>
