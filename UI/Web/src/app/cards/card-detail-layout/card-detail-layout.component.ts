@@ -21,7 +21,7 @@ import {NavigationStart, Router} from '@angular/router';
 import {VirtualScrollerComponent, VirtualScrollerModule} from '@iharbeck/ngx-virtual-scroller';
 import {JumpKey} from 'src/app/_models/jumpbar/jump-key';
 import {Pagination} from 'src/app/_models/pagination';
-import {FilterEvent, SeriesSortField} from 'src/app/_models/metadata/series-filter';
+import {FilterEvent} from 'src/app/_models/metadata/series-filter';
 import {JumpbarService} from 'src/app/_services/jumpbar.service';
 import {LoadingComponent} from "../../shared/loading/loading.component";
 import {MetadataFilterComponent} from "../../metadata-filter/metadata-filter.component";
@@ -34,7 +34,6 @@ import {FilterV2} from "../../_models/metadata/v2/filter-v2";
 import {FilterSettingsBase, ValidFilterEntity} from "../../metadata-filter/filter-settings";
 import {ActionItem} from "../../_models/actionables/action-item";
 import {ActionResult} from "../../_models/actionables/action-result";
-import {MetadataService} from "../../_services/metadata.service";
 
 
 const ANIMATION_TIME_MS = 0;
@@ -64,7 +63,6 @@ export class CardDetailLayoutComponent<TFilter extends number, TSort extends num
   private readonly jumpbarService = inject(JumpbarService);
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
-  private readonly metadataService = inject(MetadataService);
 
 
   header = input('');
@@ -97,7 +95,7 @@ export class CardDetailLayoutComponent<TFilter extends number, TSort extends num
 
 
   /**
-   * Will force the jumpbar to be disabled - in cases where you're not using a traditional filter config
+   * Legacy input retained for parent API compatibility.
    */
   customSort = input(false);
   jumpBarKeys = input<Array<JumpKey>>([]); // This is approx 784 pixels tall, original keys
@@ -139,22 +137,6 @@ export class CardDetailLayoutComponent<TFilter extends number, TSort extends num
     return height > 0
       ? this.jumpbarService.generateJumpBar(keys, height)
       : [...keys];
-  });
-
-  hasCustomSort = computed(() => {
-    const customSort = this.customSort();
-    const filteringDisabled = this.filteringDisabled();
-    const filter = this.filterSignal();
-    const entityType = this.entityType();
-
-    if (customSort) return true;
-    if (filteringDisabled) return false;
-
-    const isNonStandardEntity = !entityType || entityType === 'other';
-
-    const defaultSortField = isNonStandardEntity ? SeriesSortField.SortName : this.metadataService.getDefaultSortField(entityType);
-    const defaultIsAscending = isNonStandardEntity ? true : this.metadataService.getDefaultSortAscending(entityType);
-    return (defaultSortField !== filter?.sortOptions?.sortField) || defaultIsAscending !== filter?.sortOptions?.isAscending;
   });
 
   trackItem = (index: number, item: any) => this.trackByIdentity()(index, item);
@@ -211,20 +193,22 @@ export class CardDetailLayoutComponent<TFilter extends number, TSort extends num
 
 
   scrollTo(jumpKey: JumpKey) {
-    if (this.hasCustomSort()) return;
+    let targetIndex = this.items().findIndex(item => this.getJumpKeyForItem(item) === jumpKey.key);
 
-    const keys = this.jumpBarKeys();
-    let targetIndex = 0;
-    for(let i = 0; i < keys.length; i++) {
-      if (keys[i].key === jumpKey.key) break;
-      targetIndex += keys[i].size;
+    if (targetIndex < 0) {
+      const keys = this.jumpBarKeys();
+      targetIndex = 0;
+      for(let i = 0; i < keys.length; i++) {
+        if (keys[i].key === jumpKey.key) break;
+        targetIndex += keys[i].size;
+      }
     }
 
     this.virtualScroller()?.scrollToIndex(targetIndex, true, 0, ANIMATION_TIME_MS);
     setTimeout(() => this.jumpbarService.saveResumePosition(this.router.url, this.virtualScroller()!.viewPortInfo.startIndex), ANIMATION_TIME_MS + 100);
   }
 
-  tryToSaveJumpKey(item: any) {
+  private getJumpKeyForItem(item: any) {
     let name = '';
     if (item.hasOwnProperty('sortName')) {
       name = item.sortName;
@@ -237,7 +221,17 @@ export class CardDetailLayoutComponent<TFilter extends number, TSort extends num
     } else if (item.hasOwnProperty('title')) {
       name = item.title;
     }
-    this.jumpbarService.saveResumeKey(this.router.url, name.charAt(0));
+
+    let ch = name.charAt(0).toUpperCase();
+    if (!/\p{L}/u.test(ch)) {
+      ch = '#';
+    }
+
+    return ch;
+  }
+
+  tryToSaveJumpKey(item: any) {
+    this.jumpbarService.saveResumeKey(this.router.url, this.getJumpKeyForItem(item));
     const scroller = this.virtualScroller();
     if (scroller) {
       this.jumpbarService.saveResumePosition(this.router.url, scroller.viewPortInfo.scrollStartPosition);
