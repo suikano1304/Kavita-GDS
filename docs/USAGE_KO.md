@@ -4,7 +4,7 @@
 
 Kavita GDS는 Kavita official `0.9.0.10` nightly source에 GDS/rclone scanfix를 포팅한 비공식 Docker 빌드입니다.
 
-현재 릴리즈는 `9.0.10-1`입니다. GHCR의 `9.0.10-1`와 `latest` 태그는 `linux/amd64`, `linux/arm64`를 포함합니다. `linux/arm/v7`는 이번 초기 manifest에 포함하지 않았습니다.
+현재 릴리즈는 `9.0.10-1`입니다. GHCR의 `9.0.10-1`와 `latest` 태그는 `linux/amd64`, `linux/arm64`, `linux/arm/v7`를 포함합니다.
 
 이 빌드는 GDS/rclone 원본 media mount를 읽기 전용으로 두고, Kavita config 경로 안에서만 DB, cache, cover를 관리하는 구성을 전제로 합니다.
 
@@ -251,5 +251,5 @@ sqlite3 /path/to/kavita.db 'PRAGMA foreign_key_check;'
 - 기존 DB를 연결하기 전에는 backup을 권장합니다.
 - GDS/rclone 원본 mount는 읽기 전용을 권장합니다.
 - `linux/arm64`는 Windows Docker Desktop/WSL qemu smoke test에서 `/api/health` `Ok`를 확인했지만, native ARM 실서비스 검증은 별도 환경에서 다시 확인하는 것이 좋습니다.
-- `linux/arm/v7`는 이번 `9.0.10-1` manifest에 포함하지 않았습니다.
+- `linux/arm/v7`는 CT101 qemu smoke test에서 `/api/health` `Ok`를 확인했지만, native ARMv7 실서비스 검증은 별도 환경에서 다시 확인하는 것이 좋습니다.
 - 큰 binary 파일은 git에 직접 commit하지 않고 GitHub Release asset으로만 배포합니다.

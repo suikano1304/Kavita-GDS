@@ -12,12 +12,12 @@
 
 - official Kavita `0.9.0.10` nightly를 새 base로 사용하고 기존 GDS patch set을 다시 얹었습니다.
 - upstream `0.9.0.10`의 대량 파일 단일 디렉터리 scan 성능 개선을 유지했습니다.
-- GHCR `9.0.10-1`와 `latest`는 같은 multi-arch manifest digest `sha256:c43c28dc83cf03b4af11b77337d2a54368cb33d850be0474df462d01de3ec8d0`로 push했습니다.
-- 포함 플랫폼은 `linux/amd64`, `linux/arm64`입니다.
-- `linux/arm/v7`는 이번 초기 manifest에 포함하지 않았습니다. 별도 runtime smoke를 통과한 뒤 다시 포함할 수 있습니다.
+- GHCR `9.0.10-1`와 `latest`는 같은 multi-arch manifest digest `sha256:fe44c893aa1bc38942d1ab86ff028f0dff340a175cdd260090f01e41e76cf7ff`로 push했습니다.
+- 포함 플랫폼은 `linux/amd64`, `linux/arm64`, `linux/arm/v7`입니다.
 - source build, focused GDS service regression tests, UI production build, RID별 backend package build를 통과했습니다.
 - local amd64 Docker startup smoke와 production DB clone 기반 reader/API targeted validation을 통과했습니다.
 - Windows Docker Desktop/WSL에서 amd64 runtime smoke, ARM64 qemu runtime smoke, copied original-layout fixture scan을 통과했습니다.
+- CT101 qemu에서 pushed GHCR unified tag의 ARMv7 runtime smoke를 통과했습니다.
 - production `kavita` 컨테이너는 이 publish에서 교체하지 않았습니다. 운영 반영은 별도 rollout 절차로 진행해야 합니다.
 
 ## 2026-06-11: `9.0.7-6` metadata-filter hotfix

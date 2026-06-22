@@ -58,6 +58,7 @@ OPDS 실험 패치는 이번 릴리즈에서 제외했습니다. 기존 OPDS 기
 
 - `linux/amd64` 이미지 시작 및 `/api/health=Ok`
 - `linux/arm64` 이미지 Windows Docker Desktop/WSL qemu smoke 및 `/api/health=Ok`
+- `linux/arm/v7` 이미지 CT101 qemu smoke 및 `/api/health=Ok`
 - Docker health `healthy`
 - reader/cache 회귀 테스트 통과
 - GHCR `9.0.10-1`와 `latest`가 같은 multi-arch 이미지로 발행됨
@@ -73,9 +74,7 @@ OPDS 실험 패치는 이번 릴리즈에서 제외했습니다. 기존 OPDS 기
 ghcr.io/suikano1304/kavita-gds:9.0.10-1
 ```
 
-지원 플랫폼: `linux/amd64`, `linux/arm64`
-
-`linux/arm/v7`는 이번 `9.0.10-1` 초기 manifest에 포함하지 않았습니다. 별도 런타임 smoke를 통과한 뒤 다시 포함할 수 있습니다.
+지원 플랫폼: `linux/amd64`, `linux/arm64`, `linux/arm/v7`
 
 ## 업그레이드 주의
 
