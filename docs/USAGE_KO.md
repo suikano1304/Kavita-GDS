@@ -4,7 +4,7 @@
 
 Kavita GDS는 Kavita official `0.9.0.10` nightly source에 GDS/rclone scanfix를 포팅한 비공식 Docker 빌드입니다.
 
-현재 릴리즈는 `9.0.10-1`입니다. GHCR의 `9.0.10-1`와 `latest` 태그는 `linux/amd64`, `linux/arm64`, `linux/arm/v7`를 포함합니다.
+현재 릴리즈는 `9.0.10-2`입니다. GHCR의 `9.0.10-2`와 `latest` 태그는 `linux/amd64`, `linux/arm64`, `linux/arm/v7`를 포함합니다.
 
 이 빌드는 GDS/rclone 원본 media mount를 읽기 전용으로 두고, Kavita config 경로 안에서만 DB, cache, cover를 관리하는 구성을 전제로 합니다.
 
@@ -13,13 +13,13 @@ Kavita GDS는 Kavita official `0.9.0.10` nightly source에 GDS/rclone scanfix를
 권장 방식은 GHCR에서 직접 pull하는 것입니다.
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:9.0.10-1
+docker pull ghcr.io/suikano1304/kavita-gds:9.0.10-2
 ```
 
 운영에서는 `latest`보다 고정 버전 태그를 권장합니다.
 
 ```text
-ghcr.io/suikano1304/kavita-gds:9.0.10-1
+ghcr.io/suikano1304/kavita-gds:9.0.10-2
 ```
 
 ## Compose 설정
@@ -31,7 +31,7 @@ ghcr.io/suikano1304/kavita-gds:9.0.10-1
 ```yaml
 services:
   kavita:
-    image: ghcr.io/suikano1304/kavita-gds:9.0.10-1
+    image: ghcr.io/suikano1304/kavita-gds:9.0.10-2
     container_name: kavita
     restart: always
     ports:
@@ -71,7 +71,7 @@ docker logs -f kavita
 
 ## 수동 다운로드
 
-`9.0.10-1`의 기본 배포물은 GHCR multi-arch image입니다. Docker pull이 불가능한 폐쇄망 환경에서는 GHCR image를 별도 registry로 미러링하거나, 필요한 플랫폼의 OCI archive를 따로 생성해 반입하세요. 과거 릴리스의 GitHub tarball은 해당 릴리스 태그 기준 산출물입니다.
+`9.0.10-2`의 기본 배포물은 GHCR multi-arch image입니다. Docker pull이 불가능한 폐쇄망 환경에서는 GHCR image를 별도 registry로 미러링하거나, 필요한 플랫폼의 OCI archive를 따로 생성해 반입하세요. 과거 릴리스의 GitHub tarball은 해당 릴리스 태그 기준 산출물입니다.
 
 ## 업그레이드 전 확인
 
@@ -123,9 +123,11 @@ fallback cover는 외부 API나 외부 이미지 다운로드를 쓰지 않습�
 
 ## EPUB `1/1` 확인
 
-`9.0.10-1`는 다음 EPUB/WebUI 문제를 완화합니다.
+`9.0.10-2`는 다음 EPUB/WebUI/웹소설 metadata 문제를 완화합니다.
 
 - WebUI metadata filter에서 smart filter 이름 없이 정렬/필터 기본값을 저장할 수 없던 문제
+- WebUI 우측 JumpBar/list 클릭이 현재 정렬 기준에서 실제 항목으로 스크롤되지 않던 문제
+- 웹소설 파일명 completion marker가 metadata의 완료/종료 상태에 반영되지 않던 문제
 - 같은 chapter에 broken/empty EPUB row와 valid EPUB row가 함께 있을 때 reader/cache가 valid EPUB row를 선택하지 못하던 문제
 - scanner가 GDS EPUB/PDF/TXT 신규 파일을 무조건 `Pages=1`로 저장하던 문제
 - 단일 XHTML 안에 여러 TOC anchor가 있는 EPUB
@@ -217,10 +219,10 @@ python3 scripts/analyze_kavita_reader_latency.py \
 
 브라우저 콘솔에 `localhost:5000/api/... ERR_CONNECTION_REFUSED`가 보이면 오래된 `0.9.0.2-4` 이미지의 Web UI development bundle 문제일 가능성이 큽니다.
 
-`0.9.0.2-5` 이후와 `9.0.10-1` 이미지는 production UI bundle을 포함합니다.
+`0.9.0.2-5` 이후와 `9.0.10-2` 이미지는 production UI bundle을 포함합니다.
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:9.0.10-1
+docker pull ghcr.io/suikano1304/kavita-gds:9.0.10-2
 docker compose up -d
 ```
 

@@ -2,7 +2,32 @@
 
 최초 작성일: 2026-06-22
 
-이 문서는 official Kavita `0.9.0.10` nightly 기반 Kavita-GDS `9.0.10-1` 릴리스 검증 결과를 기록한다. 공개 문서에는 실제 작품명, library/series/chapter id, 전체 media path를 기록하지 않는다.
+이 문서는 official Kavita `0.9.0.10` nightly 기반 Kavita-GDS 릴리스 검증 결과를 기록한다. 공개 문서에는 실제 작품명, library/series/chapter id, 전체 media path를 기록하지 않는다.
+
+## 2026-06-23 `9.0.10-2` release
+
+- GHCR `9.0.10-2`와 `latest`는 같은 multi-arch manifest를 가리킨다.
+- 포함 플랫폼은 `linux/amd64`, `linux/arm64`, `linux/arm/v7`이다.
+- official Kavita `0.9.0.10` nightly base와 기존 GDS patch set을 유지했다.
+- 웹소설 completion marker parsing, WebUI JumpBar/list scroll, 한국어 `Ended` label을 보정했다.
+
+```text
+multiarch digest=sha256:0a88eaccb6c1ab400dbb1cefbbbff58e5cc179f260af15cdef34aa7d50750228
+
+linux/amd64=sha256:184906a99aa9972c5f903014ecab176a50e825bf78e286b0b691d00adeaa5df3
+linux/arm64=sha256:4851d14e1da3146b024a0eb40febfacf2a8e27ff9c0eb602b8bf25e3e6708940
+linux/arm/v7=sha256:9647851945b236c17d97ceb9b2895d3e6f9e6c336fa830b1d4cbbac903ecaabf
+```
+
+검증:
+
+- Focused parser regression tests passed.
+- UI production bundle was reused from the validated RC build and contains the corrected Korean `Ended` label.
+- RID-specific backend packages for `linux-x64`, `linux-arm64`, and `linux-arm` were built from the same source tree.
+- GHCR `linux/amd64` pushed image reached `/api/health` `Ok`.
+- GHCR `linux/arm64` pushed image reached `/api/health` `Ok` under CT101 qemu.
+- GHCR `linux/arm/v7` pushed image reached `/api/health` `Ok` under CT101 qemu 8.1.5. CT101 qemu 10.2.1 still hits an ARM32 translator assertion before Kavita startup.
+- Production `kavita` was rolled to the GHCR `9.0.10-2` amd64 image after controlled backup/backfill work. Local and routed `/api/health` returned `Ok`, Docker health reached `healthy`, and no SQLite/disk/database-lock startup errors were observed.
 
 ## 2026-06-22 `9.0.10-1` release
 

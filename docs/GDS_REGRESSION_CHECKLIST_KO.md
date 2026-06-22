@@ -130,7 +130,10 @@ PASS 기준:
 - mixed-root copied fixture 또는 production-clone test는 실제 file directory roots만 스캔하고 broad category/library root로 확장되지 않는다.
 - GDS targeted series scan 로그에 word-count skip과 global post-scan cleanup skip이 남고, `WordCountAnalyzerService` 후속 로그가 없어야 한다.
 - GDS targeted series scan 완료 후 30초 이상 container CPU와 `/api/health`를 확인해 ThreadPool CPU spin이 없어야 한다.
-- release docs consistency check: 이전 버전 태그와 digest가 사용자 문서에 남아 있지 않은지 검색하고, `git ls-remote --tags origin <release-tag>`와 `gh release view <release-tag>`가 최종 문서 커밋을 가리키는지 확인한다.
+- GDS filename completion markers such as `(완결)`, `(완)`, and `(完)` set completed publication metadata after scan or controlled backfill, while ordinary title text containing completion-like words does not.
+- Default-sorted card-list JumpBar keys scroll the virtualized list; JumpBar remains disabled for actual non-default/custom sort states.
+- Korean locale labels must distinguish `Completed` from `Ended` without rendering `Ended` as missing/lost data.
+- release publication consistency check: GHCR image push만으로 릴리스를 완료 처리하지 않는다. `README.md`, `RELEASE_NOTES.md`, changelog, usage/build docs의 version/digest/platform 표기가 모두 새 release tag와 일치해야 하며, `git ls-remote --tags origin <release-tag>`, `gh release view <release-tag>`, `gh release view`, `docker buildx imagetools inspect ghcr.io/suikano1304/kavita-gds:<version>`, `docker buildx imagetools inspect ghcr.io/suikano1304/kavita-gds:latest`가 모두 같은 release version과 expected manifest digest를 가리켜야 한다.
 - 0-byte EPUB, malformed EPUB, 본문/cover source가 없는 샘플은 expected source-data issue로만 남고 server exception으로 실패하지 않는다.
 - SQLite `quick_check`가 `ok`다.
 

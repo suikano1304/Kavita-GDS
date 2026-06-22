@@ -2,9 +2,21 @@
 
 기준 버전: `kavita-gds-0.9.0.2-scan-20260528`
 
-현재 공개 릴리즈: `kavita-gds-9.0.10-1`
+현재 공개 릴리즈: `kavita-gds-9.0.10-2`
 
 참고: 운영 컨테이너가 이전 태그를 계속 쓰는 경우, source/release/운영 기준이 다시 달라질 수 있습니다. 운영 검증은 적용 전 baseline과 적용 후 postflight를 같은 진단 스크립트로 비교하세요.
+
+## 2026-06-23: `9.0.10-2` 웹소설 완결 및 JumpBar hotfix
+
+아래 변경은 공개 릴리스 태그 `9.0.10-2`에 포함했습니다.
+
+- 웹소설 파일명 completion marker 인식을 보강했습니다. 괄호/대괄호 marker, 분리된 marker, completion range를 처리하면서 제목 내부 문자열 오탐은 피하도록 했습니다.
+- WebUI 우측 JumpBar/list 클릭이 현재 정렬 기준에서도 실제 항목으로 스크롤되도록 보정했습니다.
+- 한국어 `Ended` 출판 상태 표시를 누락/실종 의미가 아닌 종료 의미로 수정했습니다.
+- GHCR `9.0.10-2`와 `latest`는 같은 multi-arch manifest digest `sha256:0a88eaccb6c1ab400dbb1cefbbbff58e5cc179f260af15cdef34aa7d50750228`로 push했습니다.
+- 포함 플랫폼은 `linux/amd64`, `linux/arm64`, `linux/arm/v7`입니다.
+- pushed GHCR image smoke에서 `linux/amd64`, `linux/arm64`, `linux/arm/v7` 모두 `/api/health` `Ok`를 확인했습니다. ARMv7 smoke는 CT101 qemu 10.2.1의 ARM32 translator assertion을 피해 qemu 8.1.5로 확인했습니다.
+- 운영 컨테이너도 GHCR `9.0.10-2` amd64 이미지로 교체했고 `/api/health` `Ok`, Docker health `healthy`를 확인했습니다.
 
 ## 2026-06-22: `9.0.10-1` official `0.9.0.10` nightly 포팅 릴리스
 
