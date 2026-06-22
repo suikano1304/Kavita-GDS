@@ -1,19 +1,19 @@
 # Kavita GDS
 
-Google Drive/rclone 같은 원격 저장소에 큰 만화/책 라이브러리를 두고 쓰는 환경을 위한 Kavita 비공식 Docker 빌드입니다. official Kavita `0.9.0.7` nightly를 기반으로 GDS 스캔, 표지, 페이지 수, reader/cache 문제를 보정했습니다.
+Google Drive/rclone 같은 원격 저장소에 큰 만화/책 라이브러리를 두고 쓰는 환경을 위한 Kavita 비공식 Docker 빌드입니다. official Kavita `0.9.0.10` nightly를 기반으로 GDS 스캔, 표지, 페이지 수, reader/cache 문제를 보정했습니다.
 
-현재 릴리즈: `9.0.7-6`
+현재 릴리즈: `9.0.10-1`
 
 ## 빠른 시작
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:9.0.7-6
+docker pull ghcr.io/suikano1304/kavita-gds:9.0.10-1
 ```
 
 ```yaml
 services:
   kavita:
-    image: ghcr.io/suikano1304/kavita-gds:9.0.7-6
+    image: ghcr.io/suikano1304/kavita-gds:9.0.10-1
     container_name: kavita
     restart: always
     ports:
@@ -56,24 +56,26 @@ OPDS 실험 패치는 이번 릴리즈에서 제외했습니다. 기존 OPDS 기
 
 배포 전 다음을 확인했습니다.
 
-- `linux/amd64`, `linux/arm64`, `linux/arm/v7` 이미지 시작 및 `/api/health=Ok`
+- `linux/amd64` 이미지 시작 및 `/api/health=Ok`
+- `linux/arm64` 이미지 Windows Docker Desktop/WSL qemu smoke 및 `/api/health=Ok`
 - Docker health `healthy`
-- WebUI bundle에 필터 저장 수정 포함
 - reader/cache 회귀 테스트 통과
-- GHCR `9.0.7-6`와 `latest`가 같은 multi-arch 이미지로 발행됨
-- 운영 컨테이너 적용 후 `/api/health=Ok`, Docker health `healthy`, restart count `0`
+- GHCR `9.0.10-1`와 `latest`가 같은 multi-arch 이미지로 발행됨
+- 운영 컨테이너는 아직 자동으로 교체하지 않았습니다. production rollout은 별도 절차로 진행하세요.
 
-상세 변경 내역과 digest는 [RELEASE_NOTES.md](RELEASE_NOTES.md), [docs/CHANGELOG_KO.md](docs/CHANGELOG_KO.md), [docs/GDS_0.9.0.7_VALIDATION.md](docs/GDS_0.9.0.7_VALIDATION.md)를 참고하세요.
+상세 변경 내역과 digest는 [RELEASE_NOTES.md](RELEASE_NOTES.md), [docs/CHANGELOG_KO.md](docs/CHANGELOG_KO.md), [docs/GDS_0.9.0.10_VALIDATION.md](docs/GDS_0.9.0.10_VALIDATION.md)를 참고하세요.
 
 ## 태그와 플랫폼
 
 운영에서는 고정 버전 태그를 권장합니다.
 
 ```text
-ghcr.io/suikano1304/kavita-gds:9.0.7-6
+ghcr.io/suikano1304/kavita-gds:9.0.10-1
 ```
 
-지원 플랫폼: `linux/amd64`, `linux/arm64`, `linux/arm/v7`
+지원 플랫폼: `linux/amd64`, `linux/arm64`
+
+`linux/arm/v7`는 이번 `9.0.10-1` 초기 manifest에 포함하지 않았습니다. 별도 런타임 smoke를 통과한 뒤 다시 포함할 수 있습니다.
 
 ## 업그레이드 주의
 

@@ -2,9 +2,9 @@
 
 ## 개요
 
-Kavita GDS는 Kavita official `0.9.0.7` nightly source에 GDS/rclone scanfix를 포팅한 비공식 Docker 빌드입니다.
+Kavita GDS는 Kavita official `0.9.0.10` nightly source에 GDS/rclone scanfix를 포팅한 비공식 Docker 빌드입니다.
 
-현재 릴리즈는 `9.0.7-6`입니다. GHCR의 `9.0.7-6`와 `latest` 태그는 `linux/amd64`, `linux/arm64`, `linux/arm/v7`를 포함합니다.
+현재 릴리즈는 `9.0.10-1`입니다. GHCR의 `9.0.10-1`와 `latest` 태그는 `linux/amd64`, `linux/arm64`를 포함합니다. `linux/arm/v7`는 이번 초기 manifest에 포함하지 않았습니다.
 
 이 빌드는 GDS/rclone 원본 media mount를 읽기 전용으로 두고, Kavita config 경로 안에서만 DB, cache, cover를 관리하는 구성을 전제로 합니다.
 
@@ -13,13 +13,13 @@ Kavita GDS는 Kavita official `0.9.0.7` nightly source에 GDS/rclone scanfix를 
 권장 방식은 GHCR에서 직접 pull하는 것입니다.
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:9.0.7-6
+docker pull ghcr.io/suikano1304/kavita-gds:9.0.10-1
 ```
 
 운영에서는 `latest`보다 고정 버전 태그를 권장합니다.
 
 ```text
-ghcr.io/suikano1304/kavita-gds:9.0.7-6
+ghcr.io/suikano1304/kavita-gds:9.0.10-1
 ```
 
 ## Compose 설정
@@ -31,7 +31,7 @@ ghcr.io/suikano1304/kavita-gds:9.0.7-6
 ```yaml
 services:
   kavita:
-    image: ghcr.io/suikano1304/kavita-gds:9.0.7-6
+    image: ghcr.io/suikano1304/kavita-gds:9.0.10-1
     container_name: kavita
     restart: always
     ports:
@@ -71,7 +71,7 @@ docker logs -f kavita
 
 ## 수동 다운로드
 
-`9.0.7-6`의 기본 배포물은 GHCR multi-arch image입니다. Docker pull이 불가능한 폐쇄망 환경에서는 GHCR image를 별도 registry로 미러링하거나, 필요한 플랫폼의 OCI archive를 따로 생성해 반입하세요. 과거 릴리스의 GitHub tarball은 해당 릴리스 태그 기준 산출물입니다.
+`9.0.10-1`의 기본 배포물은 GHCR multi-arch image입니다. Docker pull이 불가능한 폐쇄망 환경에서는 GHCR image를 별도 registry로 미러링하거나, 필요한 플랫폼의 OCI archive를 따로 생성해 반입하세요. 과거 릴리스의 GitHub tarball은 해당 릴리스 태그 기준 산출물입니다.
 
 ## 업그레이드 전 확인
 
@@ -123,7 +123,7 @@ fallback cover는 외부 API나 외부 이미지 다운로드를 쓰지 않습�
 
 ## EPUB `1/1` 확인
 
-`9.0.7-6`는 다음 EPUB/WebUI 문제를 완화합니다.
+`9.0.10-1`는 다음 EPUB/WebUI 문제를 완화합니다.
 
 - WebUI metadata filter에서 smart filter 이름 없이 정렬/필터 기본값을 저장할 수 없던 문제
 - 같은 chapter에 broken/empty EPUB row와 valid EPUB row가 함께 있을 때 reader/cache가 valid EPUB row를 선택하지 못하던 문제
@@ -217,10 +217,10 @@ python3 scripts/analyze_kavita_reader_latency.py \
 
 브라우저 콘솔에 `localhost:5000/api/... ERR_CONNECTION_REFUSED`가 보이면 오래된 `0.9.0.2-4` 이미지의 Web UI development bundle 문제일 가능성이 큽니다.
 
-`0.9.0.2-5` 이후와 `9.0.7-6` 이미지는 production UI bundle을 포함합니다.
+`0.9.0.2-5` 이후와 `9.0.10-1` 이미지는 production UI bundle을 포함합니다.
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:9.0.7-6
+docker pull ghcr.io/suikano1304/kavita-gds:9.0.10-1
 docker compose up -d
 ```
 
@@ -250,6 +250,6 @@ sqlite3 /path/to/kavita.db 'PRAGMA foreign_key_check;'
 - 공식 Kavita 이미지가 아닙니다.
 - 기존 DB를 연결하기 전에는 backup을 권장합니다.
 - GDS/rclone 원본 mount는 읽기 전용을 권장합니다.
-- `linux/arm64`는 qemu smoke test에서 `/api/health` 200을 확인했지만, native ARM 실서비스 검증은 별도 환경에서 다시 확인하는 것이 좋습니다.
-- `linux/arm/v7`는 qemu smoke test에서 `/api/health` 200을 확인했지만, native ARMv7 실서비스 검증은 별도 환경에서 다시 확인하는 것이 좋습니다.
+- `linux/arm64`는 Windows Docker Desktop/WSL qemu smoke test에서 `/api/health` `Ok`를 확인했지만, native ARM 실서비스 검증은 별도 환경에서 다시 확인하는 것이 좋습니다.
+- `linux/arm/v7`는 이번 `9.0.10-1` manifest에 포함하지 않았습니다.
 - 큰 binary 파일은 git에 직접 commit하지 않고 GitHub Release asset으로만 배포합니다.

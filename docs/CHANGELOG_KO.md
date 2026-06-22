@@ -2,9 +2,23 @@
 
 기준 버전: `kavita-gds-0.9.0.2-scan-20260528`
 
-현재 공개 릴리즈: `kavita-gds-9.0.7-6`
+현재 공개 릴리즈: `kavita-gds-9.0.10-1`
 
 참고: 운영 컨테이너가 이전 태그를 계속 쓰는 경우, source/release/운영 기준이 다시 달라질 수 있습니다. 운영 검증은 적용 전 baseline과 적용 후 postflight를 같은 진단 스크립트로 비교하세요.
+
+## 2026-06-22: `9.0.10-1` official `0.9.0.10` nightly 포팅 릴리스
+
+아래 변경은 공개 릴리스 태그 `9.0.10-1`에 포함했습니다.
+
+- official Kavita `0.9.0.10` nightly를 새 base로 사용하고 기존 GDS patch set을 다시 얹었습니다.
+- upstream `0.9.0.10`의 대량 파일 단일 디렉터리 scan 성능 개선을 유지했습니다.
+- GHCR `9.0.10-1`와 `latest`는 같은 multi-arch manifest digest `sha256:c43c28dc83cf03b4af11b77337d2a54368cb33d850be0474df462d01de3ec8d0`로 push했습니다.
+- 포함 플랫폼은 `linux/amd64`, `linux/arm64`입니다.
+- `linux/arm/v7`는 이번 초기 manifest에 포함하지 않았습니다. 별도 runtime smoke를 통과한 뒤 다시 포함할 수 있습니다.
+- source build, focused GDS service regression tests, UI production build, RID별 backend package build를 통과했습니다.
+- local amd64 Docker startup smoke와 production DB clone 기반 reader/API targeted validation을 통과했습니다.
+- Windows Docker Desktop/WSL에서 amd64 runtime smoke, ARM64 qemu runtime smoke, copied original-layout fixture scan을 통과했습니다.
+- production `kavita` 컨테이너는 이 publish에서 교체하지 않았습니다. 운영 반영은 별도 rollout 절차로 진행해야 합니다.
 
 ## 2026-06-11: `9.0.7-6` metadata-filter hotfix
 

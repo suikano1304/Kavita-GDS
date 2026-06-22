@@ -1,20 +1,38 @@
 # Kavita GDS
 
-This release provides the Kavita official `0.9.0.7` nightly based GDS build as a GHCR multi-arch Docker image.
+This release provides the Kavita official `0.9.0.10` nightly based GDS build as a GHCR multi-arch Docker image.
 
-Version: `9.0.7-6`
+Version: `9.0.10-1`
 
 ## Included Platforms
 
 - `linux/amd64`
 - `linux/arm64` on GHCR
-- `linux/arm/v7` on GHCR
+
+`linux/arm/v7` is not included in the initial `9.0.10-1` manifest. It can be reintroduced after a separate runtime smoke test for this candidate.
 
 ## Asset
 
 GHCR is the primary distribution channel for this release. Use the unified version tag; Docker will select the matching platform automatically.
 
 ## Verification
+
+- Built from the official Kavita `0.9.0.10` nightly source with the GDS patch set ported forward.
+- Preserved the upstream `0.9.0.10` scanner performance improvement for directories with many files.
+- Published GHCR `9.0.10-1` and `latest` as one multi-arch manifest covering `linux/amd64` and `linux/arm64`.
+- Manifest digest: `sha256:c43c28dc83cf03b4af11b77337d2a54368cb33d850be0474df462d01de3ec8d0`.
+- Per-platform manifests:
+  - `linux/amd64`: `sha256:a1c7ebf40c2b7205fca62688b5f6ad0757d85d871c5938c55921a1f7c920e2de`
+  - `linux/arm64`: `sha256:778f7161d38fa04b4178822ffe62e9c85c21b897bd5be8721a81140bf7b8bdcd`
+- `linux/arm/v7` is absent from the initial `9.0.10-1` manifest.
+- Source build passed, focused GDS service regression tests passed, and the full service-test failures observed in this window reproduced on clean upstream `0.9.0.10`.
+- Local `linux/amd64` release image startup returned `/api/health` 200.
+- Production-targeted validation passed with a production DB online-backup clone, read-only media mount, reader/API smoke for TXT, archive, EPUB, and PDF paths, SQLite integrity `ok`, no new MediaErrors, and no SQLite/disk/database-lock/500/404/fatal logs.
+- Windows Docker Desktop/WSL off-host smoke passed for the amd64 image and for the ARM64 image under qemu.
+- Windows copied original-layout fixture scan passed with expected source-only MediaErrors and no SQLite/disk/database-lock failures.
+- Production `kavita` was not rolled to `9.0.10-1` as part of this publish. Production rollout remains a separate operation.
+
+## Previous `9.0.7-6` Verification
 
 - Built from the official Kavita `0.9.0.7` nightly source with the GDS patch set ported forward.
 - Rebuilt the production WebUI bundle for the metadata filter default hotfix.
@@ -52,7 +70,18 @@ Before publishing the next release, run the repeatable GDS regression checklist:
 
 The local-only matrix with actual sample titles, raw ids, and media paths is kept outside this public repository.
 
-## Changes Since `9.0.7-1`
+## Changes Since `9.0.7-6`
+
+### 2026-06-22 `9.0.10-1` official `0.9.0.10` port
+
+- Ported the maintained GDS patch set onto official Kavita `0.9.0.10`.
+- Preserved the upstream scanner performance improvement for scanning large numbers of files in one directory.
+- Published `9.0.10-1` and `latest` as the same GHCR multi-arch manifest for `linux/amd64` and `linux/arm64`.
+- Excluded `linux/arm/v7` from the initial manifest until it is rebuilt and runtime-smoked for this candidate.
+- Passed source build, focused GDS regression tests, UI production build, local amd64 Docker startup smoke, production-targeted reader/API validation, Windows amd64 runtime smoke, Windows ARM64 qemu smoke, and Windows copied original-layout fixture scan.
+- Left production `kavita` on its existing image; production rollout is a separate operation.
+
+## Historical Changes Since `9.0.7-1`
 
 ### 2026-06-11 `9.0.7-6` metadata-filter hotfix
 

@@ -1,6 +1,6 @@
 services:
   kavita:
-    image: ghcr.io/suikano1304/kavita-gds:9.0.7-6
+    image: ghcr.io/suikano1304/kavita-gds:9.0.10-1
     container_name: kavita
     restart: always
     security_opt:
