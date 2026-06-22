@@ -18,6 +18,8 @@ public class AutoMapperSeriesProfile : Profile
         CreateMap<Series, SeriesDto>()
             .ForMember(dest => dest.LibraryName,
                 opt => opt.MapFrom(src => src.Library.Name))
+            .ForMember(dest => dest.ReleaseYear,
+                opt => opt.MapFrom(src => src.Metadata.ReleaseYear))
             .ForMember(dest => dest.PagesRead,
                 opt => opt.MapFrom(src =>
                     src.Progress

@@ -56,7 +56,8 @@ public class AutoMapperProfiles : Profile
             .ForMember(dest => dest.Series, opt => opt.MapFrom(src => src.Series));
         CreateMap<LibraryDto, Library>();
         CreateMap<MangaFile, MangaFileDto>();
-        CreateMap<Series, SeriesDto>();
+        CreateMap<Series, SeriesDto>()
+            .ForMember(dest => dest.ReleaseYear, opt => opt.MapFrom(src => src.Metadata.ReleaseYear));
         CreateMap<AppUserCollection, AppUserCollectionDto>()
             .ForMember(dest => dest.Owner, opt => opt.MapFrom(src => src.AppUser.UserName))
             .ForMember(dest => dest.ItemCount, opt => opt.MapFrom(src => src.Items.Count));
