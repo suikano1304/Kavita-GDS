@@ -55,7 +55,7 @@ public sealed class GdsCoverServiceTests : IDisposable
         var textFile = CreateMediaFile("text.txt", MangaFormat.Text, bytes: 100);
         WriteYamlCover("text.txt", $"data:image/png;base64,{PngBase64}");
         File.WriteAllText(Path.Join(_coverDirectory, "v1_c1.png"), string.Empty);
-        _imageService.CreateThumbnailFromBase64(PngBase64, "v1_c1", EncodeFormat.PNG, Arg.Any<int>(), Arg.Any<string?>())
+        _imageService.CreateThumbnailFromBase64(PngBase64, "v1_c1", EncodeFormat.PNG, Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>())
             .Returns("yaml-cover.png");
         var chapter = CreateChapter(1, "1", textFile);
         var volume = CreateVolume(1, chapter);
@@ -111,7 +111,7 @@ public sealed class GdsCoverServiceTests : IDisposable
         var textFile = CreateMediaFile("text.txt", MangaFormat.Text, bytes: 100);
         WriteYamlCover("text.txt", $"data:image/png;base64,{PngBase64}");
         File.WriteAllText(Path.Join(_coverDirectory, "old-title.png"), string.Empty);
-        _imageService.CreateThumbnailFromBase64(PngBase64, "v1_c1", EncodeFormat.PNG, Arg.Any<int>(), Arg.Any<string?>())
+        _imageService.CreateThumbnailFromBase64(PngBase64, "v1_c1", EncodeFormat.PNG, Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>())
             .Returns("new-yaml-cover.png");
         var chapter = CreateChapter(1, "1", textFile);
         chapter.CoverImage = "old-title.png";
