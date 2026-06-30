@@ -2,9 +2,20 @@
 
 기준 버전: `kavita-gds-0.9.0.2-scan-20260528`
 
-현재 공개 릴리즈: `kavita-gds-9.0.10-3`
+현재 공개 릴리즈: `0.9.0.12-1`
 
 참고: 운영 컨테이너가 이전 태그를 계속 쓰는 경우, source/release/운영 기준이 다시 달라질 수 있습니다. 운영 검증은 적용 전 baseline과 적용 후 postflight를 같은 진단 스크립트로 비교하세요.
+
+## 2026-06-30: `0.9.0.12-1` GDS mtime 우회 핫픽스
+
+- rclone FUSE 마운트(`--dir-cache-time=1000h`)에서 디렉터리 mtime이 마운트 시점에 고정되어 Library Scan이 신규 파일을 감지하지 못하는 문제를 수정했습니다.
+- `HasSeriesFolderNotChangedSinceLastScan`: GDS 라이브러리일 경우 mtime 체크를 건너뛰고 항상 디렉터리를 전수 열거합니다.
+- 기존 Series Scan(`forceCheck=true`)과 동일한 수준의 파일 발견을 Library Scan에서도 보장합니다.
+- Trade-off: GDS 라이브러리 스캔 시간이 증가합니다 (모든 등록 시리즈 폴더 전수 열거).
+- GHCR `0.9.0.12-1`과 `latest`는 같은 multi-arch manifest digest `sha256:8ed8199bf1c62b54e629f86e23482d81b43fb2880320b82c9275ea5ea0d66cd8`로 push했습니다.
+- 포함 플랫폼은 `linux/amd64`, `linux/arm64`, `linux/arm/v7`입니다.
+- Windows Docker Desktop buildx로 3개 플랫폼 빌드 및 GHCR push를 완료했습니다.
+- 운영 컨테이너를 `0.9.0.12-1`로 교체했고 `/api/health=Ok`, Docker health `healthy`를 확인했습니다.
 
 ## 2026-06-23: `9.0.10-3` sort-aware JumpBar density hotfix
 

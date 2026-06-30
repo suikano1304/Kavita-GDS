@@ -51,6 +51,7 @@ services:
 - 운영 진단: runtime image에 `sqlite3`와 읽기 전용 진단 스크립트를 포함했습니다.
 - 웹소설 완결 처리: 파일명 completion marker와 range marker 인식을 보강하고, 한국어 `Ended` 표시를 `종료`로 바로잡았습니다.
 - WebUI 이동: 우측 JumpBar/list 클릭이 현재 정렬 기준에서도 실제 항목으로 스크롤되도록 보정했고, 최근 수정순처럼 같은 날짜가 많은 목록에서도 점프 위치가 촘촘하게 잡히도록 보강했습니다.
+- **GDS mtime 우회 (0.9.0.12-1)**: rclone FUSE 마운트에서 `--dir-cache-time`으로 인해 디렉터리 mtime이 고정되어 Library Scan이 신규 파일을 누락하던 문제를 해결했습니다. GDS 라이브러리는 항상 디렉터리를 전수 열거합니다.
 
 OPDS 실험 패치는 이번 릴리즈에서 제외했습니다. 기존 OPDS 기능은 제거하지 않았고, 새 OPDS 호환성 변경만 원복했습니다.
 
