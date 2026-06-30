@@ -225,6 +225,13 @@ public class ParseScannedFiles
             return false;
         }
 
+        // GDS: rclone FUSE mounts can have stale directory mtimes due to --dir-cache-time,
+        // so mtime-based change detection is unreliable. Always rescan GDS directories.
+        if (library.Type == LibraryType.GDS)
+        {
+            return false;
+        }
+
         if (!seriesPaths.TryGetValue(directory, out var seriesList))
         {
             // GDS libraries often keep files under a format folder directly below the real series folder.
