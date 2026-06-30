@@ -1,8 +1,8 @@
 # Kavita GDS
 
-This release provides the Kavita official `0.9.0.10` nightly based GDS build as a GHCR multi-arch Docker image.
+This release provides the Kavita official `0.9.0.12` nightly based GDS build as a GHCR multi-arch Docker image.
 
-Version: `9.0.10-3`
+Version: `0.9.0.12-1`
 
 ## Included Platforms
 
@@ -16,27 +16,21 @@ GHCR is the primary distribution channel for this release. Use the unified versi
 
 ## Verification
 
-- Built from the official Kavita `0.9.0.10` nightly source with the GDS patch set ported forward.
-- Preserved the upstream `0.9.0.10` scanner performance improvement for directories with many files.
-- Published GHCR `9.0.10-3` and `latest` as one multi-arch manifest covering `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
-- Manifest digest: `sha256:b3f9ed89796cbdfb24e0dee44bbf7a8d5a4bd72cdd3333f333110cc5836da8dd`.
+- Built from the official Kavita `0.9.0.12` nightly source with the GDS patch set ported forward.
+- Published GHCR `0.9.0.12-1` and `latest` as one multi-arch manifest covering `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+- Manifest digest: `sha256:8ed8199bf1c62b54e629f86e23482d81b43fb2880320b82c9275ea5ea0d66cd8`.
 - Per-platform manifests:
-  - `linux/amd64`: `sha256:a450319e5aa1c2d8e2cd1ae1a0b67db18f471b5b8a278e096344d1119b194c4d`
-  - `linux/arm64`: `sha256:20736a7f473005c37b365a5570cbf47034a46bec11514f48514cc03617a78419`
-  - `linux/arm/v7`: `sha256:b49075079765946a3ba672ab21124e009275f961a87a1dd54383b1d44ad6b1d9`
-- Added web-novel completion marker parsing improvements for bracketed markers, separated markers, and completion ranges while avoiding title-internal false positives.
-- Fixed the WebUI right-side JumpBar/list click path so it scrolls to the matching visible item under current sort modes.
-- Improved sort-aware JumpBar density for large recent-modified lists by sampling actual sorted positions and collapsing repeated long labels while keeping direct jump targets.
-- Corrected the Korean `Ended` publication-status label to display as ended/closed rather than missing data.
-- The `9.0.10-3` patch retained the `9.0.10-2` backend/parser validation baseline and passed UI production build, RID package build, pushed-image smoke, and production health validation.
+  - `linux/amd64`: `sha256:202b4bf266fdd5b6b5176967a794343345ca9327f484f8b40176b1187a58fff8`
+  - `linux/arm64`: `sha256:099c07ddcfa68973ef4fc039d8d277180a48f2c6d503bc328b7883dd436b1f8e`
+  - `linux/arm/v7`: `sha256:86fdbf199cde125abb57ace0c64188c74925d0bc76119b0177ac4377d69fc8fe`
+- **GDS mtime bypass (0.9.0.12-1)**: Fixed Library Scan missing new files on rclone FUSE mounts where `--dir-cache-time` froze directory mtimes. GDS libraries now always enumerate all registered series directories.
+- OPDS: upstream #4759 resolved single-entry+merged-cbz handling; GDS patch stack inherits upstream OPDS behavior without custom patches.
+- Windows Docker Desktop buildx built and pushed all 3 platforms.
 - Pushed GHCR `linux/amd64` image startup returned `/api/health` `Ok`.
-- Production-targeted validation passed with a production DB online-backup clone, read-only media mount, reader/API smoke for TXT, archive, EPUB, and PDF paths, SQLite integrity `ok`, no new MediaErrors, and no SQLite/disk/database-lock/500/404/fatal logs.
-- CT101 qemu smoke passed for the pushed GHCR unified tag on `linux/arm64`; `/api/health` returned `Ok`.
-- CT101 qemu smoke passed for the pushed GHCR unified tag on `linux/arm/v7` after using qemu 8.1.5 for the ARM32 emulator; `/api/health` returned `Ok`.
-- Windows copied original-layout fixture scan passed with expected source-only MediaErrors and no SQLite/disk/database-lock failures.
-- Production `kavita` was rolled to `9.0.10-3` after a controlled SQLite online backup and verified with `/api/health` `Ok`, Docker health `healthy`, and no SQLite/disk/database-lock startup errors.
+- Windows qemu smoke for `linux/arm64` image reached container startup.
+- Production `kavita` was rolled to `0.9.0.12-1` and verified with `/api/health` `Ok`, Docker health `healthy`.
 
-## Previous `9.0.7-6` Verification
+## Previous `9.0.10-3` Verification
 
 - Built from the official Kavita `0.9.0.7` nightly source with the GDS patch set ported forward.
 - Rebuilt the production WebUI bundle for the metadata filter default hotfix.
