@@ -1,0 +1,136 @@
+From 0a1ce49a432a57b40207bc041803d43aa297eff5 Mon Sep 17 00:00:00 2001
+From: suikano1304 <suikano1304@users.noreply.github.com>
+Date: Thu, 11 Jun 2026 16:15:13 +0900
+Subject: [PATCH] fix: save unnamed metadata filters as route defaults
+
+---
+ .../src/app/_resolvers/url-filter.resolver.ts   |  4 ++--
+ .../metadata-filter.component.html              |  3 +--
+ .../metadata-filter.component.ts                | 10 +++++++++-
+ .../_services/filter-utilities.service.ts       | 17 +++++++++++++++++
+ UI/Web/src/assets/langs/en.json                 |  1 +
+ UI/Web/src/assets/langs/ko.json                 |  1 +
+ 6 files changed, 31 insertions(+), 5 deletions(-)
+
+diff --git a/UI/Web/src/app/_resolvers/url-filter.resolver.ts b/UI/Web/src/app/_resolvers/url-filter.resolver.ts
+index 9dbf786e0..422608cd2 100644
+--- a/UI/Web/src/app/_resolvers/url-filter.resolver.ts
++++ b/UI/Web/src/app/_resolvers/url-filter.resolver.ts
+@@ -1,6 +1,6 @@
+ import { Injectable, inject } from "@angular/core";
+ import {ActivatedRouteSnapshot, Resolve, RouterStateSnapshot} from "@angular/router";
+-import {Observable, of} from "rxjs";
++import {Observable} from "rxjs";
+ import {FilterV2} from "../_models/metadata/v2/filter-v2";
+ import {FilterUtilitiesService} from "../shared/_services/filter-utilities.service";
+ 
+@@ -16,7 +16,7 @@ export class UrlFilterResolver implements Resolve<any> {
+ 
+ 
+   resolve(route: ActivatedRouteSnapshot, state: RouterStateSnapshot): Observable<FilterV2 | null> {
+-    if (!state.url.includes('?')) return of(null);
++    if (!state.url.includes('?')) return this.filterUtilitiesService.getDefaultFilterForRoute(state.url);
+     return this.filterUtilitiesService.decodeFilter(state.url.split('?')[1]);
+   }
+ }
+diff --git a/UI/Web/src/app/metadata-filter/metadata-filter.component.html b/UI/Web/src/app/metadata-filter/metadata-filter.component.html
+index 20e30b273..1ed768299 100644
+--- a/UI/Web/src/app/metadata-filter/metadata-filter.component.html
++++ b/UI/Web/src/app/metadata-filter/metadata-filter.component.html
+@@ -80,7 +80,7 @@
+     </div>
+     <div class="col-md-2 col-sm-6 mt-4 pt-2">
+       <div class="d-flex flex-grow-1"> <!-- TODO: How can we make this wider (col-12, old behv) if no extra buttons are present -->
+-        <button class="btn btn-primary" (click)="save()" [disabled]="filterSettings().saveDisabled || !this.sortGroup.get('name')?.value">
++        <button class="btn btn-primary" (click)="save()" [disabled]="filterSettings().saveDisabled">
+           <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>
+           {{t('save')}}
+         </button>
+@@ -90,4 +90,3 @@
+   </ng-template>
+ </ng-container>
+ 
+-
+diff --git a/UI/Web/src/app/metadata-filter/metadata-filter.component.ts b/UI/Web/src/app/metadata-filter/metadata-filter.component.ts
+index 350bb21c3..7b1de0270 100644
+--- a/UI/Web/src/app/metadata-filter/metadata-filter.component.ts
++++ b/UI/Web/src/app/metadata-filter/metadata-filter.component.ts
+@@ -232,7 +232,15 @@ export class MetadataFilterComponent<TFilter extends number = number, TSort exte
+ 
+   save() {
+     if (!this.filterV2) return;
+-    this.filterV2.name = this.sortGroup.get('name')?.value;
++    this.filterV2.name = this.sortGroup.get('name')?.value?.trim() || '';
++    if (this.filterV2.name === '') {
++      this.filterUtilitiesService.saveDefaultFilterForCurrentRoute(this.filterV2).subscribe(() => {
++        this.toastr.success(translate('toasts.default-filter-updated'));
++        this.apply();
++      });
++      return;
++    }
++
+     this.filterService.saveFilter(this.filterV2).subscribe(() => {
+       this.toastr.success(translate('toasts.smart-filter-updated'));
+       this.apply();
+diff --git a/UI/Web/src/app/shared/_services/filter-utilities.service.ts b/UI/Web/src/app/shared/_services/filter-utilities.service.ts
+index 6b5656c68..317b01055 100644
+--- a/UI/Web/src/app/shared/_services/filter-utilities.service.ts
++++ b/UI/Web/src/app/shared/_services/filter-utilities.service.ts
+@@ -41,6 +41,7 @@ export interface FieldOption<T extends number> {
+     providedIn: 'root'
+ })
+ export class FilterUtilitiesService {
++  private static readonly defaultFilterStoragePrefix = 'kavita--metadata-filter-default--';
+ 
+   private readonly router = inject(Router);
+   private readonly metadataService = inject(MetadataService);
+@@ -79,6 +80,22 @@ export class FilterUtilitiesService {
+     }));
+   }
+ 
++  saveDefaultFilterForCurrentRoute(filter: FilterV2 | undefined) {
++    return this.encodeFilter(filter).pipe(tap(encodedFilter => {
++      localStorage.setItem(this.getDefaultFilterStorageKey(window.location.pathname), encodedFilter);
++    }));
++  }
++
++  getDefaultFilterForRoute(url: string) {
++    const encodedFilter = localStorage.getItem(this.getDefaultFilterStorageKey(url));
++    if (!encodedFilter) return of(null);
++    return this.decodeFilter(encodedFilter);
++  }
++
++  private getDefaultFilterStorageKey(url: string) {
++    return FilterUtilitiesService.defaultFilterStoragePrefix + url.split('?')[0];
++  }
++
+   /**
+    * Applies and redirects to the passed page with the filter encoded (Series only)
+    * @param page
+diff --git a/UI/Web/src/assets/langs/en.json b/UI/Web/src/assets/langs/en.json
+index 81041afc6..e8a050588 100644
+--- a/UI/Web/src/assets/langs/en.json
++++ b/UI/Web/src/assets/langs/en.json
+@@ -4186,6 +4186,7 @@
+         "confirm-delete-smart-filter": "Are you sure you want to delete this Smart Filter?",
+         "smart-filter-deleted": "Smart Filter Deleted",
+         "smart-filter-updated": "Created/Updated smart filter",
++        "default-filter-updated": "Default filter updated",
+         "external-source-already-exists": "An External Source already exists with the same Name/Host/API Key",
+         "tokens-expired": "One or more tokens have expired. Scrobbling will no longer process for these providers until you re-generate it in KavitaPlus > Connections",
+         "collection-tag-deleted": "Collection Tag deleted",
+diff --git a/UI/Web/src/assets/langs/ko.json b/UI/Web/src/assets/langs/ko.json
+index 0c1dad229..483d58532 100644
+--- a/UI/Web/src/assets/langs/ko.json
++++ b/UI/Web/src/assets/langs/ko.json
+@@ -2191,6 +2191,7 @@
+         "confirm-delete-smart-filter": "이 스마트 필터를 삭제하시겠습니까?",
+         "smart-filter-deleted": "스마트 필터가 삭제되었습니다",
+         "smart-filter-updated": "스마트 필터 생성/업데이트 되었습니다",
++        "default-filter-updated": "기본 필터가 업데이트되었습니다",
+         "external-source-already-exists": "이름/호스트/API 키가 동일한 외부 소스가 이미 존재합니다",
+         "anilist-token-expired": "AniList 토큰이 만료되었습니다. 읽기 동기화는 사용자 설정 > 계정에서 다시 생성할 때까지 더 이상 처리되지 않습니다",
+         "collection-tag-deleted": "컬렉션 태그가 삭제되었습니다",
+-- 
+2.47.3
+

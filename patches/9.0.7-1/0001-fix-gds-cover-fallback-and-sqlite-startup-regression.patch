@@ -1,0 +1,474 @@
+diff --git a/Kavita.API/Database/IUnitOfWork.cs b/Kavita.API/Database/IUnitOfWork.cs
+index b6a560a58..47830c941 100644
+--- a/Kavita.API/Database/IUnitOfWork.cs
++++ b/Kavita.API/Database/IUnitOfWork.cs
+@@ -38,11 +38,6 @@ public interface IUnitOfWork
+     IReadingListRemapRuleRepository RemapRuleRepository { get; }
+     IKavitaPlusAuditRepository KavitaPlusAuditRepository { get; }
+
+-    /// <summary>
+-    /// Commits pending changes to the database inside an IMMEDIATE transaction so writer
+-    /// contention waits on the SQLite writer lock (via busy_timeout) instead of failing with
+-    /// SQLITE_BUSY_SNAPSHOT.
+-    /// </summary>
+     Task<bool> CommitAsync(CancellationToken ct = default);
+     bool HasChanges();
+     Task<bool> RollbackAsync(CancellationToken ct = default);
+diff --git a/Kavita.Database/Extensions/ApplicationServiceExtensions.cs b/Kavita.Database/Extensions/ApplicationServiceExtensions.cs
+index 68e2adb00..618c041aa 100644
+--- a/Kavita.Database/Extensions/ApplicationServiceExtensions.cs
++++ b/Kavita.Database/Extensions/ApplicationServiceExtensions.cs
+@@ -1,6 +1,5 @@
+ using Kavita.API.Database;
+ using Kavita.Common.EnvironmentInfo;
+-using Kavita.Database.Interceptors;
+ using Microsoft.AspNetCore.DataProtection;
+ using Microsoft.EntityFrameworkCore;
+ using Microsoft.EntityFrameworkCore.Diagnostics;
+@@ -33,11 +32,7 @@ public static class ApplicationServiceExtensions
+             options.UseSqlite("Data source=config/kavita.db", builder =>
+             {
+                 builder.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
+-                // Must exceed the SQLite busy_timeout (30s) applied by SqlitePragmaInterceptor,
+-                // otherwise EF cancels the command before SQLite's writer-lock wait can finish.
+-                builder.CommandTimeout(60);
+             });
+-            options.AddInterceptors(new SqlitePragmaInterceptor());
+             options.EnableDetailedErrors();
+             options.EnableSensitiveDataLogging();
+             options.ConfigureWarnings(warnings =>
+diff --git a/Kavita.Database/Interceptors/SqlitePragmaInterceptor.cs b/Kavita.Database/Interceptors/SqlitePragmaInterceptor.cs
+deleted file mode 100644
+index 18a54443b..000000000
+--- a/Kavita.Database/Interceptors/SqlitePragmaInterceptor.cs
++++ /dev/null
+@@ -1,46 +0,0 @@
+-using System.Data.Common;
+-using System.Threading;
+-using System.Threading.Tasks;
+-using Microsoft.EntityFrameworkCore.Diagnostics;
+-
+-namespace Kavita.Database.Interceptors;
+-
+-/// <summary>
+-/// Applies per-connection PRAGMAs every time a SQLite connection is opened.
+-/// Runs on every pooled connection - <c>AddDbContextPool</c> reuses <c>DbContext</c> instances
+-/// but the underlying <c>SqliteConnection</c> can open/close across operations, so a one-shot
+-/// startup PRAGMA is not sufficient.
+-///
+-/// <c>busy_timeout</c> makes SQLite sleep up to the given number of milliseconds waiting for
+-/// the writer lock rather than returning <c>SQLITE_BUSY</c> immediately. This only helps when
+-/// paired with IMMEDIATE transactions (see <c>UnitOfWork.CommitAsync</c>); DEFERRED transactions
+-/// still fail with the non-retriable <c>SQLITE_BUSY_SNAPSHOT</c>.
+-/// </summary>
+-public sealed class SqlitePragmaInterceptor : DbConnectionInterceptor
+-{
+-    private const int BusyTimeoutMs = 30_000;
+-
+-    public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
+-    {
+-        ApplyPragmas(connection);
+-    }
+-
+-    public override async Task ConnectionOpenedAsync(DbConnection connection, ConnectionEndEventData eventData, CancellationToken cancellationToken = default)
+-    {
+-        await ApplyPragmasAsync(connection, cancellationToken);
+-    }
+-
+-    private static void ApplyPragmas(DbConnection connection)
+-    {
+-        using var command = connection.CreateCommand();
+-        command.CommandText = $"PRAGMA busy_timeout = {BusyTimeoutMs};";
+-        command.ExecuteNonQuery();
+-    }
+-
+-    private static async Task ApplyPragmasAsync(DbConnection connection, CancellationToken ct)
+-    {
+-        await using var command = connection.CreateCommand();
+-        command.CommandText = $"PRAGMA busy_timeout = {BusyTimeoutMs};";
+-        await command.ExecuteNonQueryAsync(ct);
+-    }
+-}
+diff --git a/Kavita.Database/UnitOfWork.cs b/Kavita.Database/UnitOfWork.cs
+index 829196517..6987cd6fe 100644
+--- a/Kavita.Database/UnitOfWork.cs
++++ b/Kavita.Database/UnitOfWork.cs
+@@ -1,5 +1,4 @@
+ ﻿using System;
+-using System.Data;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using AutoMapper;
+@@ -92,16 +91,9 @@ public class UnitOfWork : IUnitOfWork
+     public IReadingListRemapRuleRepository RemapRuleRepository { get; }
+     public IKavitaPlusAuditRepository KavitaPlusAuditRepository { get; }
+
+-    /// <summary>
+-    /// Commits pending changes inside an IMMEDIATE SQLite transaction so writer contention
+-    /// waits on the writer lock (via busy_timeout) instead of failing with SQLITE_BUSY_SNAPSHOT.
+-    /// </summary>
+     public async Task<bool> CommitAsync(CancellationToken ct = default)
+     {
+-        await using var tx = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+-        var result = await _context.SaveChangesAsync(ct) > 0;
+-        await tx.CommitAsync(ct);
+-        return result;
++        return await _context.SaveChangesAsync(ct) > 0;
+     }
+
+     /// <summary>
+diff --git a/Kavita.Services.Tests/Helpers/GdsMetadataParserTests.cs b/Kavita.Services.Tests/Helpers/GdsMetadataParserTests.cs
+new file mode 100644
+index 000000000..3e5e98973
+--- /dev/null
++++ b/Kavita.Services.Tests/Helpers/GdsMetadataParserTests.cs
+@@ -0,0 +1,99 @@
++using Kavita.Services.Helpers;
++
++namespace Kavita.Services.Tests.Helpers;
++
++public class GdsMetadataParserTests : IDisposable
++{
++    private readonly string _testDirectory = Path.Join(Path.GetTempPath(), "kavita-gds-yaml-tests", Guid.NewGuid().ToString("N"));
++    private readonly string _bookPath;
++
++    public GdsMetadataParserTests()
++    {
++        Directory.CreateDirectory(_testDirectory);
++        _bookPath = Path.Join(_testDirectory, "sample.epub");
++        File.WriteAllText(_bookPath, string.Empty);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldReturnFalse_WhenYamlIsEmpty()
++    {
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), string.Empty);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.False(result);
++        Assert.Equal(string.Empty, encodedImage);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldReturnFalse_WhenYamlIsNulFilled()
++    {
++        File.WriteAllBytes(Path.Join(_testDirectory, "kavita.yaml"), new byte[1024]);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.False(result);
++        Assert.Equal(string.Empty, encodedImage);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldReturnFalse_WhenYamlCoverIsInvalidBase64()
++    {
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), """
++            files:
++                'sample.epub':
++                    cover: not-base64
++                    page: 1
++            """);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.False(result);
++        Assert.Equal(string.Empty, encodedImage);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldUseLineFallback_WhenYamlParserCannotReadDocument()
++    {
++        const string pngBase64 =
++            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), $"""
++            files:
++                'sample.epub':
++                    cover: data:image/png;base64,{pngBase64}
++                    page: 1
++            broken: [unclosed
++            """);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.True(result);
++        Assert.Equal(pngBase64, encodedImage);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldReturnTrue_WhenYamlHasValidBase64Cover()
++    {
++        const string pngBase64 =
++            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), $"""
++            files:
++                'sample.epub':
++                    cover: data:image/png;base64,{pngBase64}
++                    page: 1
++            """);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.True(result);
++        Assert.Equal(pngBase64, encodedImage);
++    }
++
++    public void Dispose()
++    {
++        if (Directory.Exists(_testDirectory))
++        {
++            Directory.Delete(_testDirectory, true);
++        }
++    }
++}
+diff --git a/Kavita.Services/Helpers/GdsMetadataParser.cs b/Kavita.Services/Helpers/GdsMetadataParser.cs
+index a9202de44..f71a3e0b2 100644
+--- a/Kavita.Services/Helpers/GdsMetadataParser.cs
++++ b/Kavita.Services/Helpers/GdsMetadataParser.cs
+@@ -115,6 +115,7 @@ public static class GdsMetadataParser
+         try
+         {
+             var yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
++            if (yaml == null) return false;
+             if (!TryGetMap(yaml, "files", out var files)) return false;
+
+             foreach (var (sourceKey, value) in files)
+@@ -126,7 +127,7 @@ public static class GdsMetadataParser
+                 return TryNormalizeBase64Cover(cover, out encodedImage);
+             }
+         }
+-        catch (YamlDotNet.Core.YamlException)
++        catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException or InvalidOperationException or ArgumentException)
+         {
+             return TryGetCoverBase64FromLines(yamlPath, fileName, out encodedImage);
+         }
+@@ -140,37 +141,44 @@ public static class GdsMetadataParser
+         var inFiles = false;
+         var inTargetFile = false;
+
+-        foreach (var line in File.ReadLines(yamlPath))
++        try
+         {
+-            if (!inFiles)
++            foreach (var line in File.ReadLines(yamlPath))
+             {
+-                if (TryParseIndentedKey(line, 0, out var rootKey) &&
+-                    string.Equals(rootKey, "files", StringComparison.OrdinalIgnoreCase))
++                if (!inFiles)
+                 {
+-                    inFiles = true;
+-                }
++                    if (TryParseIndentedKey(line, 0, out var rootKey) &&
++                        string.Equals(rootKey, "files", StringComparison.OrdinalIgnoreCase))
++                    {
++                        inFiles = true;
++                    }
+
+-                continue;
+-            }
++                    continue;
++                }
+
+-            if (!string.IsNullOrWhiteSpace(line) && !char.IsWhiteSpace(line[0]))
+-            {
+-                return false;
+-            }
++                if (!string.IsNullOrWhiteSpace(line) && !char.IsWhiteSpace(line[0]))
++                {
++                    return false;
++                }
+
+-            if (TryParseIndentedKey(line, 4, out var candidateFile))
+-            {
+-                inTargetFile = string.Equals(UnquoteYamlScalar(candidateFile), fileName, StringComparison.OrdinalIgnoreCase);
+-                continue;
+-            }
++                if (TryParseIndentedKey(line, 4, out var candidateFile))
++                {
++                    inTargetFile = string.Equals(UnquoteYamlScalar(candidateFile), fileName, StringComparison.OrdinalIgnoreCase);
++                    continue;
++                }
+
+-            if (!inTargetFile) continue;
++                if (!inTargetFile) continue;
+
+-            if (TryParseIndentedScalar(line, 8, "cover", out var cover))
+-            {
+-                return TryNormalizeBase64Cover(cover, out encodedImage);
++                if (TryParseIndentedScalar(line, 8, "cover", out var cover))
++                {
++                    return TryNormalizeBase64Cover(cover, out encodedImage);
++                }
+             }
+         }
++        catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
++        {
++            return false;
++        }
+
+         return false;
+     }
+diff --git a/Kavita.Services/MetadataService.cs b/Kavita.Services/MetadataService.cs
+index 71ade4dce..99f47096b 100644
+--- a/Kavita.Services/MetadataService.cs
++++ b/Kavita.Services/MetadataService.cs
+@@ -10,6 +10,7 @@ using Kavita.API.Database;
+ using Kavita.API.Services;
+ using Kavita.API.Services.Helpers;
+ using Kavita.API.Services.SignalR;
++using Kavita.Common;
+ using Kavita.Common.Extensions;
+ using Kavita.Common.Helpers;
+ using Kavita.Models.DTOs.Settings;
+@@ -69,12 +70,23 @@ public class MetadataService(
+             return false;
+         }
+
+-
+         logger.LogDebug("[MetadataService] Generating cover image for {File}", firstFile.FilePath);
+
+-        chapter.CoverImage = readingItemService.GetCoverImage(firstFile.FilePath,
+-            ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), firstFile.Format, encodeFormat, coverImageSize);
++        string coverImage;
++        try
++        {
++            coverImage = readingItemService.GetCoverImage(firstFile.FilePath,
++                ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), firstFile.Format, encodeFormat, coverImageSize);
++        }
++        catch (Exception ex) when (ex is KavitaException or InvalidDataException or IOException or InvalidOperationException)
++        {
++            logger.LogWarning(ex, "[MetadataService] Failed to generate cover image for {File}", firstFile.FilePath);
++            return false;
++        }
+
++        if (string.IsNullOrEmpty(coverImage)) return false;
++
++        chapter.CoverImage = coverImage;
+         imageService.UpdateColorScape(chapter);
+
+         unitOfWork.ChapterRepository.Update(chapter);
+@@ -141,6 +153,7 @@ public class MetadataService(
+             volume.CoverImage = firstChapter.CoverImage;
+         }
+         imageService.UpdateColorScape(volume);
++        unitOfWork.VolumeRepository.Update(volume);
+
+         _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
+
+@@ -178,6 +191,7 @@ public class MetadataService(
+         }
+
+         imageService.UpdateColorScape(series);
++        unitOfWork.SeriesRepository.Update(series);
+
+         _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+     }
+@@ -274,10 +288,11 @@ public class MetadataService(
+             var chapterIndex = 0;
+             foreach (var chapter in volume.Chapters)
+             {
+-                var chapterUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
++                var forceChapterCoverUpdate = forceUpdate;
++                var chapterUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceChapterCoverUpdate, encodeFormat, coverImageSize, forceColorScape);
+                 if (!chapterUpdated)
+                 {
+-                    chapterUpdated = UpdateChapterCoverImage(chapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
++                    chapterUpdated = UpdateGdsChapterCoverFromMediaFiles(chapter, forceChapterCoverUpdate, encodeFormat, coverImageSize, forceColorScape);
+                 }
+
+                 UpdateChapterLastModified(chapter, forceUpdate || chapterUpdated);
+@@ -321,19 +336,83 @@ public class MetadataService(
+             return false;
+         }
+
+-        if (!GdsMetadataParser.TryGetCoverBase64(firstFile.FilePath, out var encodedImage)) return false;
++        foreach (var file in chapter.Files.Where(x => x.Bytes > 0).OrderBy(x => x.Chapter).ThenBy(x => x.FilePath))
++        {
++            if (!GdsMetadataParser.TryGetCoverBase64(file.FilePath, out var encodedImage)) continue;
+
+-        var thumbnailWidth = coverImageSize.GetDimensions().Width;
+-        var coverImage = imageService.CreateThumbnailFromBase64(encodedImage,
+-            ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), encodeFormat, thumbnailWidth);
+-        if (string.IsNullOrEmpty(coverImage)) return false;
++            var thumbnailWidth = coverImageSize.GetDimensions().Width;
++            string coverImage;
++            try
++            {
++                coverImage = imageService.CreateThumbnailFromBase64(encodedImage,
++                    ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), encodeFormat, thumbnailWidth);
++            }
++            catch (KavitaException ex)
++            {
++                logger.LogWarning(ex, "[MetadataService] Invalid GDS YAML cover for {File}", file.FilePath);
++                continue;
++            }
+
+-        chapter.CoverImage = coverImage;
+-        imageService.UpdateColorScape(chapter);
+-        unitOfWork.ChapterRepository.Update(chapter);
+-        _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
++            if (string.IsNullOrEmpty(coverImage)) continue;
+
+-        return true;
++            chapter.CoverImage = coverImage;
++            imageService.UpdateColorScape(chapter);
++            unitOfWork.ChapterRepository.Update(chapter);
++            _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
++
++            return true;
++        }
++
++        return false;
++    }
++
++    private bool UpdateGdsChapterCoverFromMediaFiles(Chapter chapter, bool forceUpdate, EncodeFormat encodeFormat,
++        CoverImageSize coverImageSize, bool forceColorScape)
++    {
++        var firstFile = chapter.Files.MinBy(x => x.Chapter);
++        if (firstFile == null) return false;
++
++        if (!cacheHelper.ShouldUpdateCoverImage(
++                directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, chapter.CoverImage),
++                firstFile, chapter.Created, forceUpdate, chapter.CoverImageLocked))
++        {
++            if (NeedsColorSpace(chapter, forceColorScape))
++            {
++                imageService.UpdateColorScape(chapter);
++                unitOfWork.ChapterRepository.Update(chapter);
++                _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
++            }
++
++            return false;
++        }
++
++        foreach (var file in chapter.Files.Where(x => x.Bytes > 0).OrderBy(x => x.Chapter).ThenBy(x => x.FilePath))
++        {
++            logger.LogDebug("[MetadataService] Generating GDS cover image for {File}", file.FilePath);
++
++            string coverImage;
++            try
++            {
++                coverImage = readingItemService.GetCoverImage(file.FilePath,
++                    ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), file.Format, encodeFormat, coverImageSize);
++            }
++            catch (Exception ex) when (ex is KavitaException or InvalidDataException or IOException or InvalidOperationException)
++            {
++                logger.LogWarning(ex, "[MetadataService] Failed to generate GDS cover image for {File}", file.FilePath);
++                continue;
++            }
++
++            if (string.IsNullOrEmpty(coverImage)) continue;
++
++            chapter.CoverImage = coverImage;
++            imageService.UpdateColorScape(chapter);
++            unitOfWork.ChapterRepository.Update(chapter);
++            _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
++
++            return true;
++        }
++
++        return false;
+     }
+
+     private bool TryApplyGdsTextTitleCover(Series series, Chapter firstChapter, bool forceUpdate,

@@ -1,0 +1,119 @@
+From 5558215aa0d86c2048702eee5152c70b6233d0ea Mon Sep 17 00:00:00 2001
+From: suikano1304 <suikano1304@users.noreply.github.com>
+Date: Wed, 10 Jun 2026 17:09:57 +0900
+Subject: [PATCH] fix: skip GDS targeted scan follow-up work
+
+---
+ Kavita.Services.Tests/ScannerServiceTests.cs | 16 +++++++
+ Kavita.Services/Scanner/ScannerService.cs    | 46 +++++++++++++++++---
+ 2 files changed, 56 insertions(+), 6 deletions(-)
+
+diff --git a/Kavita.Services.Tests/ScannerServiceTests.cs b/Kavita.Services.Tests/ScannerServiceTests.cs
+index eaca8d852..2e080af85 100644
+--- a/Kavita.Services.Tests/ScannerServiceTests.cs
++++ b/Kavita.Services.Tests/ScannerServiceTests.cs
+@@ -145,6 +145,22 @@ public class ScannerServiceTests: AbstractDbTest
+         Assert.Equal(MangaFormat.Text, batches[0][0].Format);
+     }
+ 
++    [Fact]
++    public void ShouldRunWordCountAnalysisAfterScan_SkipsGdsLibraries()
++    {
++        Assert.False(ScannerService.ShouldRunWordCountAnalysisAfterScan(LibraryType.GDS));
++        Assert.True(ScannerService.ShouldRunWordCountAnalysisAfterScan(LibraryType.Book));
++        Assert.True(ScannerService.ShouldRunWordCountAnalysisAfterScan(LibraryType.Manga));
++    }
++
++    [Fact]
++    public void ShouldRunGlobalPostScanCleanup_SkipsGdsLibraries()
++    {
++        Assert.False(ScannerService.ShouldRunGlobalPostScanCleanup(LibraryType.GDS));
++        Assert.True(ScannerService.ShouldRunGlobalPostScanCleanup(LibraryType.Book));
++        Assert.True(ScannerService.ShouldRunGlobalPostScanCleanup(LibraryType.Manga));
++    }
++
+     [Fact]
+     public void ResolveGdsMixedRootLowestFolder_PreservesExistingConcreteDirectory()
+     {
+diff --git a/Kavita.Services/Scanner/ScannerService.cs b/Kavita.Services/Scanner/ScannerService.cs
+index e02942bfa..e7c1a9eed 100644
+--- a/Kavita.Services/Scanner/ScannerService.cs
++++ b/Kavita.Services/Scanner/ScannerService.cs
+@@ -205,7 +205,15 @@ public class ScannerService(
+         if (await ShouldScanSeries(seriesId, library, libraryPaths, series, true) != ScanCancelReason.NoCancel)
+         {
+             BackgroundJob.Enqueue(() => metadataService.GenerateCoversForSeries(serverSettings, series.LibraryId, seriesId, false, false));
+-            BackgroundJob.Enqueue(() => wordCountAnalyzerService.ScanSeries(library.Id, seriesId, bypassFolderOptimizationChecks));
++            if (ShouldRunWordCountAnalysisAfterScan(library.Type))
++            {
++                BackgroundJob.Enqueue(() => wordCountAnalyzerService.ScanSeries(library.Id, seriesId, bypassFolderOptimizationChecks));
++            }
++            else
++            {
++                logger.LogInformation("[ScannerService] Skipping word-count analysis for GDS ScanSeries shortcut on {SeriesName} ({SeriesId})",
++                    series.Name, seriesId);
++            }
+             return;
+         }
+ 
+@@ -295,10 +303,18 @@ public class ScannerService(
+             if (processedSeriesId != null)
+             {
+                 var metadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
+-                var wordCountAnalyzerService = scope.ServiceProvider.GetRequiredService<IWordCountAnalyzerService>();
+ 
+                 await metadataService.GenerateCoversForSeries(serverSettings, scopedLibrary.Id, processedSeriesId.Value, bypassFolderOptimizationChecks, false);
+-                await wordCountAnalyzerService.ScanSeries(scopedLibrary.Id, processedSeriesId.Value, bypassFolderOptimizationChecks);
++                if (ShouldRunWordCountAnalysisAfterScan(scopedLibrary.Type))
++                {
++                    var wordCountAnalyzerService = scope.ServiceProvider.GetRequiredService<IWordCountAnalyzerService>();
++                    await wordCountAnalyzerService.ScanSeries(scopedLibrary.Id, processedSeriesId.Value, bypassFolderOptimizationChecks);
++                }
++                else
++                {
++                    logger.LogInformation("[ScannerService] Skipping word-count analysis for GDS ScanSeries on {SeriesName} ({SeriesId})",
++                        pSeries.FirstOrDefault()?.Series ?? series.Name, processedSeriesId.Value);
++                }
+             }
+         }
+ 
+@@ -310,15 +326,33 @@ public class ScannerService(
+         await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+             MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Ended, series.Name));
+ 
+-        logger.LogInformation("[ScannerService] Starting post-scan cleanup for {SeriesName}", series.Name);
+-        BackgroundJob.Enqueue<IMetadataService>(service => service.RemoveAbandonedMetadataKeys(CancellationToken.None));
+         BackgroundJob.Enqueue(() => cacheService.CleanupChapters(existingChapterIdsToClean));
+-        BackgroundJob.Enqueue(() => directoryService.ClearDirectory(directoryService.CacheDirectory));
++        if (ShouldRunGlobalPostScanCleanup(library.Type))
++        {
++            logger.LogInformation("[ScannerService] Starting post-scan cleanup for {SeriesName}", series.Name);
++            BackgroundJob.Enqueue<IMetadataService>(service => service.RemoveAbandonedMetadataKeys(CancellationToken.None));
++            BackgroundJob.Enqueue(() => directoryService.ClearDirectory(directoryService.CacheDirectory));
++        }
++        else
++        {
++            logger.LogInformation("[ScannerService] Skipping global post-scan cleanup for GDS ScanSeries on {SeriesName} ({SeriesId})",
++                series.Name, seriesId);
++        }
+ 
+         logger.LogInformation("[ScannerService] Post-scan cleanup enqueued for {SeriesName}. Scan series job completed in {ElapsedScanTime} milliseconds",
+             series.Name, sw.ElapsedMilliseconds);
+     }
+ 
++    public static bool ShouldRunWordCountAnalysisAfterScan(LibraryType libraryType)
++    {
++        return libraryType != LibraryType.GDS;
++    }
++
++    public static bool ShouldRunGlobalPostScanCleanup(LibraryType libraryType)
++    {
++        return libraryType != LibraryType.GDS;
++    }
++
+     private async Task<IList<string>> ResolveSeriesScanFolders(Series series, IList<string> libraryPaths)
+     {
+         var files = await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(series.Id);
+-- 
+2.47.3
+

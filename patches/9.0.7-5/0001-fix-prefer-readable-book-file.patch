@@ -1,0 +1,251 @@
+diff --git a/Kavita.Server/Controllers/BookController.cs b/Kavita.Server/Controllers/BookController.cs
+index d9d36e211..8e5554070 100644
+--- a/Kavita.Server/Controllers/BookController.cs
++++ b/Kavita.Server/Controllers/BookController.cs
+@@ -87,10 +87,10 @@ public class BookController(
+         {
+             case MangaFormat.Epub:
+             {
+-                var mangaFile = (await unitOfWork.ChapterRepository.GetFilesForChapterAsync(chapterId))[0];
+-                await cacheService.Ensure(chapterId);
++                var chapter = await cacheService.Ensure(chapterId);
++                if (chapter == null) return NotFound();
+
+-                var file = cacheService.GetCachedFile(chapterId, mangaFile.FilePath);
++                var file = cacheService.GetCachedFile(chapter);
+                 using var bookLease = await OpenEpubBookAsync(file);
+                 var book = bookLease.Book;
+                 if (book == null) return NotFound();
+@@ -107,10 +107,10 @@ public class BookController(
+             }
+             case MangaFormat.Pdf:
+             {
+-                var mangaFile = (await unitOfWork.ChapterRepository.GetFilesForChapterAsync(chapterId))[0];
+-                await cacheService.Ensure(chapterId);
++                var chapter = await cacheService.Ensure(chapterId);
++                if (chapter == null) return NotFound();
+
+-                var file = cacheService.GetCachedFile(chapterId, mangaFile.FilePath);
++                var file = cacheService.GetCachedFile(chapter);
+                 if (string.IsNullOrEmpty(bookTitle))
+                 {
+                     // Override with filename
+@@ -194,7 +194,10 @@ public class BookController(
+         var chapter = await cacheService.Ensure(chapterId);
+         if (chapter == null) return BadRequest(await localizationService.GetAsync("en", "chapter-doesnt-exist"));
+
+-        var cachedFilePath = Path.Join(cacheService.GetCachePath(chapterId), Path.GetFileName(chapter.Files.ElementAt(0).FilePath));
++        var mangaFile = ChapterFileSelector.GetBestReadingFile(chapter.Files);
++        if (mangaFile == null) return BadRequest(await localizationService.GetAsync("en", "chapter-doesnt-exist"));
++
++        var cachedFilePath = Path.Join(cacheService.GetCachePath(chapterId), Path.GetFileName(mangaFile.FilePath));
+         var result = await bookService.GetResourceAsync(cachedFilePath, file);
+
+         if (!result.IsSuccess) return BadRequest(await localizationService.GetAsync("en", result.ErrorMessage));
+@@ -248,7 +251,7 @@ public class BookController(
+
+         try
+         {
+-            if (chapter.Files.FirstOrDefault()?.Format == MangaFormat.Text)
++            if (ChapterFileSelector.GetBestReadingFile(chapter.Files)?.Format == MangaFormat.Text)
+             {
+                 return Ok(await bookService.GetBookPageText(page, chapterId, path));
+             }
+diff --git a/Kavita.Services.Tests/CacheServiceTests.cs b/Kavita.Services.Tests/CacheServiceTests.cs
+index 62d4840e4..16ecce7d6 100644
+--- a/Kavita.Services.Tests/CacheServiceTests.cs
++++ b/Kavita.Services.Tests/CacheServiceTests.cs
+@@ -2,6 +2,7 @@
+ using Kavita.API.Services;
+ using Kavita.Database.Tests;
+ using Kavita.Models.Builders;
++using Kavita.Models.Entities;
+ using Kavita.Models.Entities.Enums;
+ using Kavita.Models.Metadata;
+ using Kavita.Models.Parser;
+@@ -162,7 +163,7 @@ public class CacheServiceTests(ITestOutputHelper outputHelper): AbstractDbTest(o
+     #region GetCachedEpubFile
+
+     [Fact]
+-    public async Task GetCachedEpubFile_ShouldReturnFirstEpub()
++    public async Task GetCachedEpubFile_ShouldReturnFirstEpubWhenNoFileAnalysisExists()
+     {
+         var (unitOfWork, context, _) = await CreateDatabase();
+
+@@ -185,6 +186,57 @@ public class CacheServiceTests(ITestOutputHelper outputHelper): AbstractDbTest(o
+         Assert.Equal($"{DataDirectory}1.epub", cs.GetCachedFile(c));
+     }
+
++    [Fact]
++    public async Task GetCachedEpubFile_ShouldPreferReadableEpub()
++    {
++        var (unitOfWork, context, _) = await CreateDatabase();
++
++        var filesystem = CreateFileSystem();
++        filesystem.AddDirectory($"{CacheDirectory}1/");
++        filesystem.AddFile($"{DataDirectory}1.epub", new MockFileData(""));
++        filesystem.AddFile($"{DataDirectory}2.epub", new MockFileData("valid"));
++        var ds = new DirectoryService(Substitute.For<ILogger<DirectoryService>>(), filesystem);
++        var cs = new CacheService(_logger, unitOfWork, ds,
++            new ReadingItemService(Substitute.For<IArchiveService>(),
++                Substitute.For<IBookService>(), Substitute.For<IImageService>(), ds, Substitute.For<ILogger<ReadingItemService>>(),
++                Substitute.For<IMediaErrorService>()),
++            Substitute.For<IBookmarkService>(), Substitute.For<ILocalizationService>());
++
++        var c = new ChapterBuilder("1")
++            .WithFile(new MangaFileBuilder($"{DataDirectory}1.epub", MangaFormat.Epub).WithBytes(0).WithPages(0).WithId(1).Build())
++            .WithFile(new MangaFileBuilder($"{DataDirectory}2.epub", MangaFormat.Epub).WithBytes(5).WithPages(16).WithId(2).Build())
++            .Build();
++
++        Assert.Equal($"{DataDirectory}2.epub", cs.GetCachedFile(c));
++    }
++
++    [Fact]
++    public async Task ExtractChapterFiles_ShouldCopyReadableEpubWhenFirstFileIsEmpty()
++    {
++        var (unitOfWork, context, _) = await CreateDatabase();
++
++        var filesystem = CreateFileSystem();
++        filesystem.AddFile($"{DataDirectory}1.epub", new MockFileData(""));
++        filesystem.AddFile($"{DataDirectory}2.epub", new MockFileData("valid"));
++        var ds = new DirectoryService(Substitute.For<ILogger<DirectoryService>>(), filesystem);
++        var cs = new CacheService(_logger, unitOfWork, ds,
++            new ReadingItemService(Substitute.For<IArchiveService>(),
++                Substitute.For<IBookService>(), Substitute.For<IImageService>(), ds, Substitute.For<ILogger<ReadingItemService>>(),
++                Substitute.For<IMediaErrorService>()),
++            Substitute.For<IBookmarkService>(), Substitute.For<ILocalizationService>());
++
++        var files = new List<MangaFile>
++        {
++            new MangaFileBuilder($"{DataDirectory}1.epub", MangaFormat.Epub).WithBytes(0).WithPages(0).WithId(1).Build(),
++            new MangaFileBuilder($"{DataDirectory}2.epub", MangaFormat.Epub).WithBytes(5).WithPages(16).WithId(2).Build()
++        };
++
++        await cs.ExtractChapterFiles($"{CacheDirectory}1/", files);
++
++        Assert.False(filesystem.FileExists($"{CacheDirectory}1/1.epub"));
++        Assert.True(filesystem.FileExists($"{CacheDirectory}1/2.epub"));
++    }
++
+     #endregion
+
+     #region GetCachedPagePath
+diff --git a/Kavita.Services/BookService.cs b/Kavita.Services/BookService.cs
+index 896dc8ae3..50a9d02a0 100644
+--- a/Kavita.Services/BookService.cs
++++ b/Kavita.Services/BookService.cs
+@@ -1802,7 +1802,8 @@ public partial class BookService(
+     public async Task<ICollection<BookChapterItem>> GenerateTableOfContents(Chapter chapter,
+         CancellationToken ct = default)
+     {
+-        if (chapter.Files.FirstOrDefault()?.Format == MangaFormat.Text)
++        var readingFile = ChapterFileSelector.GetBestReadingFile(chapter.Files);
++        if (readingFile?.Format == MangaFormat.Text)
+         {
+             return Enumerable.Range(0, Math.Max(chapter.Pages, 0))
+                 .Select(page => new BookChapterItem
+@@ -1815,7 +1816,9 @@ public partial class BookService(
+                 .ToList();
+         }
+
+-        using var bookLease = await OpenEpubBookAsync(chapter.Files.ElementAt(0).FilePath, LenientBookReaderOptions);
++        if (readingFile == null) return [];
++
++        using var bookLease = await OpenEpubBookAsync(readingFile.FilePath, LenientBookReaderOptions);
+         var book = bookLease.Book;
+         if (book == null) return [];
+
+diff --git a/Kavita.Services/CacheService.cs b/Kavita.Services/CacheService.cs
+index 9dcce1241..0f41501e5 100644
+--- a/Kavita.Services/CacheService.cs
++++ b/Kavita.Services/CacheService.cs
+@@ -12,6 +12,7 @@ using Kavita.Common.Extensions;
+ using Kavita.Models.DTOs.Reader;
+ using Kavita.Models.Entities;
+ using Kavita.Models.Entities.Enums;
++using Kavita.Services.Helpers;
+ using Kavita.Services.Scanner;
+ using Microsoft.Extensions.Logging;
+ using NetVips;
+@@ -109,11 +110,14 @@ public class CacheService(
+     /// <returns></returns>
+     public string GetCachedFile(Chapter chapter)
+     {
++        var file = ChapterFileSelector.GetBestReadingFile(chapter.Files);
++        if (file == null) return string.Empty;
++
+         var extractPath = GetCachePath(chapter.Id);
+-        var path = Path.Join(extractPath, directoryService.FileSystem.Path.GetFileName(chapter.Files.First().FilePath));
++        var path = Path.Join(extractPath, directoryService.FileSystem.Path.GetFileName(file.FilePath));
+         if (!(directoryService.FileSystem.FileInfo.New(path).Exists))
+         {
+-            path = chapter.Files.First().FilePath;
++            path = file.FilePath;
+         }
+         return path;
+     }
+@@ -195,6 +199,7 @@ public class CacheService(
+         var removeNonImages = true;
+         var fileCount = files.Count;
+         var extraPath = string.Empty;
++        var bookFileCached = false;
+         var extractDi = directoryService.FileSystem.DirectoryInfo.New(extractPath);
+
+         if (files[0].Format == MangaFormat.Image)
+@@ -241,15 +246,22 @@ public class CacheService(
+                 case MangaFormat.Epub:
+                 case MangaFormat.Pdf:
+                 {
++                    if (bookFileCached) continue;
++
++                    var readerFile = ChapterFileSelector.GetBestReadingFile(files);
++                    if (readerFile == null) continue;
++
+                     if (extractPdfImages)
+                     {
+-                        readingItemService.Extract(file.FilePath, Path.Join(extractPath, extraPath), file.Format);
++                        readingItemService.Extract(readerFile.FilePath, Path.Join(extractPath, extraPath), readerFile.Format);
++                        bookFileCached = true;
+                         break;
+                     }
+                     removeNonImages = false;
+
+                     directoryService.ExistOrCreate(extractPath);
+-                    directoryService.CopyFileToDirectory(files[0].FilePath, extractPath);
++                    directoryService.CopyFileToDirectory(readerFile.FilePath, extractPath);
++                    bookFileCached = true;
+                     break;
+                 }
+             }
+diff --git a/Kavita.Services/Helpers/ChapterFileSelector.cs b/Kavita.Services/Helpers/ChapterFileSelector.cs
+new file mode 100644
+index 000000000..a3149c7ec
+--- /dev/null
++++ b/Kavita.Services/Helpers/ChapterFileSelector.cs
+@@ -0,0 +1,26 @@
++using System.Collections.Generic;
++using System.Linq;
++using Kavita.Models.Entities;
++
++namespace Kavita.Services.Helpers;
++
++public static class ChapterFileSelector
++{
++    public static MangaFile? GetBestReadingFile(IEnumerable<MangaFile>? files)
++    {
++        var fileList = files?.ToList();
++        if (fileList == null || fileList.Count == 0) return null;
++
++        if (fileList.All(f => f.Bytes <= 0 && f.Pages <= 0))
++        {
++            return fileList[0];
++        }
++
++        return fileList
++            .OrderByDescending(f => f.Bytes > 0 && f.Pages > 0)
++            .ThenByDescending(f => f.Bytes > 0)
++            .ThenByDescending(f => f.Pages > 0)
++            .ThenBy(f => f.Id)
++            .First();
++    }
++}

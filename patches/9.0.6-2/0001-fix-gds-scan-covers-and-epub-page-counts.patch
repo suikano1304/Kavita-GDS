@@ -1,0 +1,426 @@
+diff --git a/Kavita.Server/Controllers/BookController.cs b/Kavita.Server/Controllers/BookController.cs
+index ac7f52809..aaa050e57 100644
+--- a/Kavita.Server/Controllers/BookController.cs
++++ b/Kavita.Server/Controllers/BookController.cs
+@@ -95,7 +95,7 @@ public class BookController(
+                 if (book == null) return NotFound();
+
+                 bookTitle = book.Title;
+-                var pageCount = book.GetReadingOrder().Count;
++                var pageCount = bookService.GetNumberOfPages(file);
+                 if (pageCount > 1 && dto.Pages <= 1)
+                 {
+                     await UpdateBookPageCountAsync(chapterId, dto.VolumeId, dto.SeriesId, pageCount);
+diff --git a/Kavita.Services/BookService.cs b/Kavita.Services/BookService.cs
+index a884037d9..896dc8ae3 100644
+--- a/Kavita.Services/BookService.cs
++++ b/Kavita.Services/BookService.cs
+@@ -56,6 +56,7 @@ public partial class BookService(
+
+     private readonly PdfComicInfoExtractor _pdfComicInfoExtractor = new(logger, mediaErrorService);
+     private const int TextLinesPerPage = 1000;
++    private sealed record VirtualEpubPage(string Title, string ContentKey, string Anchor);
+
+     /// <summary>
+     /// Setup the most lenient book parsing options possible as people have some really bad epubs
+@@ -950,6 +951,64 @@ public partial class BookService(
+         return false;
+     }
+
++    private async Task<List<VirtualEpubPage>> GetSingleSpineNavigationPagesAsync(EpubBookRef book,
++        CancellationToken ct = default)
++    {
++        var readingOrder = (await book.GetReadingOrderAsync())
++            .Where(contentFileRef => contentFileRef.ContentType == EpubContentType.XHTML_1_1)
++            .ToList();
++        if (readingOrder.Count != 1) return [];
++
++        var mappings = await CreateKeyToPageMappingAsync(book, ct);
++        var navItems = await book.GetNavigationAsync();
++        if (navItems == null) return [];
++
++        var pages = new List<VirtualEpubPage>();
++        var seen = new HashSet<string>(StringComparer.Ordinal);
++
++        foreach (var navigationItem in FlattenNavigationItems(navItems))
++        {
++            var key = CoalesceKey(book, mappings, navigationItem.Link?.ContentFilePath);
++            if (string.IsNullOrWhiteSpace(key)) continue;
++            if (!mappings.TryGetValue(key, out var mappedPage) || mappedPage != 0) continue;
++
++            var anchor = navigationItem.Link?.Anchor ?? string.Empty;
++            var identity = string.IsNullOrWhiteSpace(anchor) ? key : $"{key}#{anchor}";
++            if (!seen.Add(identity)) continue;
++
++            pages.Add(new VirtualEpubPage(navigationItem.Title ?? string.Empty, key, anchor));
++        }
++
++        return pages.Count > 1 ? pages : [];
++    }
++
++    private int GetSingleSpineNavigationPageCount(EpubBookRef book)
++    {
++        try
++        {
++            return GetSingleSpineNavigationPagesAsync(book).GetAwaiter().GetResult().Count;
++        }
++        catch (Exception ex)
++        {
++            logger.LogDebug(ex, "[BookService] Unable to count single-spine EPUB navigation pages");
++            return 0;
++        }
++    }
++
++    private static IEnumerable<EpubNavigationItemRef> FlattenNavigationItems(IEnumerable<EpubNavigationItemRef> items)
++    {
++        foreach (var item in items)
++        {
++            yield return item;
++
++            if (item.NestedItems == null) continue;
++            foreach (var nestedItem in FlattenNavigationItems(item.NestedItems))
++            {
++                yield return nestedItem;
++            }
++        }
++    }
++
+     public int GetNumberOfPages(string filePath)
+     {
+         if (!IsValidFile(filePath)) return 0;
+@@ -965,7 +1024,14 @@ public partial class BookService(
+             using var epubLease = OpenEpubBook(filePath, LenientBookReaderOptions);
+             var epubBook = epubLease.Book;
+             if (epubBook == null) return 0;
+-            return epubBook.GetReadingOrder().Count;
++            var pageCount = epubBook.GetReadingOrder().Count;
++            if (pageCount == 1)
++            {
++                var virtualPageCount = GetSingleSpineNavigationPageCount(epubBook);
++                if (virtualPageCount > 1) return virtualPageCount;
++            }
++
++            return pageCount;
+         }
+         catch (Exception ex)
+         {
+@@ -1753,6 +1819,20 @@ public partial class BookService(
+         var book = bookLease.Book;
+         if (book == null) return [];
+
++        var virtualPages = await GetSingleSpineNavigationPagesAsync(book, ct);
++        if (virtualPages.Count > 1)
++        {
++            return virtualPages
++                .Select((virtualPage, index) => new BookChapterItem
++                {
++                    Title = string.IsNullOrWhiteSpace(virtualPage.Title) ? $"{index + 1} Page" : virtualPage.Title,
++                    Page = index,
++                    Part = virtualPage.Anchor,
++                    Children = []
++                })
++                .ToList();
++        }
++
+         var mappings = await CreateKeyToPageMappingAsync(book, ct);
+
+         var navItems = await book.GetNavigationAsync();
+@@ -1900,6 +1980,13 @@ public partial class BookService(
+
+
+         var bookPages = await book.GetReadingOrderAsync();
++        var virtualPages = await GetSingleSpineNavigationPagesAsync(book, ct);
++        if (virtualPages.Count > 1)
++        {
++            return await GetSingleSpineVirtualBookPage(book, virtualPages, page, apiBase, mappings,
++                ptocBookmarks, annotations, ct);
++        }
++
+         try
+         {
+             foreach (var contentFileRef in bookPages)
+@@ -1946,6 +2033,81 @@ public partial class BookService(
+         throw new KavitaException("epub-html-missing");
+     }
+
++    private async Task<string> GetSingleSpineVirtualBookPage(EpubBookRef book, IReadOnlyList<VirtualEpubPage> virtualPages,
++        int page, string apiBase, Dictionary<string, int> mappings, List<PersonalToCDto> ptocBookmarks,
++        List<AnnotationDto> annotations, CancellationToken ct = default)
++    {
++        page = Math.Clamp(page, 0, virtualPages.Count - 1);
++
++        var bookPages = (await book.GetReadingOrderAsync())
++            .Where(contentFileRef => contentFileRef.ContentType == EpubContentType.XHTML_1_1)
++            .ToList();
++        var contentFileRef = bookPages.FirstOrDefault();
++        if (contentFileRef == null) throw new KavitaException("epub-html-missing");
++
++        var content = EscapeTags(await contentFileRef.ReadContentAsync());
++        var doc = new HtmlDocument {OptionFixNestedTags = true};
++        doc.LoadHtml(content);
++
++        var body = doc.DocumentNode.SelectSingleNode("//body");
++        if (body == null)
++        {
++            if (doc.ParseErrors.Any())
++            {
++                LogBookErrors(book, contentFileRef, doc);
++                throw new KavitaException("epub-malformed");
++            }
++
++            logger.LogError("{FilePath} has no body tag! Generating one for support. Book may be skewed", book.FilePath);
++            doc.DocumentNode.SelectSingleNode("/html").AppendChild(HtmlNode.CreateNode("<body></body>"));
++            body = doc.DocumentNode.SelectSingleNode("/html/body");
++        }
++
++        var nextAnchor = page + 1 < virtualPages.Count ? virtualPages[page + 1].Anchor : string.Empty;
++        TrimBodyToVirtualPage(body!, virtualPages[page].Anchor, nextAnchor);
++        return await ScopePage(doc, book, apiBase, body!, mappings, page, ptocBookmarks, annotations, ct);
++    }
++
++    private static void TrimBodyToVirtualPage(HtmlNode body, string? startAnchor, string? nextAnchor)
++    {
++        var children = body.ChildNodes.ToList();
++        if (children.Count == 0) return;
++
++        var startIndex = FindTopLevelAnchorIndex(body, startAnchor);
++        var endIndex = FindTopLevelAnchorIndex(body, nextAnchor);
++        if (endIndex <= startIndex) endIndex = children.Count;
++
++        for (var i = children.Count - 1; i >= 0; i--)
++        {
++            if (i < startIndex || i >= endIndex)
++            {
++                children[i].Remove();
++            }
++        }
++    }
++
++    private static int FindTopLevelAnchorIndex(HtmlNode body, string? anchor)
++    {
++        if (string.IsNullOrWhiteSpace(anchor)) return 0;
++
++        var normalizedAnchor = anchor.TrimStart('#');
++        var anchorNode = body.Descendants()
++            .FirstOrDefault(node =>
++                string.Equals(node.GetAttributeValue("id", string.Empty), normalizedAnchor, StringComparison.Ordinal) ||
++                string.Equals(node.GetAttributeValue("name", string.Empty), normalizedAnchor, StringComparison.Ordinal));
++        if (anchorNode == null) return 0;
++
++        var topLevelNode = anchorNode;
++        while (topLevelNode.ParentNode != null && topLevelNode.ParentNode != body)
++        {
++            topLevelNode = topLevelNode.ParentNode;
++        }
++
++        var children = body.ChildNodes.ToList();
++        var index = children.IndexOf(topLevelNode);
++        return index < 0 ? 0 : index;
++    }
++
+     public async Task<string> GetBookPageText(int page, int chapterId, string cachedTextPath, CancellationToken ct = default)
+     {
+         try
+diff --git a/Kavita.Services/Helpers/GdsMetadataParser.cs b/Kavita.Services/Helpers/GdsMetadataParser.cs
+index b30d1b4d3..a9202de44 100644
+--- a/Kavita.Services/Helpers/GdsMetadataParser.cs
++++ b/Kavita.Services/Helpers/GdsMetadataParser.cs
+@@ -23,8 +23,17 @@ public static class GdsMetadataParser
+         var yamlPath = GetMetadataPath(directory);
+         if (string.IsNullOrEmpty(yamlPath)) return baseInfo;
+
+-        var yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
+-        if (!TryGetMap(yaml, "meta", out var meta)) return baseInfo;
++        Dictionary<object, object?>? yaml;
++        try
++        {
++            yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
++        }
++        catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException or InvalidOperationException or ArgumentException)
++        {
++            return BuildFallbackComicInfo(filePath, baseInfo);
++        }
++
++        if (yaml == null || !TryGetMap(yaml, "meta", out var meta)) return baseInfo;
+
+         var info = baseInfo ?? new ComicInfo();
+
+@@ -80,6 +89,18 @@ public static class GdsMetadataParser
+         return info;
+     }
+
++    private static ComicInfo BuildFallbackComicInfo(string filePath, ComicInfo? baseInfo)
++    {
++        var info = baseInfo ?? new ComicInfo();
++        if (string.IsNullOrWhiteSpace(info.Title))
++        {
++            info.Title = BuildTitleFromFileName(filePath);
++        }
++
++        info.CleanComicInfo();
++        return info;
++    }
++
+     public static bool TryGetCoverBase64(string filePath, out string encodedImage)
+     {
+         encodedImage = string.Empty;
+diff --git a/Kavita.Services/MetadataService.cs b/Kavita.Services/MetadataService.cs
+index a51f63a38..71ade4dce 100644
+--- a/Kavita.Services/MetadataService.cs
++++ b/Kavita.Services/MetadataService.cs
+@@ -194,12 +194,12 @@ public class MetadataService(
+         logger.LogDebug("[MetadataService] Processing cover image generation for series: {SeriesName}", series.OriginalName);
+         try
+         {
+-            if (series.Library?.Type == LibraryType.GDS)
+-            {
+-                TryApplyGdsFolderCover(series, forceUpdate, forceColorScape);
+-            }
++            var preserveGdsSeriesCover = series.Library?.Type == LibraryType.GDS &&
++                                         TryApplyGdsFolderCover(series, forceUpdate, forceColorScape);
+
+-            if (series.Library?.Type == LibraryType.GDS && await ProcessGdsSeriesCoverGen(series, forceUpdate, encodeFormat, coverImageSize, forceColorScape))
++            if (series.Library?.Type == LibraryType.GDS &&
++                await ProcessGdsSeriesCoverGen(series, forceUpdate, encodeFormat, coverImageSize, forceColorScape,
++                    preserveGdsSeriesCover))
+             {
+                 return;
+             }
+@@ -244,7 +244,8 @@ public class MetadataService(
+         }
+     }
+
+-    private async Task<bool> ProcessGdsSeriesCoverGen(Series series, bool forceUpdate, EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
++    private async Task<bool> ProcessGdsSeriesCoverGen(Series series, bool forceUpdate, EncodeFormat encodeFormat,
++        CoverImageSize coverImageSize, bool forceColorScape, bool preserveSeriesCover)
+     {
+         series.Volumes ??= [];
+         var firstVolume = series.Volumes.MinBy(volume => volume.MinNumber);
+@@ -258,7 +259,8 @@ public class MetadataService(
+         var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
+         if (firstFile?.Format == MangaFormat.Text)
+         {
+-            return TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
++            return TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize,
++                forceColorScape, preserveSeriesCover);
+         }
+
+         var totalVolumes = series.Volumes.Count;
+@@ -299,7 +301,10 @@ public class MetadataService(
+             volumeIndex++;
+         }
+
+-        UpdateSeriesCoverImage(series, firstVolumeUpdated || forceUpdate, forceColorScape);
++        if (!preserveSeriesCover)
++        {
++            UpdateSeriesCoverImage(series, firstVolumeUpdated || forceUpdate, forceColorScape);
++        }
+
+         return true;
+     }
+@@ -332,13 +337,13 @@ public class MetadataService(
+     }
+
+     private bool TryApplyGdsTextTitleCover(Series series, Chapter firstChapter, bool forceUpdate,
+-        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
++        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape, bool preserveSeriesCover)
+     {
+         var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
+         if (firstFile?.Format != MangaFormat.Text) return false;
+-        if (series.CoverImageLocked && !forceUpdate) return false;
++        if (series.CoverImageLocked && !forceUpdate && !preserveSeriesCover) return false;
+
+-        if (!forceUpdate && !string.IsNullOrWhiteSpace(series.CoverImage) &&
++        if (!preserveSeriesCover && !forceUpdate && !string.IsNullOrWhiteSpace(series.CoverImage) &&
+             File.Exists(Path.Join(directoryService.CoverImageDirectory, series.CoverImage)))
+         {
+             if (NeedsColorSpace(series, forceColorScape))
+@@ -365,14 +370,17 @@ public class MetadataService(
+
+         if (!File.Exists(configCoverFilePath)) return false;
+
+-        var shouldUpdateSeriesColor = series.CoverImage != newCoverImage || NeedsColorSpace(series, forceColorScape);
+-        series.CoverImage = newCoverImage;
+-        if (shouldUpdateSeriesColor)
++        if (!preserveSeriesCover)
+         {
+-            imageService.UpdateColorScape(series);
++            var shouldUpdateSeriesColor = series.CoverImage != newCoverImage || NeedsColorSpace(series, forceColorScape);
++            series.CoverImage = newCoverImage;
++            if (shouldUpdateSeriesColor)
++            {
++                imageService.UpdateColorScape(series);
++            }
++            unitOfWork.SeriesRepository.Update(series);
++            _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+         }
+-        unitOfWork.SeriesRepository.Update(series);
+-        _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+
+         foreach (var volume in series.Volumes)
+         {
+diff --git a/Kavita.Services/Scanner/ProcessSeries.cs b/Kavita.Services/Scanner/ProcessSeries.cs
+index c23bfeb50..22e34021a 100644
+--- a/Kavita.Services/Scanner/ProcessSeries.cs
++++ b/Kavita.Services/Scanner/ProcessSeries.cs
+@@ -920,19 +920,41 @@ public class ProcessSeries(
+     private int GetGdsPageCount(string filePath, MangaFormat format, int existingPages)
+     {
+         var isGdsMountPath = IsGdsMountPath(filePath);
+-        if (existingPages > 0 && isGdsMountPath) return existingPages;
++        if (isGdsMountPath)
++        {
++            if (format is MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text)
++            {
++                if (existingPages > 1) return existingPages;
++            }
++            else if (existingPages > 0)
++            {
++                return existingPages;
++            }
++        }
+
+-        if (format == MangaFormat.Archive)
++        if (format is MangaFormat.Archive or MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text)
+         {
+-            return readingItemService.GetNumberOfPages(filePath, format);
++            var pages = readingItemService.GetNumberOfPages(filePath, format);
++            if (pages > 0) return pages;
++
++            if (existingPages > 0)
++            {
++                logger.LogWarning(
++                    "[ScannerService] Unable to refresh page count for {FilePath}. Preserving existing page count {PageCount}",
++                    filePath, existingPages);
++                return existingPages;
++            }
++
++            logger.LogWarning("[ScannerService] Unable to determine page count for {FilePath}. Defaulting to 0", filePath);
++            return 0;
+         }
+
+-        if (!isGdsMountPath && format is (MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text))
++        if (format == MangaFormat.Image)
+         {
+-            return readingItemService.GetNumberOfPages(filePath, format);
++            return 1;
+         }
+
+-        return format is MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text ? 1 : 0;
++        return existingPages > 0 ? existingPages : 0;
+     }
+
+     private static bool IsGdsMountPath(string filePath)
+diff --git a/Kavita.Services/Scanner/ScannerService.cs b/Kavita.Services/Scanner/ScannerService.cs
+index 58eca2a5c..9076d85a7 100644
+--- a/Kavita.Services/Scanner/ScannerService.cs
++++ b/Kavita.Services/Scanner/ScannerService.cs
+@@ -577,6 +577,8 @@ public class ScannerService(
+         await metadataService.RemoveAbandonedMetadataKeys();
+
+         BackgroundJob.Enqueue(() => directoryService.ClearDirectory(directoryService.CacheDirectory));
++        logger.LogInformation("[ScannerService] Scan library job completed for {LibraryName} in {ElapsedScanTime} milliseconds",
++            library.Name, sw.ElapsedMilliseconds);
+     }
+
+     private async Task RemoveSeriesNotFound(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, Library library)

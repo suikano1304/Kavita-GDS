@@ -1,0 +1,1553 @@
+From dffc33b85ce89a8b9b6c2edb6af391cc49d95422 Mon Sep 17 00:00:00 2001
+From: suikano1304 <suikano1304@users.noreply.github.com>
+Date: Wed, 10 Jun 2026 15:27:42 +0900
+Subject: [PATCH] fix: harden GDS covers and series scans
+
+---
+ Kavita.Services.Tests/GdsCoverServiceTests.cs | 260 ++++++++++++++++++
+ .../Helpers/EpubManifestRepairHelperTests.cs  | 151 ++++++++++
+ Kavita.Services.Tests/ScannerServiceTests.cs  | 170 ++++++++++++
+ Kavita.Services/AssemblyInfo.cs               |   3 +
+ Kavita.Services/GdsCoverService.cs            | 233 ++++++----------
+ .../Helpers/EpubManifestRepairHelper.cs       | 186 ++++++++++++-
+ Kavita.Services/Scanner/ProcessSeries.cs      |  33 +++
+ Kavita.Services/Scanner/ScannerService.cs     | 219 ++++++++++++---
+ 8 files changed, 1060 insertions(+), 195 deletions(-)
+ create mode 100644 Kavita.Services.Tests/GdsCoverServiceTests.cs
+ create mode 100644 Kavita.Services.Tests/Helpers/EpubManifestRepairHelperTests.cs
+ create mode 100644 Kavita.Services/AssemblyInfo.cs
+
+diff --git a/Kavita.Services.Tests/GdsCoverServiceTests.cs b/Kavita.Services.Tests/GdsCoverServiceTests.cs
+new file mode 100644
+index 000000000..60dc698f5
+--- /dev/null
++++ b/Kavita.Services.Tests/GdsCoverServiceTests.cs
+@@ -0,0 +1,260 @@
++using System.IO.Abstractions;
++using Kavita.API.Database;
++using Kavita.API.Repositories;
++using Kavita.API.Services;
++using Kavita.API.Services.Helpers;
++using Kavita.API.Services.SignalR;
++using Kavita.Models.Builders;
++using Kavita.Models.DTOs.Settings;
++using Kavita.Models.DTOs.SignalR;
++using Kavita.Models.Entities;
++using Kavita.Models.Entities.Enums;
++using Kavita.Services.Builders;
++using Kavita.Services.Helpers;
++using Microsoft.Extensions.Logging;
++using NSubstitute;
++
++namespace Kavita.Services.Tests;
++
++public sealed class GdsCoverServiceTests : IDisposable
++{
++    private const string PngBase64 =
++        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
++
++    private readonly string _testDirectory = Path.Join(Path.GetTempPath(), "kavita-gds-cover-tests", Guid.NewGuid().ToString("N"));
++    private readonly string _coverDirectory;
++    private readonly IUnitOfWork _unitOfWork = Substitute.For<IUnitOfWork>();
++    private readonly IImageService _imageService = Substitute.For<IImageService>();
++    private readonly IReadingItemService _readingItemService = Substitute.For<IReadingItemService>();
++    private readonly GdsCoverService _service;
++
++    public GdsCoverServiceTests()
++    {
++        _coverDirectory = Path.Join(_testDirectory, "covers");
++        Directory.CreateDirectory(_coverDirectory);
++
++        var directoryService = Substitute.For<IDirectoryService>();
++        directoryService.FileSystem.Returns(new FileSystem());
++        directoryService.CoverImageDirectory.Returns(_coverDirectory);
++
++        var eventHub = Substitute.For<IEventHub>();
++        eventHub.SendMessageAsync(Arg.Any<string>(), Arg.Any<SignalRMessage>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
++            .Returns(Task.CompletedTask);
++
++        _unitOfWork.SeriesRepository.Returns(Substitute.For<ISeriesRepository>());
++        _unitOfWork.VolumeRepository.Returns(Substitute.For<IVolumeRepository>());
++        _unitOfWork.ChapterRepository.Returns(Substitute.For<IChapterRepository>());
++
++        _service = new GdsCoverService(_unitOfWork, Substitute.For<ILogger<GdsCoverService>>(), eventHub,
++            new CacheHelper(new FileService(new FileSystem())), _readingItemService, directoryService, _imageService);
++    }
++
++    [Fact]
++    public async Task ProcessSeriesCoverGen_TextOnlyWithYamlBase64_PrefersYamlCoverOverTextTitle()
++    {
++        var textFile = CreateMediaFile("text.txt", MangaFormat.Text, bytes: 100);
++        WriteYamlCover("text.txt", $"data:image/png;base64,{PngBase64}");
++        File.WriteAllText(Path.Join(_coverDirectory, "v1_c1.png"), string.Empty);
++        _imageService.CreateThumbnailFromBase64(PngBase64, "v1_c1", EncodeFormat.PNG, Arg.Any<int>(), Arg.Any<string?>())
++            .Returns("yaml-cover.png");
++        var chapter = CreateChapter(1, "1", textFile);
++        var volume = CreateVolume(1, chapter);
++        var series = CreateSeries(1, volume);
++
++        var result = await _service.ProcessSeriesCoverGen(series, false, EncodeFormat.PNG, CoverImageSize.Default);
++
++        Assert.True(result.Handled);
++        Assert.Equal("yaml-cover.png", chapter.CoverImage);
++        Assert.Equal("yaml-cover.png", volume.CoverImage);
++        Assert.Equal("yaml-cover.png", series.CoverImage);
++    }
++
++    [Fact]
++    public async Task ProcessSeriesCoverGen_TextOnlyWithTextCoverHint_UsesTitleFallback()
++    {
++        var textFile = CreateMediaFile("text.txt", MangaFormat.Text, bytes: 100);
++        WriteYamlCover("text.txt", "TEXT");
++        File.WriteAllText(Path.Join(_coverDirectory, "v1_c1.png"), string.Empty);
++        var chapter = CreateChapter(1, "1", textFile);
++        var volume = CreateVolume(1, chapter);
++        var series = CreateSeries(1, volume);
++
++        var result = await _service.ProcessSeriesCoverGen(series, false, EncodeFormat.PNG, CoverImageSize.Default);
++
++        Assert.True(result.Handled);
++        Assert.Equal("v1_c1.png", chapter.CoverImage);
++        Assert.Equal("v1_c1.png", volume.CoverImage);
++        Assert.Equal("v1_c1.png", series.CoverImage);
++    }
++
++    [Fact]
++    public async Task ProcessSeriesCoverGen_TextOnlyWithInvalidYamlCover_UsesTitleFallback()
++    {
++        var textFile = CreateMediaFile("text.txt", MangaFormat.Text, bytes: 100);
++        WriteYamlCover("text.txt", "not-base64");
++        File.WriteAllText(Path.Join(_coverDirectory, "v1_c1.png"), string.Empty);
++        var chapter = CreateChapter(1, "1", textFile);
++        var volume = CreateVolume(1, chapter);
++        var series = CreateSeries(1, volume);
++
++        var result = await _service.ProcessSeriesCoverGen(series, false, EncodeFormat.PNG, CoverImageSize.Default);
++
++        Assert.True(result.Handled);
++        Assert.Equal("v1_c1.png", chapter.CoverImage);
++        Assert.Equal("v1_c1.png", volume.CoverImage);
++        Assert.Equal("v1_c1.png", series.CoverImage);
++    }
++
++    [Fact]
++    public async Task ProcessSeriesCoverGen_ForceRefreshWithExistingTextCover_ReplacesWithYamlCover()
++    {
++        var textFile = CreateMediaFile("text.txt", MangaFormat.Text, bytes: 100);
++        WriteYamlCover("text.txt", $"data:image/png;base64,{PngBase64}");
++        File.WriteAllText(Path.Join(_coverDirectory, "old-title.png"), string.Empty);
++        _imageService.CreateThumbnailFromBase64(PngBase64, "v1_c1", EncodeFormat.PNG, Arg.Any<int>(), Arg.Any<string?>())
++            .Returns("new-yaml-cover.png");
++        var chapter = CreateChapter(1, "1", textFile);
++        chapter.CoverImage = "old-title.png";
++        var volume = CreateVolume(1, chapter);
++        volume.CoverImage = "old-title.png";
++        var series = CreateSeries(1, volume);
++        series.CoverImage = "old-title.png";
++
++        var result = await _service.ProcessSeriesCoverGen(series, true, EncodeFormat.PNG, CoverImageSize.Default);
++
++        Assert.True(result.Handled);
++        Assert.Equal("new-yaml-cover.png", chapter.CoverImage);
++        Assert.Equal("new-yaml-cover.png", volume.CoverImage);
++        Assert.Equal("new-yaml-cover.png", series.CoverImage);
++    }
++
++    [Fact]
++    public async Task ProcessSeriesCoverGen_MixedTextAndEpub_PrefersEpubMediaCoverForSeriesAndVolume()
++    {
++        var textFile = CreateMediaFile("text.txt", MangaFormat.Text, bytes: 100);
++        var epubFile = CreateMediaFile("book.epub", MangaFormat.Epub, bytes: 100);
++        File.WriteAllText(Path.Join(_coverDirectory, "v1_c1.png"), string.Empty);
++        _readingItemService.GetCoverImage(epubFile.FilePath, "v1_c2", MangaFormat.Epub, EncodeFormat.PNG, CoverImageSize.Default)
++            .Returns("epub-cover.png");
++
++        var textChapter = CreateChapter(1, "1", textFile);
++        var epubChapter = CreateChapter(2, "2", epubFile);
++        var volume = CreateVolume(1, textChapter, epubChapter);
++        var series = CreateSeries(1, volume);
++
++        var result = await _service.ProcessSeriesCoverGen(series, false, EncodeFormat.PNG, CoverImageSize.Default);
++
++        Assert.True(result.Handled);
++        Assert.Equal("v1_c1.png", textChapter.CoverImage);
++        Assert.Equal("epub-cover.png", epubChapter.CoverImage);
++        Assert.Equal("epub-cover.png", volume.CoverImage);
++        Assert.Equal("epub-cover.png", series.CoverImage);
++    }
++
++    [Fact]
++    public async Task ProcessSeriesCoverGen_TextOnly_UsesTextTitleCoverAsRepresentativeWhenNoMediaExists()
++    {
++        var textFile = CreateMediaFile("text.txt", MangaFormat.Text, bytes: 100);
++        File.WriteAllText(Path.Join(_coverDirectory, "v1_c1.png"), string.Empty);
++        var chapter = CreateChapter(1, "1", textFile);
++        var volume = CreateVolume(1, chapter);
++        var series = CreateSeries(1, volume);
++
++        var result = await _service.ProcessSeriesCoverGen(series, false, EncodeFormat.PNG, CoverImageSize.Default);
++
++        Assert.True(result.Handled);
++        Assert.Equal("v1_c1.png", chapter.CoverImage);
++        Assert.Equal("v1_c1.png", volume.CoverImage);
++        Assert.Equal("v1_c1.png", series.CoverImage);
++    }
++
++    [Fact]
++    public async Task ProcessSeriesCoverGen_FolderCover_PreservesSeriesCoverButDoesNotOverrideChapterOrVolume()
++    {
++        var folder = Path.Join(_testDirectory, "series");
++        Directory.CreateDirectory(folder);
++        File.WriteAllText(Path.Join(folder, "cover.jpg"), "folder-cover");
++
++        var epubFile = CreateMediaFile("book.epub", MangaFormat.Epub, bytes: 100);
++        _readingItemService.GetCoverImage(epubFile.FilePath, "v1_c1", MangaFormat.Epub, EncodeFormat.PNG, CoverImageSize.Default)
++            .Returns("epub-cover.png");
++        var chapter = CreateChapter(1, "1", epubFile);
++        var volume = CreateVolume(1, chapter);
++        var series = CreateSeries(1, volume);
++        series.FolderPath = folder;
++
++        var result = await _service.ProcessSeriesCoverGen(series, false, EncodeFormat.PNG, CoverImageSize.Default);
++
++        Assert.True(result.Handled);
++        Assert.Equal("_s1.jpg", series.CoverImage);
++        Assert.Equal("epub-cover.png", chapter.CoverImage);
++        Assert.Equal("epub-cover.png", volume.CoverImage);
++    }
++
++    private void WriteYamlCover(string fileName, string cover)
++    {
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), $"""
++            files:
++                '{fileName}':
++                    cover: {cover}
++                    page: 1
++            """);
++    }
++
++    private MangaFile CreateMediaFile(string fileName, MangaFormat format, long bytes)
++    {
++        var path = Path.Join(_testDirectory, fileName);
++        File.WriteAllText(path, string.Empty);
++        return new MangaFileBuilder(path, format)
++            .WithBytes(bytes)
++            .WithLastModified(DateTime.UtcNow.AddMinutes(-5))
++            .Build();
++    }
++
++    private static Chapter CreateChapter(int id, string number, MangaFile file)
++    {
++        var chapter = new ChapterBuilder(number)
++            .WithId(id)
++            .WithCreated(DateTime.UtcNow.AddMinutes(-10))
++            .WithLastModified(DateTime.UtcNow.AddMinutes(-10))
++            .WithFile(file)
++            .Build();
++        chapter.VolumeId = 1;
++        return chapter;
++    }
++
++    private static Volume CreateVolume(int id, params Chapter[] chapters)
++    {
++        var volume = new VolumeBuilder("1")
++            .WithChapters(chapters.ToList())
++            .WithCreated(DateTime.UtcNow.AddMinutes(-10))
++            .WithLastModified(DateTime.UtcNow.AddMinutes(-10))
++            .Build();
++        volume.Id = id;
++        foreach (var chapter in chapters)
++        {
++            chapter.VolumeId = id;
++        }
++
++        return volume;
++    }
++
++    private static Series CreateSeries(int id, Volume volume)
++    {
++        var series = new SeriesBuilder("Series")
++            .WithLibraryId(1)
++            .WithFormat(MangaFormat.Epub)
++            .WithVolume(volume)
++            .Build();
++        series.Id = id;
++        return series;
++    }
++
++    public void Dispose()
++    {
++        if (Directory.Exists(_testDirectory))
++        {
++            Directory.Delete(_testDirectory, true);
++        }
++    }
++}
+diff --git a/Kavita.Services.Tests/Helpers/EpubManifestRepairHelperTests.cs b/Kavita.Services.Tests/Helpers/EpubManifestRepairHelperTests.cs
+new file mode 100644
+index 000000000..f40a6a0a7
+--- /dev/null
++++ b/Kavita.Services.Tests/Helpers/EpubManifestRepairHelperTests.cs
+@@ -0,0 +1,151 @@
++using System.IO.Compression;
++using Kavita.Services.Helpers;
++
++namespace Kavita.Services.Tests.Helpers;
++
++public sealed class EpubManifestRepairHelperTests : IDisposable
++{
++    private readonly string _testDirectory = Path.Join(Path.GetTempPath(), "kavita-epub-repair-tests", Guid.NewGuid().ToString("N"));
++
++    public EpubManifestRepairHelperTests()
++    {
++        Directory.CreateDirectory(_testDirectory);
++    }
++
++    [Fact]
++    public void TryCreateDeduplicatedManifestCopy_ShouldNormalizeImageJpgMediaType()
++    {
++        var epubPath = CreateEpub("""
++            <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
++              <metadata><meta name="cover" content="cover"/></metadata>
++              <manifest>
++                <item id="cover" href="Images/cover.jpg" media-type="image/jpg" />
++                <item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml" />
++              </manifest>
++              <spine><itemref idref="chapter" /></spine>
++            </package>
++            """, ("OEBPS/Images/cover.jpg", "image"), ("OEBPS/Text/chapter.xhtml", "<html />"));
++
++        var repaired = EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(epubPath, _testDirectory,
++            out var repairedPath);
++
++        Assert.True(repaired);
++        Assert.Contains("media-type=\"image/jpeg\"", ReadOpf(repairedPath));
++    }
++
++    [Fact]
++    public void TryCreateDeduplicatedManifestCopy_ShouldAddManifestItemForExistingGuideReference()
++    {
++        var epubPath = CreateEpub("""
++            <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
++              <metadata />
++              <manifest>
++                <item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml" />
++              </manifest>
++              <spine><itemref idref="chapter" /></spine>
++              <guide><reference type="cover" href="Text/COVERPAGE.xhtml" /></guide>
++            </package>
++            """, ("OEBPS/Text/chapter.xhtml", "<html />"), ("OEBPS/Text/COVERPAGE.xhtml", "<html />"));
++
++        var repaired = EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(epubPath, _testDirectory,
++            out var repairedPath);
++
++        Assert.True(repaired);
++        var opf = ReadOpf(repairedPath);
++        Assert.Contains("href=\"Text/COVERPAGE.xhtml\"", opf);
++        Assert.Contains("media-type=\"application/xhtml+xml\"", opf);
++    }
++
++    [Fact]
++    public void TryCreateDeduplicatedManifestCopy_ShouldRemoveMissingSpineItemRefsWhenValidSpineRemains()
++    {
++        var epubPath = CreateEpub("""
++            <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
++              <metadata />
++              <manifest>
++                <item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml" />
++              </manifest>
++              <spine>
++                <itemref idref="missing" />
++                <itemref idref="chapter" />
++              </spine>
++            </package>
++            """, ("OEBPS/Text/chapter.xhtml", "<html />"));
++
++        var repaired = EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(epubPath, _testDirectory,
++            out var repairedPath);
++
++        Assert.True(repaired);
++        var opf = ReadOpf(repairedPath);
++        Assert.DoesNotContain("idref=\"missing\"", opf);
++        Assert.Contains("idref=\"chapter\"", opf);
++    }
++
++    [Fact]
++    public void TryCreateDeduplicatedManifestCopy_ShouldContinueWhenDuplicateIdsRemain()
++    {
++        var epubPath = CreateEpub("""
++            <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
++              <metadata />
++              <manifest>
++                <item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml" />
++                <item id="blank" />
++                <item id="blank" />
++              </manifest>
++              <spine><itemref idref="chapter" /></spine>
++              <guide><reference type="cover" href="Text/COVERPAGE.xhtml" /></guide>
++            </package>
++            """, ("OEBPS/Text/chapter.xhtml", "<html />"), ("OEBPS/Text/COVERPAGE.xhtml", "<html />"));
++
++        var repaired = EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(epubPath, _testDirectory,
++            out var repairedPath);
++
++        Assert.True(repaired);
++        Assert.Contains("href=\"Text/COVERPAGE.xhtml\"", ReadOpf(repairedPath));
++    }
++
++    private string CreateEpub(string opf, params (string Path, string Content)[] entries)
++    {
++        var epubPath = Path.Join(_testDirectory, $"{Guid.NewGuid():N}.epub");
++        using var archive = ZipFile.Open(epubPath, ZipArchiveMode.Create);
++
++        AddEntry(archive, "META-INF/container.xml", """
++            <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
++              <rootfiles>
++                <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml" />
++              </rootfiles>
++            </container>
++            """);
++        AddEntry(archive, "OEBPS/content.opf", opf);
++        foreach (var entry in entries)
++        {
++            AddEntry(archive, entry.Path, entry.Content);
++        }
++
++        return epubPath;
++    }
++
++    private static void AddEntry(ZipArchive archive, string path, string content)
++    {
++        var entry = archive.CreateEntry(path);
++        using var writer = new StreamWriter(entry.Open());
++        writer.Write(content);
++    }
++
++    private static string ReadOpf(string epubPath)
++    {
++        using var archive = ZipFile.OpenRead(epubPath);
++        var entry = archive.GetEntry("OEBPS/content.opf");
++        Assert.NotNull(entry);
++        using var reader = new StreamReader(entry.Open());
++        return reader.ReadToEnd();
++    }
++
++    public void Dispose()
++    {
++        if (Directory.Exists(_testDirectory))
++        {
++            Directory.Delete(_testDirectory, true);
++        }
++    }
++}
+diff --git a/Kavita.Services.Tests/ScannerServiceTests.cs b/Kavita.Services.Tests/ScannerServiceTests.cs
+index 97c6ef4f3..eaca8d852 100644
+--- a/Kavita.Services.Tests/ScannerServiceTests.cs
++++ b/Kavita.Services.Tests/ScannerServiceTests.cs
+@@ -3,9 +3,11 @@ using Kavita.API.Repositories;
+ using Kavita.Common.Extensions;
+ using Kavita.Database;
+ using Kavita.Database.Tests;
++using Kavita.Models.Builders;
+ using Kavita.Models.Entities;
+ using Kavita.Models.Entities.Enums;
+ using Kavita.Models.Metadata;
++using Kavita.Models.Parser;
+ using Kavita.Services.Scanner;
+ using Kavita.Services.Tests.Helpers;
+ using Xunit.Abstractions;
+@@ -25,6 +27,174 @@ public class ScannerServiceTests: AbstractDbTest
+         GlobalConfiguration.Configuration.UseInMemoryStorage();
+     }
+ 
++    [Fact]
++    public void ResolveSeriesScanFoldersFromFileDirectories_UsesActualFileDirectoriesWhenStoredFolderIsBroad()
++    {
++        const string storedFolder = "/fixtures/gds/books/subscription/fiction/category";
++        var fileDirectories = new List<string>
++        {
++            "/fixtures/gds/books/subscription/fiction/category/series-a",
++            "/fixtures/gds/text/novels/fantasy/series-a"
++        };
++        var libraryRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
++        {
++            "/fixtures/gds/books/subscription/fiction",
++            "/fixtures/gds/text/novels"
++        };
++
++        var resolved = ScannerService.ResolveSeriesScanFoldersFromFileDirectories(storedFolder, fileDirectories, libraryRoots);
++
++        Assert.Equal(fileDirectories, resolved);
++    }
++
++    [Fact]
++    public void ResolveSeriesScanFoldersFromFileDirectories_UsesAllActualFileDirectoriesWhenStoredFolderMatchesOnlyOne()
++    {
++        const string storedFolder = "/fixtures/gds/text/novels/fantasy/series-a";
++        var fileDirectories = new List<string>
++        {
++            "/fixtures/gds/books/subscription/fiction/category/series-a",
++            "/fixtures/gds/text/novels/fantasy/series-a"
++        };
++        var libraryRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
++        {
++            "/fixtures/gds/books/subscription/fiction",
++            "/fixtures/gds/text/novels"
++        };
++
++        var resolved = ScannerService.ResolveSeriesScanFoldersFromFileDirectories(storedFolder, fileDirectories, libraryRoots);
++
++        Assert.Equal(fileDirectories, resolved);
++    }
++
++    [Fact]
++    public void ResolveSeriesScanFoldersFromFileDirectories_DoesNotReturnLibraryRoot()
++    {
++        const string storedFolder = "/fixtures/gds/books";
++        var fileDirectories = new List<string>
++        {
++            "/fixtures/gds/books",
++            "/fixtures/gds/books/series-a"
++        };
++        var libraryRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
++        {
++            "/fixtures/gds/books"
++        };
++
++        var resolved = ScannerService.ResolveSeriesScanFoldersFromFileDirectories(storedFolder, fileDirectories, libraryRoots);
++
++        Assert.Empty(resolved);
++    }
++
++    [Fact]
++    public void BuildSeriesProcessBatches_MergesGdsMixedFormatGroupsForExistingSeries()
++    {
++        var series = new SeriesBuilder("Series A")
++            .WithFormat(MangaFormat.Text)
++            .Build();
++
++        var parsedSeries = new Dictionary<ParsedSeries, IList<ParserInfo>>
++        {
++            [Parsed("Series A", MangaFormat.Text)] =
++            [
++                ParsedInfo("Series A", MangaFormat.Text, "/fixtures/gds/text/Series A/Series A.txt")
++            ],
++            [Parsed("Series A", MangaFormat.Epub)] =
++            [
++                ParsedInfo("Series A", MangaFormat.Epub, "/fixtures/gds/books/Series A/Series A.epub")
++            ],
++            [Parsed("Other Series", MangaFormat.Text)] =
++            [
++                ParsedInfo("Other Series", MangaFormat.Text, "/fixtures/gds/text/Other Series/Other Series.txt")
++            ],
++        };
++
++        var batches = ScannerService.BuildSeriesProcessBatches(parsedSeries, series, LibraryType.GDS,
++            new HashSet<MangaFormat> {MangaFormat.Text, MangaFormat.Epub});
++
++        Assert.Single(batches);
++        Assert.Equal(2, batches[0].Count);
++        Assert.Contains(batches[0], info => info.Format == MangaFormat.Text);
++        Assert.Contains(batches[0], info => info.Format == MangaFormat.Epub);
++    }
++
++    [Fact]
++    public void BuildSeriesProcessBatches_KeepsFormatMatchingForNonGds()
++    {
++        var series = new SeriesBuilder("Series A")
++            .WithFormat(MangaFormat.Text)
++            .Build();
++
++        var parsedSeries = new Dictionary<ParsedSeries, IList<ParserInfo>>
++        {
++            [Parsed("Series A", MangaFormat.Text)] =
++            [
++                ParsedInfo("Series A", MangaFormat.Text, "/fixtures/gds/text/Series A/Series A.txt")
++            ],
++            [Parsed("Series A", MangaFormat.Epub)] =
++            [
++                ParsedInfo("Series A", MangaFormat.Epub, "/fixtures/gds/books/Series A/Series A.epub")
++            ],
++        };
++
++        var batches = ScannerService.BuildSeriesProcessBatches(parsedSeries, series, LibraryType.Book,
++            new HashSet<MangaFormat> {MangaFormat.Text, MangaFormat.Epub});
++
++        Assert.Single(batches);
++        Assert.Single(batches[0]);
++        Assert.Equal(MangaFormat.Text, batches[0][0].Format);
++    }
++
++    [Fact]
++    public void ResolveGdsMixedRootLowestFolder_PreservesExistingConcreteDirectory()
++    {
++        const string existingLowest = "/fixtures/gds/text/Series A";
++        var directories = new List<string>
++        {
++            "/fixtures/gds/text/Series A",
++            "/fixtures/gds/books/Series A"
++        };
++
++        var resolved = ProcessSeries.ResolveGdsMixedRootLowestFolder(existingLowest, directories);
++
++        Assert.Equal(existingLowest, resolved);
++    }
++
++    [Fact]
++    public void ResolveGdsMixedRootLowestFolder_UsesConcreteDirectoryWhenExistingIsBroad()
++    {
++        var directories = new List<string>
++        {
++            "/fixtures/gds/text/Series A",
++            "/fixtures/gds/books/Series A"
++        };
++
++        var resolved = ProcessSeries.ResolveGdsMixedRootLowestFolder("/fixtures/gds", directories);
++
++        Assert.Equal("/fixtures/gds/text/Series A", resolved);
++    }
++
++    private static ParsedSeries Parsed(string name, MangaFormat format)
++    {
++        return new ParsedSeries
++        {
++            Name = name,
++            NormalizedName = name.ToNormalized(),
++            Format = format
++        };
++    }
++
++    private static ParserInfo ParsedInfo(string series, MangaFormat format, string fullFilePath)
++    {
++        return new ParserInfo
++        {
++            Series = series,
++            Format = format,
++            FullFilePath = fullFilePath,
++            Filename = Path.GetFileName(fullFilePath)
++        };
++    }
++
+ 
+     protected async Task SetAllSeriesLastScannedInThePast(DataContext context, Library library, TimeSpan? duration = null)
+     {
+diff --git a/Kavita.Services/AssemblyInfo.cs b/Kavita.Services/AssemblyInfo.cs
+new file mode 100644
+index 000000000..2ffdafd5c
+--- /dev/null
++++ b/Kavita.Services/AssemblyInfo.cs
+@@ -0,0 +1,3 @@
++using System.Runtime.CompilerServices;
++
++[assembly: InternalsVisibleTo("Kavita.Services.Tests")]
+diff --git a/Kavita.Services/GdsCoverService.cs b/Kavita.Services/GdsCoverService.cs
+index 92d98a744..6d05caaca 100644
+--- a/Kavita.Services/GdsCoverService.cs
++++ b/Kavita.Services/GdsCoverService.cs
+@@ -15,7 +15,6 @@ using Kavita.Models.Entities;
+ using Kavita.Models.Entities.Enums;
+ using Kavita.Models.Entities.Interfaces;
+ using Kavita.Models.Extensions;
+-using Kavita.Services.Comparators;
+ using Kavita.Services.Extensions;
+ using Kavita.Services.Helpers;
+ using Microsoft.Extensions.Logging;
+@@ -33,6 +32,15 @@ public sealed class GdsCoverService(
+     : IGdsCoverService
+ {
+     private readonly IList<SignalRMessage> _updateEvents = new List<SignalRMessage>();
++    private enum GdsCoverPriority
++    {
++        None = 0,
++        TextTitle = 1,
++        Media = 2,
++        Yaml = 3,
++    }
++
++    private sealed record GdsChapterCoverResult(bool Updated, GdsCoverPriority Priority, string? CoverImage);
+ 
+     public async Task<GdsCoverGenerationResult> ProcessSeriesCoverGen(Series series, bool forceUpdate,
+         EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape = false)
+@@ -42,54 +50,30 @@ public sealed class GdsCoverService(
+         var preserveSeriesCover = TryApplyGdsFolderCover(series, forceUpdate, forceColorScape);
+         series.Volumes ??= [];
+ 
+-        var firstVolume = series.Volumes.MinBy(volume => volume.MinNumber);
+-        if (firstVolume == null) return Result(false);
+-
+-        firstVolume.Chapters ??= [];
+-        var firstChapter = firstVolume.Chapters.FirstOrDefault(chapter => chapter.MinNumber.Is(1f)) ??
+-                           firstVolume.Chapters.MinBy(chapter => chapter.SortOrder, ChapterSortComparerDefaultFirst.Default);
+-        if (firstChapter == null) return Result(false);
+-
+-        var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
+-        if (firstFile?.Format == MangaFormat.Text)
+-        {
+-            return Result(await ProcessGdsTextSeriesCoverGen(series, firstChapter, forceUpdate, encodeFormat,
+-                coverImageSize, forceColorScape, preserveSeriesCover));
+-        }
+-
+         var totalVolumes = series.Volumes.Count;
++        if (totalVolumes == 0) return Result(false);
++
+         var volumeIndex = 0;
+-        var firstVolumeUpdated = false;
++        var seriesCoverCandidate = new GdsChapterCoverResult(false, GdsCoverPriority.None, null);
+         foreach (var volume in series.Volumes)
+         {
+             volume.Chapters ??= [];
+ 
+-            var firstChapterUpdated = false;
+-            var chapterIndex = 0;
++            var volumeCoverCandidate = new GdsChapterCoverResult(false, GdsCoverPriority.None, null);
+             foreach (var chapter in volume.Chapters)
+             {
+-                var forceMediaCoverUpdate = forceUpdate && string.IsNullOrEmpty(chapter.CoverImage);
+-                var chapterUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceUpdate, encodeFormat,
++                var chapterCoverResult = UpdateGdsChapterCover(series, chapter, forceUpdate, encodeFormat,
+                     coverImageSize, forceColorScape);
+-                if (!chapterUpdated)
+-                {
+-                    chapterUpdated = UpdateGdsChapterCoverFromMediaFiles(chapter, forceMediaCoverUpdate,
+-                        encodeFormat, coverImageSize, forceColorScape);
+-                }
+-
+-                UpdateChapterLastModified(chapter, forceUpdate || chapterUpdated);
+-                if (chapterIndex == 0 && chapterUpdated)
+-                {
+-                    firstChapterUpdated = true;
+-                }
+-
+-                chapterIndex++;
++
++                UpdateChapterLastModified(chapter, forceUpdate || chapterCoverResult.Updated);
++                volumeCoverCandidate = BestCover(volumeCoverCandidate, chapterCoverResult);
++                seriesCoverCandidate = BestCover(seriesCoverCandidate, chapterCoverResult);
+             }
+ 
+-            var volumeUpdated = UpdateVolumeCoverImage(volume, firstChapterUpdated || forceUpdate, forceColorScape);
+-            if (volumeIndex == 0 && volumeUpdated)
++            if (!string.IsNullOrEmpty(volumeCoverCandidate.CoverImage))
+             {
+-                firstVolumeUpdated = true;
++                UpdateVolumeCoverImage(volume, volumeCoverCandidate.CoverImage,
++                    volumeCoverCandidate.Updated || forceUpdate, forceColorScape);
+             }
+ 
+             await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+@@ -101,70 +85,50 @@ public sealed class GdsCoverService(
+ 
+         if (!preserveSeriesCover)
+         {
+-            UpdateSeriesCoverImage(series, firstVolumeUpdated || forceUpdate, forceColorScape);
++            UpdateSeriesCoverImage(series, seriesCoverCandidate.CoverImage,
++                seriesCoverCandidate.Updated || forceUpdate, forceColorScape);
+         }
+ 
+         return Result(true);
+     }
+ 
+-    private async Task<bool> ProcessGdsTextSeriesCoverGen(Series series, Chapter firstChapter, bool forceUpdate,
+-        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape, bool preserveSeriesCover)
++    private static GdsChapterCoverResult BestCover(GdsChapterCoverResult current, GdsChapterCoverResult candidate)
+     {
+-        var totalVolumes = series.Volumes.Count;
+-        var volumeIndex = 0;
+-        var firstVolumeUpdated = false;
+-        var anyYamlCoverUpdated = false;
++        if (candidate.Priority > current.Priority) return candidate;
++        if (candidate.Priority == current.Priority && current.CoverImage == null && candidate.CoverImage != null) return candidate;
++        return current;
++    }
+ 
+-        foreach (var volume in series.Volumes)
++    private GdsChapterCoverResult UpdateGdsChapterCover(Series series, Chapter chapter, bool forceUpdate,
++        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
++    {
++        var yamlUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceUpdate, encodeFormat, coverImageSize);
++        if (yamlUpdated)
+         {
+-            volume.Chapters ??= [];
+-
+-            var firstChapterUpdated = false;
+-            var chapterIndex = 0;
+-            foreach (var chapter in volume.Chapters)
+-            {
+-                var chapterUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceUpdate, encodeFormat,
+-                    coverImageSize, forceColorScape);
+-
+-                UpdateChapterLastModified(chapter, forceUpdate || chapterUpdated);
+-                if (chapterUpdated)
+-                {
+-                    anyYamlCoverUpdated = true;
+-                }
+-
+-                if (chapterIndex == 0 && chapterUpdated)
+-                {
+-                    firstChapterUpdated = true;
+-                }
+-
+-                chapterIndex++;
+-            }
++            return new GdsChapterCoverResult(true, GdsCoverPriority.Yaml, chapter.CoverImage);
++        }
+ 
+-            var volumeUpdated = UpdateVolumeCoverImage(volume, firstChapterUpdated || forceUpdate, forceColorScape);
+-            if (volumeIndex == 0 && volumeUpdated)
++        if (HasMediaCoverSource(chapter))
++        {
++            var mediaUpdated = UpdateGdsChapterCoverFromMediaFiles(chapter, forceUpdate,
++                encodeFormat, coverImageSize, forceColorScape);
++            if (mediaUpdated || !string.IsNullOrEmpty(chapter.CoverImage))
+             {
+-                firstVolumeUpdated = true;
++                return new GdsChapterCoverResult(mediaUpdated, GdsCoverPriority.Media, chapter.CoverImage);
+             }
+-
+-            await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+-                MessageFactory.CoverUpdateProgressEvent(series.LibraryId, volumeIndex / (float) totalVolumes,
+-                    ProgressEventType.Started, series.Name));
+-
+-            volumeIndex++;
+         }
+ 
+-        if (anyYamlCoverUpdated)
++        if (HasTextCoverSource(chapter))
+         {
+-            if (!preserveSeriesCover)
++            var textUpdated = TryApplyGdsTextTitleCover(series, chapter, forceUpdate, encodeFormat,
++                coverImageSize, forceColorScape);
++            if (textUpdated || !string.IsNullOrEmpty(chapter.CoverImage))
+             {
+-                UpdateSeriesCoverImage(series, firstVolumeUpdated || forceUpdate, forceColorScape);
++                return new GdsChapterCoverResult(textUpdated, GdsCoverPriority.TextTitle, chapter.CoverImage);
+             }
+-
+-            return true;
+         }
+ 
+-        return TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize,
+-            forceColorScape, preserveSeriesCover);
++        return new GdsChapterCoverResult(false, GdsCoverPriority.None, chapter.CoverImage);
+     }
+ 
+     private GdsCoverGenerationResult Result(bool handled)
+@@ -189,9 +153,9 @@ public sealed class GdsCoverService(
+                (string.IsNullOrEmpty(entity.PrimaryColor) || string.IsNullOrEmpty(entity.SecondaryColor));
+     }
+ 
+-    private bool UpdateVolumeCoverImage(Volume? volume, bool forceUpdate, bool forceColorScape = false)
++    private bool UpdateVolumeCoverImage(Volume? volume, string? coverImage, bool forceUpdate, bool forceColorScape = false)
+     {
+-        if (volume == null) return false;
++        if (volume == null || string.IsNullOrEmpty(coverImage)) return false;
+ 
+         if (!cacheHelper.ShouldUpdateCoverImage(
+                 directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, volume.CoverImage),
+@@ -208,16 +172,7 @@ public sealed class GdsCoverService(
+ 
+         if (!volume.CoverImageLocked)
+         {
+-            volume.Chapters ??= new List<Chapter>();
+-
+-            var firstChapter = volume.Chapters.FirstOrDefault(x => x.MinNumber.Is(1f));
+-            if (firstChapter == null)
+-            {
+-                firstChapter = volume.Chapters.MinBy(x => x.SortOrder, ChapterSortComparerDefaultFirst.Default);
+-                if (firstChapter == null) return false;
+-            }
+-
+-            volume.CoverImage = firstChapter.CoverImage;
++            volume.CoverImage = coverImage;
+         }
+         imageService.UpdateColorScape(volume);
+         unitOfWork.VolumeRepository.Update(volume);
+@@ -227,9 +182,9 @@ public sealed class GdsCoverService(
+         return true;
+     }
+ 
+-    private void UpdateSeriesCoverImage(Series? series, bool forceUpdate, bool forceColorScape = false)
++    private void UpdateSeriesCoverImage(Series? series, string? coverImage, bool forceUpdate, bool forceColorScape = false)
+     {
+-        if (series == null) return;
++        if (series == null || string.IsNullOrEmpty(coverImage)) return;
+ 
+         if (!cacheHelper.ShouldUpdateCoverImage(
+                 directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, series.CoverImage),
+@@ -245,7 +200,7 @@ public sealed class GdsCoverService(
+         }
+ 
+         series.Volumes ??= [];
+-        series.CoverImage = series.GetCoverImage();
++        series.CoverImage = coverImage;
+         if (series.CoverImage == null)
+         {
+             logger.LogDebug("[SeriesCoverImageBug] Setting Series Cover Image to null: {SeriesId}", series.Id);
+@@ -258,7 +213,7 @@ public sealed class GdsCoverService(
+     }
+ 
+     private bool UpdateGdsChapterCoverFromYaml(Chapter chapter, bool forceUpdate, EncodeFormat encodeFormat,
+-        CoverImageSize coverImageSize, bool forceColorScape)
++        CoverImageSize coverImageSize)
+     {
+         var firstFile = chapter.Files.MinBy(x => x.Chapter);
+         if (firstFile == null) return false;
+@@ -349,27 +304,38 @@ public sealed class GdsCoverService(
+         return false;
+     }
+ 
+-    private bool TryApplyGdsTextTitleCover(Series series, Chapter firstChapter, bool forceUpdate,
+-        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape, bool preserveSeriesCover)
++    private static bool HasMediaCoverSource(Chapter chapter)
+     {
+-        var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
++        return chapter.Files?.Any(file => file.Bytes > 0 && file.Format != MangaFormat.Text) == true;
++    }
++
++    private static bool HasTextCoverSource(Chapter chapter)
++    {
++        return chapter.Files?.Any(file => file.Bytes > 0 && file.Format == MangaFormat.Text) == true;
++    }
++
++    private bool TryApplyGdsTextTitleCover(Series series, Chapter chapter, bool forceUpdate,
++        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
++    {
++        var firstFile = chapter.Files.MinBy(x => x.Chapter);
+         if (firstFile?.Format != MangaFormat.Text) return false;
+-        if (series.CoverImageLocked && !forceUpdate && !preserveSeriesCover) return false;
++        if (chapter.CoverImageLocked) return false;
+ 
+-        if (!preserveSeriesCover && !forceUpdate && !string.IsNullOrWhiteSpace(series.CoverImage) &&
+-            File.Exists(Path.Join(directoryService.CoverImageDirectory, series.CoverImage)))
++        if (!cacheHelper.ShouldUpdateCoverImage(
++                directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, chapter.CoverImage),
++                firstFile, chapter.Created, forceUpdate, chapter.CoverImageLocked))
+         {
+-            if (NeedsColorSpace(series, forceColorScape))
++            if (NeedsColorSpace(chapter, forceColorScape))
+             {
+-                imageService.UpdateColorScape(series);
+-                unitOfWork.SeriesRepository.Update(series);
+-                _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
++                imageService.UpdateColorScape(chapter);
++                unitOfWork.ChapterRepository.Update(chapter);
++                _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+             }
+ 
+-            return true;
++            return false;
+         }
+ 
+-        var coverImageNameWithoutExtension = ImageService.GetSeriesFormat(series.Id);
++        var coverImageNameWithoutExtension = ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId);
+         var newCoverImage = coverImageNameWithoutExtension + encodeFormat.GetExtension();
+         var configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
+         if (forceUpdate || !File.Exists(configCoverFilePath))
+@@ -383,47 +349,14 @@ public sealed class GdsCoverService(
+ 
+         if (!File.Exists(configCoverFilePath)) return false;
+ 
+-        if (!preserveSeriesCover)
++        var shouldUpdateChapterColor = chapter.CoverImage != newCoverImage || NeedsColorSpace(chapter, forceColorScape);
++        chapter.CoverImage = newCoverImage;
++        if (shouldUpdateChapterColor)
+         {
+-            var shouldUpdateSeriesColor = series.CoverImage != newCoverImage || NeedsColorSpace(series, forceColorScape);
+-            series.CoverImage = newCoverImage;
+-            if (shouldUpdateSeriesColor)
+-            {
+-                imageService.UpdateColorScape(series);
+-            }
+-            unitOfWork.SeriesRepository.Update(series);
+-            _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+-        }
+-
+-        foreach (var volume in series.Volumes)
+-        {
+-            volume.Chapters ??= [];
+-
+-            if (!volume.CoverImageLocked)
+-            {
+-                var shouldUpdateVolumeColor = volume.CoverImage != newCoverImage || NeedsColorSpace(volume, forceColorScape);
+-                volume.CoverImage = newCoverImage;
+-                if (shouldUpdateVolumeColor)
+-                {
+-                    imageService.UpdateColorScape(volume);
+-                }
+-                unitOfWork.VolumeRepository.Update(volume);
+-                _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
+-            }
+-
+-            foreach (var chapter in volume.Chapters)
+-            {
+-                if (chapter.CoverImageLocked) continue;
+-                var shouldUpdateChapterColor = chapter.CoverImage != newCoverImage || NeedsColorSpace(chapter, forceColorScape);
+-                chapter.CoverImage = newCoverImage;
+-                if (shouldUpdateChapterColor)
+-                {
+-                    imageService.UpdateColorScape(chapter);
+-                }
+-                unitOfWork.ChapterRepository.Update(chapter);
+-                _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+-            }
++            imageService.UpdateColorScape(chapter);
+         }
++        unitOfWork.ChapterRepository.Update(chapter);
++        _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+ 
+         return true;
+     }
+diff --git a/Kavita.Services/Helpers/EpubManifestRepairHelper.cs b/Kavita.Services/Helpers/EpubManifestRepairHelper.cs
+index f0dd1a753..e8e1d981e 100644
+--- a/Kavita.Services/Helpers/EpubManifestRepairHelper.cs
++++ b/Kavita.Services/Helpers/EpubManifestRepairHelper.cs
+@@ -34,8 +34,12 @@ public static class EpubManifestRepairHelper
+             }
+ 
+             var repairedManifest = RepairDuplicateManifestItems(opfDocument);
++            var repairedMediaTypes = NormalizeImageMediaTypes(opfDocument);
++            var repairedMissingReferences = RepairMissingManifestReferences(opfDocument, source, opfPath);
++            var repairedSpine = RemoveMissingSpineItemRefs(opfDocument);
+             var synthesizedEntries = RepairMissingEpub3NavDocument(opfDocument, source, opfPath);
+-            if (!repairedManifest && synthesizedEntries.Count == 0) return false;
++            if (!repairedManifest && !repairedMediaTypes && !repairedMissingReferences && !repairedSpine &&
++                synthesizedEntries.Count == 0) return false;
+ 
+             repairedPath = Path.Join(tempDirectory, $"epub-manifest-repair-{Guid.NewGuid():N}.epub");
+             using var repaired = ZipFile.Open(repairedPath, ZipArchiveMode.Create);
+@@ -169,6 +173,186 @@ public static class EpubManifestRepairHelper
+         return duplicates.Count > 0;
+     }
+ 
++    private static bool NormalizeImageMediaTypes(XDocument opfDocument)
++    {
++        var root = opfDocument.Root;
++        if (root == null) return false;
++
++        var opfNamespace = root.Name.Namespace;
++        var manifest = root.Element(opfNamespace + "manifest");
++        if (manifest == null) return false;
++
++        var repaired = false;
++        foreach (var item in manifest.Elements(opfNamespace + "item"))
++        {
++            var mediaType = item.Attribute("media-type")?.Value;
++            if (!string.Equals(mediaType, "image/jpg", StringComparison.OrdinalIgnoreCase)) continue;
++
++            item.SetAttributeValue("media-type", "image/jpeg");
++            repaired = true;
++        }
++
++        return repaired;
++    }
++
++    private static bool RepairMissingManifestReferences(XDocument opfDocument, ZipArchive source, string opfPath)
++    {
++        var root = opfDocument.Root;
++        if (root == null) return false;
++
++        var opfNamespace = root.Name.Namespace;
++        var manifest = root.Element(opfNamespace + "manifest");
++        if (manifest == null) return false;
++
++        var repaired = false;
++        var manifestItems = manifest.Elements(opfNamespace + "item").ToList();
++        var manifestById = manifestItems
++            .Where(item => !string.IsNullOrWhiteSpace(item.Attribute("id")?.Value))
++            .GroupBy(item => item.Attribute("id")!.Value, StringComparer.Ordinal)
++            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
++        var manifestHrefs = manifestItems
++            .Select(item => item.Attribute("href")?.Value)
++            .Where(href => !string.IsNullOrWhiteSpace(href))
++            .Select(href => StripFragment(href!))
++            .ToHashSet(StringComparer.Ordinal);
++
++        var coverMetaItems = root.Descendants()
++            .Where(element => element.Name.LocalName == "meta")
++            .Where(element => string.Equals(element.Attribute("name")?.Value, "cover", StringComparison.OrdinalIgnoreCase))
++            .ToList();
++
++        foreach (var coverMeta in coverMetaItems)
++        {
++            var content = coverMeta.Attribute("content")?.Value;
++            if (string.IsNullOrWhiteSpace(content)) continue;
++
++            if (manifestById.TryGetValue(content, out var manifestItem))
++            {
++                var href = manifestItem.Attribute("href")?.Value;
++                if (!string.IsNullOrWhiteSpace(href) && EntryExistsForHref(source, opfPath, href)) continue;
++
++                coverMeta.Remove();
++                repaired = true;
++                continue;
++            }
++
++            if (!EntryExistsForHref(source, opfPath, content))
++            {
++                coverMeta.Remove();
++                repaired = true;
++                continue;
++            }
++
++            var coverId = GetUniqueManifestId(manifestItems, "kavita-cover");
++            manifest.Add(new XElement(opfNamespace + "item",
++                new XAttribute("href", StripFragment(content)),
++                new XAttribute("id", coverId),
++                new XAttribute("media-type", GetMediaType(content))));
++            coverMeta.SetAttributeValue("content", coverId);
++            manifestItems.Add(manifest.Elements(opfNamespace + "item").Last());
++            manifestHrefs.Add(StripFragment(content));
++            repaired = true;
++        }
++
++        var guide = root.Element(opfNamespace + "guide");
++        if (guide == null) return repaired;
++
++        foreach (var reference in guide.Elements(opfNamespace + "reference").ToList())
++        {
++            var href = reference.Attribute("href")?.Value;
++            if (string.IsNullOrWhiteSpace(href)) continue;
++
++            var hrefWithoutFragment = StripFragment(href);
++            if (manifestHrefs.Contains(hrefWithoutFragment)) continue;
++
++            if (!EntryExistsForHref(source, opfPath, hrefWithoutFragment))
++            {
++                reference.Remove();
++                repaired = true;
++                continue;
++            }
++
++            var id = GetUniqueManifestId(manifestItems, "kavita-guide");
++            manifest.Add(new XElement(opfNamespace + "item",
++                new XAttribute("href", hrefWithoutFragment),
++                new XAttribute("id", id),
++                new XAttribute("media-type", GetMediaType(hrefWithoutFragment))));
++            manifestItems.Add(manifest.Elements(opfNamespace + "item").Last());
++            manifestHrefs.Add(hrefWithoutFragment);
++            repaired = true;
++        }
++
++        return repaired;
++    }
++
++    private static bool RemoveMissingSpineItemRefs(XDocument opfDocument)
++    {
++        var root = opfDocument.Root;
++        if (root == null) return false;
++
++        var opfNamespace = root.Name.Namespace;
++        var manifest = root.Element(opfNamespace + "manifest");
++        var spine = root.Element(opfNamespace + "spine");
++        if (manifest == null || spine == null) return false;
++
++        var manifestIds = manifest.Elements(opfNamespace + "item")
++            .Select(item => item.Attribute("id")?.Value)
++            .Where(id => !string.IsNullOrWhiteSpace(id))
++            .ToHashSet(StringComparer.Ordinal);
++
++        var itemRefs = spine.Elements(opfNamespace + "itemref").ToList();
++        var missingItemRefs = itemRefs
++            .Where(itemref =>
++            {
++                var idref = itemref.Attribute("idref")?.Value;
++                return string.IsNullOrWhiteSpace(idref) || !manifestIds.Contains(idref);
++            })
++            .ToList();
++        if (missingItemRefs.Count == 0 || missingItemRefs.Count == itemRefs.Count) return false;
++
++        foreach (var itemref in missingItemRefs)
++        {
++            itemref.Remove();
++        }
++
++        return true;
++    }
++
++    private static bool EntryExistsForHref(ZipArchive source, string opfPath, string href)
++    {
++        var archivePath = GetArchivePathForHref(opfPath, href);
++        return source.GetEntry(archivePath) != null ||
++               source.Entries.Any(entry => string.Equals(entry.FullName, archivePath, StringComparison.OrdinalIgnoreCase));
++    }
++
++    private static string GetArchivePathForHref(string opfPath, string href)
++    {
++        var hrefWithoutFragment = StripFragment(href).Replace('\\', '/');
++        var opfDirectory = Path.GetDirectoryName(opfPath)?.Replace('\\', '/') ?? string.Empty;
++        return string.IsNullOrWhiteSpace(opfDirectory) ? hrefWithoutFragment : $"{opfDirectory}/{hrefWithoutFragment}";
++    }
++
++    private static string StripFragment(string href)
++    {
++        var hashIndex = href.IndexOf('#', StringComparison.Ordinal);
++        return hashIndex < 0 ? href : href[..hashIndex];
++    }
++
++    private static string GetMediaType(string href)
++    {
++        return Path.GetExtension(StripFragment(href)).ToLowerInvariant() switch
++        {
++            ".xhtml" or ".html" or ".htm" => "application/xhtml+xml",
++            ".jpg" or ".jpeg" => "image/jpeg",
++            ".png" => "image/png",
++            ".gif" => "image/gif",
++            ".svg" => "image/svg+xml",
++            ".css" => "text/css",
++            ".ncx" => "application/x-dtbncx+xml",
++            _ => "application/octet-stream"
++        };
++    }
++
+     private static Dictionary<string, XDocument> RepairMissingEpub3NavDocument(
+         XDocument opfDocument,
+         ZipArchive source,
+diff --git a/Kavita.Services/Scanner/ProcessSeries.cs b/Kavita.Services/Scanner/ProcessSeries.cs
+index 580e1a0bc..214f54f30 100644
+--- a/Kavita.Services/Scanner/ProcessSeries.cs
++++ b/Kavita.Services/Scanner/ProcessSeries.cs
+@@ -280,6 +280,12 @@ public class ProcessSeries(
+     {
+         var libraryFolders = library.Folders.Select(l => Parser.NormalizePath(l.Path)).ToList();
+         var seriesFiles = parsedInfos.Select(f => Parser.NormalizePath(f.FullFilePath)).ToList();
++        var fileDirectories = seriesFiles
++            .Select(Path.GetDirectoryName)
++            .Where(path => !string.IsNullOrEmpty(path))
++            .Select(Parser.NormalizePath)
++            .Distinct(StringComparer.OrdinalIgnoreCase)
++            .ToList();
+         var seriesDirs = directoryService.FindHighestDirectoriesFromFiles(libraryFolders, seriesFiles);
+         if (seriesDirs.Keys.Count == 0)
+         {
+@@ -301,6 +307,15 @@ public class ProcessSeries(
+             }
+         }
+ 
++        if (library.Type == LibraryType.GDS && fileDirectories.Count > 1)
++        {
++            series.LowestFolderPath = ResolveGdsMixedRootLowestFolder(series.LowestFolderPath, fileDirectories);
++            logger.LogInformation(
++                "[ScannerService] {SeriesName} spans {RootCount} GDS file directories. Preserving concrete LowestFolderPath as {LowestFolderPath}",
++                series.Name, fileDirectories.Count, series.LowestFolderPath);
++            return;
++        }
++
+         var lowestFolder = directoryService.FindLowestDirectoriesFromFiles(libraryFolders, seriesFiles);
+         if (!string.IsNullOrEmpty(lowestFolder))
+         {
+@@ -309,6 +324,24 @@ public class ProcessSeries(
+         }
+     }
+ 
++    internal static string ResolveGdsMixedRootLowestFolder(string? existingLowestFolderPath, IList<string> fileDirectories)
++    {
++        var normalizedDirectories = fileDirectories
++            .Select(Parser.NormalizePath)
++            .Where(path => !string.IsNullOrEmpty(path))
++            .Distinct(StringComparer.OrdinalIgnoreCase)
++            .ToList();
++
++        var normalizedExisting = Parser.NormalizePath(existingLowestFolderPath ?? string.Empty);
++        if (!string.IsNullOrEmpty(normalizedExisting) &&
++            normalizedDirectories.Contains(normalizedExisting, StringComparer.OrdinalIgnoreCase))
++        {
++            return normalizedExisting;
++        }
++
++        return normalizedDirectories.FirstOrDefault() ?? normalizedExisting;
++    }
++
+ 
+     private async Task UpdateSeriesMetadata(Dictionary<string, Person> databasePeople, MetadataSettingsDto settings, Series series, Library library)
+     {
+diff --git a/Kavita.Services/Scanner/ScannerService.cs b/Kavita.Services/Scanner/ScannerService.cs
+index 9076d85a7..e02942bfa 100644
+--- a/Kavita.Services/Scanner/ScannerService.cs
++++ b/Kavita.Services/Scanner/ScannerService.cs
+@@ -4,6 +4,7 @@ using System.Diagnostics;
+ using System.Globalization;
+ using System.IO;
+ using System.Linq;
++using System.Threading;
+ using System.Threading.Channels;
+ using System.Threading.Tasks;
+ using Hangfire;
+@@ -208,33 +209,8 @@ public class ScannerService(
+             return;
+         }
+ 
+-        // TODO: We need to refactor this to handle the path changes better
+-        var folderPath = series.LowestFolderPath ?? series.FolderPath;
+-        if (string.IsNullOrEmpty(folderPath) || !directoryService.Exists(folderPath))
+-        {
+-            // We don't care if it's multiple due to new scan loop enforcing all in one root directory
+-            var files = await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(seriesId);
+-            var seriesDirs = directoryService.FindHighestDirectoriesFromFiles(libraryPaths,
+-                files.Select(f => f.FilePath).ToList());
+-            if (seriesDirs.Keys.Count == 0)
+-            {
+-                logger.LogCritical("Scan Series has files spread outside a main series folder. Defaulting to library folder (this is expensive)");
+-                await eventHub.SendMessageAsync(MessageFactory.Info, MessageFactory.InfoEvent($"{series.Name} is not organized well and scan series will be expensive!", "Scan Series has files spread outside a main series folder. Defaulting to library folder (this is expensive)"));
+-                seriesDirs = directoryService.FindHighestDirectoriesFromFiles(libraryPaths, files.Select(f => f.FilePath).ToList());
+-            }
+-
+-            folderPath = seriesDirs.Keys.FirstOrDefault();
+-
+-            // We should check if folderPath is a library folder path and if so, return early and tell user to correct their setup.
+-            if (!string.IsNullOrEmpty(folderPath) && libraryPaths.Contains(folderPath))
+-            {
+-                logger.LogCritical("[ScannerSeries] {SeriesName} scan aborted. Files for series are not in a nested folder under library path. Correct this and rescan", series.Name);
+-                await eventHub.SendMessageAsync(MessageFactory.Error, MessageFactory.ErrorEvent($"{series.Name} scan aborted", "Files for series are not in a nested folder under library path. Correct this and rescan."));
+-                return;
+-            }
+-        }
+-
+-        if (string.IsNullOrEmpty(folderPath))
++        var scanFolders = await ResolveSeriesScanFolders(series, libraryPaths);
++        if (scanFolders.Count == 0)
+         {
+             logger.LogCritical("[ScannerSeries] Scan Series could not find a single, valid folder root for files");
+             await eventHub.SendMessageAsync(MessageFactory.Error, MessageFactory.ErrorEvent($"{series.Name} scan aborted", "Scan Series could not find a single, valid folder root for files"));
+@@ -244,14 +220,21 @@ public class ScannerService(
+         await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+             MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Started, series.Name, 1));
+ 
+-        logger.LogInformation("Beginning file scan on {SeriesName}", series.Name);
+-        var (scanElapsedTime, parsedSeries) = await ScanFiles(library, [folderPath],
++        logger.LogInformation("[ScannerService] Beginning series file scan on {SeriesName}. Roots: {RootCount}; {Roots}",
++            series.Name, scanFolders.Count, string.Join(", ", scanFolders));
++        var (scanElapsedTime, parsedSeries) = await ScanFiles(library, scanFolders,
+             false, true);
+ 
+-        logger.LogInformation("ScanFiles for {Series} took {Time} milliseconds", series.Name, scanElapsedTime);
++        logger.LogInformation("[ScannerService] Series file scan for {Series} finished in {Time} milliseconds. Parsed series: {ParsedSeriesCount}",
++            series.Name, scanElapsedTime, parsedSeries.Count);
++
++        var existingSeriesFormats = (await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(series.Id))
++            .Select(f => f.Format)
++            .ToHashSet();
+ 
+-        // Remove any parsedSeries keys that don't belong to our series. This can occur when users store 2 series in the same folder
+-        RemoveParsedInfosNotForSeries(parsedSeries, series);
++        // Remove any parsedSeries keys that don't belong to our series. This can occur when users store 2 series in the same folder.
++        // GDS can intentionally merge TXT/EPUB/PDF variants into one logical series, so keep matching existing file formats for later batching.
++        RemoveParsedInfosNotForSeries(parsedSeries, series, library.Type, existingSeriesFormats);
+ 
+         // If nothing was found, first validate any of the files still exist. If they don't then we have a deletion and can skip the rest of the logic flow
+         if (parsedSeries.Count == 0)
+@@ -286,13 +269,8 @@ public class ScannerService(
+         }
+ 
+         // At this point, parsedSeries will have at least one key then we can perform the update. If it still doesn't, just return and don't do anything
+-        // Don't allow any processing on files that aren't part of this series
+-        var toProcess = parsedSeries.Keys.Where(key =>
+-            key.NormalizedName.Equals(series.NormalizedName) ||
+-            key.NormalizedName.Equals(series.OriginalName?.ToNormalized()))
+-            .ToList();
+-
+-        var toProcessList = toProcess.Select(k => parsedSeries[k]).ToList();
++        // Don't allow any processing on files that aren't part of this series.
++        var toProcessList = BuildSeriesProcessBatches(parsedSeries, series, library.Type, existingSeriesFormats);
+         var totalCount = toProcessList.Count;
+         var current = 0;
+ 
+@@ -324,14 +302,127 @@ public class ScannerService(
+             }
+         }
+ 
++        logger.LogInformation(
++            "[ScannerService] Scan series work completed for {SeriesName} in {ElapsedScanTime} milliseconds. Processed groups: {ProcessedCount}",
++            series.Name, sw.ElapsedMilliseconds, totalCount);
++
+         // Tell UI that this series is done
+         await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+             MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Ended, series.Name));
+ 
+-        await metadataService.RemoveAbandonedMetadataKeys();
+-
++        logger.LogInformation("[ScannerService] Starting post-scan cleanup for {SeriesName}", series.Name);
++        BackgroundJob.Enqueue<IMetadataService>(service => service.RemoveAbandonedMetadataKeys(CancellationToken.None));
+         BackgroundJob.Enqueue(() => cacheService.CleanupChapters(existingChapterIdsToClean));
+         BackgroundJob.Enqueue(() => directoryService.ClearDirectory(directoryService.CacheDirectory));
++
++        logger.LogInformation("[ScannerService] Post-scan cleanup enqueued for {SeriesName}. Scan series job completed in {ElapsedScanTime} milliseconds",
++            series.Name, sw.ElapsedMilliseconds);
++    }
++
++    private async Task<IList<string>> ResolveSeriesScanFolders(Series series, IList<string> libraryPaths)
++    {
++        var files = await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(series.Id);
++        var fileDirectories = files
++            .Select(f => directoryService.FileSystem.FileInfo.New(f.FilePath).Directory?.FullName ?? string.Empty)
++            .Where(path => !string.IsNullOrEmpty(path))
++            .Select(Parser.NormalizePath)
++            .Distinct()
++            .Where(directoryService.Exists)
++            .ToList();
++
++        var normalizedLibraryPaths = libraryPaths
++            .Select(Parser.NormalizePath)
++            .ToHashSet(StringComparer.OrdinalIgnoreCase);
++
++        var resolvedFolders = ResolveSeriesScanFoldersFromFileDirectories(series.LowestFolderPath ?? series.FolderPath,
++            fileDirectories, normalizedLibraryPaths);
++
++        if (fileDirectories.Any(normalizedLibraryPaths.Contains))
++        {
++            logger.LogCritical(
++                "[ScannerSeries] {SeriesName} scan aborted. One or more files are directly under a library root, which would require an expensive broad scan",
++                series.Name);
++            await eventHub.SendMessageAsync(MessageFactory.Error,
++                MessageFactory.ErrorEvent($"{series.Name} scan aborted",
++                    "One or more files are directly under a library root. Put files in a dedicated series folder or run a library scan."));
++            return [];
++        }
++
++        if (resolvedFolders.Count > 0)
++        {
++            var storedFolder = Parser.NormalizePath(series.LowestFolderPath ?? series.FolderPath ?? string.Empty);
++            if (!string.IsNullOrEmpty(storedFolder) && !resolvedFolders.Contains(storedFolder, StringComparer.OrdinalIgnoreCase))
++            {
++                logger.LogWarning(
++                    "[ScannerSeries] {SeriesName} stored folder path '{StoredFolder}' does not match actual file directories. Scanning {RootCount} file directory roots instead: {Roots}",
++                    series.Name, storedFolder, resolvedFolders.Count, string.Join(", ", resolvedFolders));
++            }
++
++            if (resolvedFolders.Count > 1)
++            {
++                logger.LogInformation(
++                    "[ScannerSeries] {SeriesName} spans {RootCount} file directory roots. ScanSeries will scan only those exact roots, not the stored common/category folder",
++                    series.Name, resolvedFolders.Count);
++            }
++
++            return resolvedFolders;
++        }
++
++        var fallbackFolder = Parser.NormalizePath(series.LowestFolderPath ?? series.FolderPath ?? string.Empty);
++        if (string.IsNullOrEmpty(fallbackFolder) || !directoryService.Exists(fallbackFolder))
++        {
++            return [];
++        }
++
++        if (normalizedLibraryPaths.Contains(fallbackFolder))
++        {
++            logger.LogCritical(
++                "[ScannerSeries] {SeriesName} scan aborted. Stored folder path is a library root and would require an expensive broad scan",
++                series.Name);
++            await eventHub.SendMessageAsync(MessageFactory.Error,
++                MessageFactory.ErrorEvent($"{series.Name} scan aborted",
++                    "Stored folder path is a library root. Put files in a dedicated series folder or run a library scan."));
++            return [];
++        }
++
++        logger.LogWarning(
++            "[ScannerSeries] {SeriesName} has no existing MangaFile directories. Falling back to stored folder path: {FolderPath}",
++            series.Name, fallbackFolder);
++        return [fallbackFolder];
++    }
++
++    internal static IList<string> ResolveSeriesScanFoldersFromFileDirectories(string? storedFolderPath,
++        IList<string> fileDirectories, ISet<string> normalizedLibraryPaths)
++    {
++        var normalizedStoredFolder = Parser.NormalizePath(storedFolderPath ?? string.Empty);
++        var normalizedFileDirectories = fileDirectories
++            .Select(Parser.NormalizePath)
++            .Where(path => !string.IsNullOrEmpty(path))
++            .Distinct(StringComparer.OrdinalIgnoreCase)
++            .ToList();
++
++        if (normalizedFileDirectories.Count == 0 || normalizedFileDirectories.Any(normalizedLibraryPaths.Contains))
++        {
++            return [];
++        }
++
++        if (string.IsNullOrEmpty(normalizedStoredFolder))
++        {
++            return normalizedFileDirectories;
++        }
++
++        if (normalizedLibraryPaths.Contains(normalizedStoredFolder))
++        {
++            return normalizedFileDirectories;
++        }
++
++        if (normalizedFileDirectories.Count == 1 &&
++            normalizedFileDirectories.Contains(normalizedStoredFolder, StringComparer.OrdinalIgnoreCase))
++        {
++            return [normalizedStoredFolder];
++        }
++
++        return normalizedFileDirectories;
+     }
+ 
+     private static Dictionary<ParsedSeries, IList<ParserInfo>> TrackFoundSeriesAndFiles(IList<ScannedSeriesResult> seenSeries)
+@@ -414,10 +505,46 @@ public class ScannerService(
+         return ScanCancelReason.NoCancel;
+     }
+ 
+-    private static void RemoveParsedInfosNotForSeries(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, Series series)
++    internal static IList<IList<ParserInfo>> BuildSeriesProcessBatches(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries,
++        Series series, LibraryType libraryType, ISet<MangaFormat> existingSeriesFormats)
++    {
++        var matchingSeries = parsedSeries
++            .Where(kvp => IsParsedSeriesMatchForScanSeries(series, kvp.Key, libraryType, existingSeriesFormats))
++            .ToList();
++
++        if (libraryType != LibraryType.GDS)
++        {
++            return matchingSeries.Select(kvp => kvp.Value).ToList();
++        }
++
++        var mergedFiles = matchingSeries
++            .SelectMany(kvp => kvp.Value)
++            .GroupBy(info => Parser.NormalizePath(info.FullFilePath))
++            .Select(group => group.First())
++            .ToList();
++
++        return mergedFiles.Count == 0 ? [] : [mergedFiles];
++    }
++
++    private static bool IsParsedSeriesMatchForScanSeries(Series series, ParsedSeries parsedSeries,
++        LibraryType libraryType, ISet<MangaFormat> existingSeriesFormats)
++    {
++        if (SeriesHelper.FindSeries(series, parsedSeries)) return true;
++
++        if (libraryType != LibraryType.GDS || !existingSeriesFormats.Contains(parsedSeries.Format)) return false;
++
++        return parsedSeries.NormalizedName.Equals(series.NormalizedName) ||
++               (!string.IsNullOrEmpty(series.LocalizedName) &&
++                parsedSeries.NormalizedName.Equals(series.LocalizedName.ToNormalized())) ||
++               (!string.IsNullOrEmpty(series.OriginalName) &&
++                parsedSeries.NormalizedName.Equals(series.OriginalName.ToNormalized()));
++    }
++
++    private static void RemoveParsedInfosNotForSeries(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries,
++        Series series, LibraryType libraryType, ISet<MangaFormat> existingSeriesFormats)
+     {
+-        var keys = parsedSeries.Keys;
+-        foreach (var key in keys.Where(key => !SeriesHelper.FindSeries(series, key)))
++        var keys = parsedSeries.Keys.ToList();
++        foreach (var key in keys.Where(key => !IsParsedSeriesMatchForScanSeries(series, key, libraryType, existingSeriesFormats)))
+         {
+             parsedSeries.Remove(key);
+         }
+@@ -892,12 +1019,16 @@ public class ScannerService(
+         var scanner = new ParseScannedFiles(logger, directoryService, readingItemService, eventHub, mediaErrorService);
+         var scanWatch = Stopwatch.StartNew();
+ 
++        logger.LogInformation("[ScannerService] ScanFiles starting for {LibraryName}. Roots: {RootCount}; LibraryScan: {IsLibraryScan}; Force: {ForceChecks}",
++            library.Name, dirs.Count, isLibraryScan, forceChecks);
+         var processedSeries = await scanner.ScanLibrariesForSeries(library, dirs,
+             isLibraryScan, await unitOfWork.SeriesRepository.GetFolderPathMapAsync(library.Id), forceChecks);
+ 
+         var scanElapsedTime = scanWatch.ElapsedMilliseconds;
+ 
+         var parsedSeries = TrackFoundSeriesAndFiles(processedSeries);
++        logger.LogInformation("[ScannerService] ScanFiles finished for {LibraryName}. Roots: {RootCount}; Parsed series: {ParsedSeriesCount}; Elapsed: {Elapsed} ms",
++            library.Name, dirs.Count, parsedSeries.Count, scanElapsedTime);
+ 
+         return Tuple.Create(scanElapsedTime, parsedSeries);
+     }
+-- 
+2.47.3
+

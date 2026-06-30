@@ -1,0 +1,1296 @@
+From 2fd757c8fdf6ac136efbb2bc7c61f5036f11b797 Mon Sep 17 00:00:00 2001
+From: suikano1304 <suikano1304@users.noreply.github.com>
+Date: Tue, 9 Jun 2026 20:01:38 +0900
+Subject: [PATCH 1/3] refactor: isolate GDS cover generation
+
+---
+ .../Helpers/GdsMetadataParserTests.cs         | 135 +++++
+ .../ApplicationServiceExtensions.cs           |   1 +
+ Kavita.Services/GdsCoverService.cs            | 483 ++++++++++++++++++
+ Kavita.Services/Helpers/GdsMetadataParser.cs  |  60 ++-
+ Kavita.Services/IGdsCoverService.cs           |  16 +
+ Kavita.Services/MetadataService.cs            | 267 ++--------
+ 6 files changed, 703 insertions(+), 259 deletions(-)
+ create mode 100644 Kavita.Services.Tests/Helpers/GdsMetadataParserTests.cs
+ create mode 100644 Kavita.Services/GdsCoverService.cs
+ create mode 100644 Kavita.Services/IGdsCoverService.cs
+
+diff --git a/Kavita.Services.Tests/Helpers/GdsMetadataParserTests.cs b/Kavita.Services.Tests/Helpers/GdsMetadataParserTests.cs
+new file mode 100644
+index 000000000..69fce37fa
+--- /dev/null
++++ b/Kavita.Services.Tests/Helpers/GdsMetadataParserTests.cs
+@@ -0,0 +1,135 @@
++using Kavita.Services.Helpers;
++
++namespace Kavita.Services.Tests.Helpers;
++
++public class GdsMetadataParserTests : IDisposable
++{
++    private readonly string _testDirectory = Path.Join(Path.GetTempPath(), "kavita-gds-yaml-tests", Guid.NewGuid().ToString("N"));
++    private readonly string _bookPath;
++
++    public GdsMetadataParserTests()
++    {
++        Directory.CreateDirectory(_testDirectory);
++        _bookPath = Path.Join(_testDirectory, "sample.epub");
++        File.WriteAllText(_bookPath, string.Empty);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldReturnFalse_WhenYamlIsEmpty()
++    {
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), string.Empty);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.False(result);
++        Assert.Equal(string.Empty, encodedImage);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldReturnFalse_WhenYamlIsNulFilled()
++    {
++        File.WriteAllBytes(Path.Join(_testDirectory, "kavita.yaml"), new byte[1024]);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.False(result);
++        Assert.Equal(string.Empty, encodedImage);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldReturnFalse_WhenYamlCoverIsInvalidBase64()
++    {
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), """
++            files:
++                'sample.epub':
++                    cover: not-base64
++                    page: 1
++            """);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.False(result);
++        Assert.Equal(string.Empty, encodedImage);
++    }
++
++    [Theory]
++    [InlineData("TEXT")]
++    [InlineData("https://example.test/cover.jpg")]
++    public void TryGetCoverBase64_ShouldReturnFalse_WhenYamlCoverIsNotEmbeddedImage(string cover)
++    {
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), $$"""
++            files:
++                'sample.epub':
++                    cover: {{cover}}
++                    page: 1
++            """);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.False(result);
++        Assert.Equal(string.Empty, encodedImage);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldUseExactFileNameMatch()
++    {
++        const string pngBase64 =
++            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), $"""
++            files:
++                'not-sample.epub':
++                    cover: data:image/png;base64,{pngBase64}
++                    page: 1
++            """);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.False(result);
++        Assert.Equal(string.Empty, encodedImage);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldUseLineFallback_WhenYamlParserCannotReadDocument()
++    {
++        const string pngBase64 =
++            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), $"""
++            files:
++                'sample.epub':
++                    cover: data:image/png;base64,{pngBase64}
++                    page: 1
++            broken: [unclosed
++            """);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.True(result);
++        Assert.Equal(pngBase64, encodedImage);
++    }
++
++    [Fact]
++    public void TryGetCoverBase64_ShouldReturnTrue_WhenYamlHasValidBase64Cover()
++    {
++        const string pngBase64 =
++            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
++        File.WriteAllText(Path.Join(_testDirectory, "kavita.yaml"), $"""
++            files:
++                'sample.epub':
++                    cover: data:image/png;base64,{pngBase64}
++                    page: 1
++            """);
++
++        var result = GdsMetadataParser.TryGetCoverBase64(_bookPath, out var encodedImage);
++
++        Assert.True(result);
++        Assert.Equal(pngBase64, encodedImage);
++    }
++
++    public void Dispose()
++    {
++        if (Directory.Exists(_testDirectory))
++        {
++            Directory.Delete(_testDirectory, true);
++        }
++    }
++}
+diff --git a/Kavita.Services/Extensions/ApplicationServiceExtensions.cs b/Kavita.Services/Extensions/ApplicationServiceExtensions.cs
+index d18448f3b..ec1605d6d 100644
+--- a/Kavita.Services/Extensions/ApplicationServiceExtensions.cs
++++ b/Kavita.Services/Extensions/ApplicationServiceExtensions.cs
+@@ -68,6 +68,7 @@ public static class ApplicationServiceExtensions
+ 
+         services.AddScoped<IScannerService, ScannerService>();
+         services.AddScoped<IProcessSeries, ProcessSeries>();
++        services.AddScoped<IGdsCoverService, GdsCoverService>();
+         services.AddScoped<IMetadataService, MetadataService>();
+         services.AddScoped<IWordCountAnalyzerService, WordCountAnalyzerService>();
+         services.AddScoped<ILibraryWatcher, LibraryWatcher>();
+diff --git a/Kavita.Services/GdsCoverService.cs b/Kavita.Services/GdsCoverService.cs
+new file mode 100644
+index 000000000..92d98a744
+--- /dev/null
++++ b/Kavita.Services/GdsCoverService.cs
+@@ -0,0 +1,483 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Threading.Tasks;
++using Kavita.API.Database;
++using Kavita.API.Services;
++using Kavita.API.Services.Helpers;
++using Kavita.API.Services.SignalR;
++using Kavita.Common;
++using Kavita.Common.Extensions;
++using Kavita.Models.DTOs.Settings;
++using Kavita.Models.DTOs.SignalR;
++using Kavita.Models.Entities;
++using Kavita.Models.Entities.Enums;
++using Kavita.Models.Entities.Interfaces;
++using Kavita.Models.Extensions;
++using Kavita.Services.Comparators;
++using Kavita.Services.Extensions;
++using Kavita.Services.Helpers;
++using Microsoft.Extensions.Logging;
++
++namespace Kavita.Services;
++
++public sealed class GdsCoverService(
++    IUnitOfWork unitOfWork,
++    ILogger<GdsCoverService> logger,
++    IEventHub eventHub,
++    ICacheHelper cacheHelper,
++    IReadingItemService readingItemService,
++    IDirectoryService directoryService,
++    IImageService imageService)
++    : IGdsCoverService
++{
++    private readonly IList<SignalRMessage> _updateEvents = new List<SignalRMessage>();
++
++    public async Task<GdsCoverGenerationResult> ProcessSeriesCoverGen(Series series, bool forceUpdate,
++        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape = false)
++    {
++        _updateEvents.Clear();
++
++        var preserveSeriesCover = TryApplyGdsFolderCover(series, forceUpdate, forceColorScape);
++        series.Volumes ??= [];
++
++        var firstVolume = series.Volumes.MinBy(volume => volume.MinNumber);
++        if (firstVolume == null) return Result(false);
++
++        firstVolume.Chapters ??= [];
++        var firstChapter = firstVolume.Chapters.FirstOrDefault(chapter => chapter.MinNumber.Is(1f)) ??
++                           firstVolume.Chapters.MinBy(chapter => chapter.SortOrder, ChapterSortComparerDefaultFirst.Default);
++        if (firstChapter == null) return Result(false);
++
++        var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
++        if (firstFile?.Format == MangaFormat.Text)
++        {
++            return Result(await ProcessGdsTextSeriesCoverGen(series, firstChapter, forceUpdate, encodeFormat,
++                coverImageSize, forceColorScape, preserveSeriesCover));
++        }
++
++        var totalVolumes = series.Volumes.Count;
++        var volumeIndex = 0;
++        var firstVolumeUpdated = false;
++        foreach (var volume in series.Volumes)
++        {
++            volume.Chapters ??= [];
++
++            var firstChapterUpdated = false;
++            var chapterIndex = 0;
++            foreach (var chapter in volume.Chapters)
++            {
++                var forceMediaCoverUpdate = forceUpdate && string.IsNullOrEmpty(chapter.CoverImage);
++                var chapterUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceUpdate, encodeFormat,
++                    coverImageSize, forceColorScape);
++                if (!chapterUpdated)
++                {
++                    chapterUpdated = UpdateGdsChapterCoverFromMediaFiles(chapter, forceMediaCoverUpdate,
++                        encodeFormat, coverImageSize, forceColorScape);
++                }
++
++                UpdateChapterLastModified(chapter, forceUpdate || chapterUpdated);
++                if (chapterIndex == 0 && chapterUpdated)
++                {
++                    firstChapterUpdated = true;
++                }
++
++                chapterIndex++;
++            }
++
++            var volumeUpdated = UpdateVolumeCoverImage(volume, firstChapterUpdated || forceUpdate, forceColorScape);
++            if (volumeIndex == 0 && volumeUpdated)
++            {
++                firstVolumeUpdated = true;
++            }
++
++            await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
++                MessageFactory.CoverUpdateProgressEvent(series.LibraryId, volumeIndex / (float) totalVolumes,
++                    ProgressEventType.Started, series.Name));
++
++            volumeIndex++;
++        }
++
++        if (!preserveSeriesCover)
++        {
++            UpdateSeriesCoverImage(series, firstVolumeUpdated || forceUpdate, forceColorScape);
++        }
++
++        return Result(true);
++    }
++
++    private async Task<bool> ProcessGdsTextSeriesCoverGen(Series series, Chapter firstChapter, bool forceUpdate,
++        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape, bool preserveSeriesCover)
++    {
++        var totalVolumes = series.Volumes.Count;
++        var volumeIndex = 0;
++        var firstVolumeUpdated = false;
++        var anyYamlCoverUpdated = false;
++
++        foreach (var volume in series.Volumes)
++        {
++            volume.Chapters ??= [];
++
++            var firstChapterUpdated = false;
++            var chapterIndex = 0;
++            foreach (var chapter in volume.Chapters)
++            {
++                var chapterUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceUpdate, encodeFormat,
++                    coverImageSize, forceColorScape);
++
++                UpdateChapterLastModified(chapter, forceUpdate || chapterUpdated);
++                if (chapterUpdated)
++                {
++                    anyYamlCoverUpdated = true;
++                }
++
++                if (chapterIndex == 0 && chapterUpdated)
++                {
++                    firstChapterUpdated = true;
++                }
++
++                chapterIndex++;
++            }
++
++            var volumeUpdated = UpdateVolumeCoverImage(volume, firstChapterUpdated || forceUpdate, forceColorScape);
++            if (volumeIndex == 0 && volumeUpdated)
++            {
++                firstVolumeUpdated = true;
++            }
++
++            await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
++                MessageFactory.CoverUpdateProgressEvent(series.LibraryId, volumeIndex / (float) totalVolumes,
++                    ProgressEventType.Started, series.Name));
++
++            volumeIndex++;
++        }
++
++        if (anyYamlCoverUpdated)
++        {
++            if (!preserveSeriesCover)
++            {
++                UpdateSeriesCoverImage(series, firstVolumeUpdated || forceUpdate, forceColorScape);
++            }
++
++            return true;
++        }
++
++        return TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize,
++            forceColorScape, preserveSeriesCover);
++    }
++
++    private GdsCoverGenerationResult Result(bool handled)
++    {
++        return new GdsCoverGenerationResult(handled, _updateEvents.ToArray());
++    }
++
++    private void UpdateChapterLastModified(Chapter chapter, bool forceUpdate)
++    {
++        var firstFile = chapter.Files.MinBy(x => x.Chapter);
++        if (firstFile == null || cacheHelper.IsFileUnmodifiedSinceCreationOrLastScan(chapter, forceUpdate, firstFile)) return;
++
++        firstFile.UpdateLastModified();
++    }
++
++    private static bool NeedsColorSpace(IHasCoverImage? entity, bool force)
++    {
++        if (entity == null) return false;
++        if (force) return true;
++
++        return !string.IsNullOrEmpty(entity.CoverImage) &&
++               (string.IsNullOrEmpty(entity.PrimaryColor) || string.IsNullOrEmpty(entity.SecondaryColor));
++    }
++
++    private bool UpdateVolumeCoverImage(Volume? volume, bool forceUpdate, bool forceColorScape = false)
++    {
++        if (volume == null) return false;
++
++        if (!cacheHelper.ShouldUpdateCoverImage(
++                directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, volume.CoverImage),
++                null, volume.Created, forceUpdate))
++        {
++            if (NeedsColorSpace(volume, forceColorScape))
++            {
++                imageService.UpdateColorScape(volume);
++                unitOfWork.VolumeRepository.Update(volume);
++                _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
++            }
++            return false;
++        }
++
++        if (!volume.CoverImageLocked)
++        {
++            volume.Chapters ??= new List<Chapter>();
++
++            var firstChapter = volume.Chapters.FirstOrDefault(x => x.MinNumber.Is(1f));
++            if (firstChapter == null)
++            {
++                firstChapter = volume.Chapters.MinBy(x => x.SortOrder, ChapterSortComparerDefaultFirst.Default);
++                if (firstChapter == null) return false;
++            }
++
++            volume.CoverImage = firstChapter.CoverImage;
++        }
++        imageService.UpdateColorScape(volume);
++        unitOfWork.VolumeRepository.Update(volume);
++
++        _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
++
++        return true;
++    }
++
++    private void UpdateSeriesCoverImage(Series? series, bool forceUpdate, bool forceColorScape = false)
++    {
++        if (series == null) return;
++
++        if (!cacheHelper.ShouldUpdateCoverImage(
++                directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, series.CoverImage),
++                null, series.Created, forceUpdate, series.CoverImageLocked))
++        {
++            if (NeedsColorSpace(series, forceColorScape))
++            {
++                imageService.UpdateColorScape(series);
++                _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
++            }
++
++            return;
++        }
++
++        series.Volumes ??= [];
++        series.CoverImage = series.GetCoverImage();
++        if (series.CoverImage == null)
++        {
++            logger.LogDebug("[SeriesCoverImageBug] Setting Series Cover Image to null: {SeriesId}", series.Id);
++        }
++
++        imageService.UpdateColorScape(series);
++        unitOfWork.SeriesRepository.Update(series);
++
++        _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
++    }
++
++    private bool UpdateGdsChapterCoverFromYaml(Chapter chapter, bool forceUpdate, EncodeFormat encodeFormat,
++        CoverImageSize coverImageSize, bool forceColorScape)
++    {
++        var firstFile = chapter.Files.MinBy(x => x.Chapter);
++        if (firstFile == null) return false;
++
++        if (!cacheHelper.ShouldUpdateCoverImage(
++                directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, chapter.CoverImage),
++                firstFile, chapter.Created, forceUpdate, chapter.CoverImageLocked))
++        {
++            return false;
++        }
++
++        foreach (var file in chapter.Files.Where(x => x.Bytes > 0).OrderBy(x => x.Chapter).ThenBy(x => x.FilePath))
++        {
++            if (!GdsMetadataParser.TryGetCoverBase64(file.FilePath, out var encodedImage)) continue;
++
++            var thumbnailWidth = coverImageSize.GetDimensions().Width;
++            string coverImage;
++            try
++            {
++                coverImage = imageService.CreateThumbnailFromBase64(encodedImage,
++                    ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), encodeFormat, thumbnailWidth);
++            }
++            catch (KavitaException ex)
++            {
++                logger.LogWarning(ex, "[GdsCoverService] Invalid GDS YAML cover for {File}", file.FilePath);
++                continue;
++            }
++
++            if (string.IsNullOrEmpty(coverImage)) continue;
++
++            chapter.CoverImage = coverImage;
++            imageService.UpdateColorScape(chapter);
++            unitOfWork.ChapterRepository.Update(chapter);
++            _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
++
++            return true;
++        }
++
++        return false;
++    }
++
++    private bool UpdateGdsChapterCoverFromMediaFiles(Chapter chapter, bool forceUpdate, EncodeFormat encodeFormat,
++        CoverImageSize coverImageSize, bool forceColorScape)
++    {
++        var firstFile = chapter.Files.MinBy(x => x.Chapter);
++        if (firstFile == null) return false;
++
++        if (!cacheHelper.ShouldUpdateCoverImage(
++                directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, chapter.CoverImage),
++                firstFile, chapter.Created, forceUpdate, chapter.CoverImageLocked))
++        {
++            if (NeedsColorSpace(chapter, forceColorScape))
++            {
++                imageService.UpdateColorScape(chapter);
++                unitOfWork.ChapterRepository.Update(chapter);
++                _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
++            }
++
++            return false;
++        }
++
++        foreach (var file in chapter.Files.Where(x => x.Bytes > 0).OrderBy(x => x.Chapter).ThenBy(x => x.FilePath))
++        {
++            logger.LogDebug("[GdsCoverService] Generating GDS cover image for {File}", file.FilePath);
++
++            string coverImage;
++            try
++            {
++                coverImage = readingItemService.GetCoverImage(file.FilePath,
++                    ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), file.Format, encodeFormat, coverImageSize);
++            }
++            catch (Exception ex) when (ex is KavitaException or InvalidDataException or IOException or InvalidOperationException)
++            {
++                logger.LogWarning(ex, "[GdsCoverService] Failed to generate GDS cover image for {File}", file.FilePath);
++                continue;
++            }
++
++            if (string.IsNullOrEmpty(coverImage)) continue;
++
++            chapter.CoverImage = coverImage;
++            imageService.UpdateColorScape(chapter);
++            unitOfWork.ChapterRepository.Update(chapter);
++            _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
++
++            return true;
++        }
++
++        return false;
++    }
++
++    private bool TryApplyGdsTextTitleCover(Series series, Chapter firstChapter, bool forceUpdate,
++        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape, bool preserveSeriesCover)
++    {
++        var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
++        if (firstFile?.Format != MangaFormat.Text) return false;
++        if (series.CoverImageLocked && !forceUpdate && !preserveSeriesCover) return false;
++
++        if (!preserveSeriesCover && !forceUpdate && !string.IsNullOrWhiteSpace(series.CoverImage) &&
++            File.Exists(Path.Join(directoryService.CoverImageDirectory, series.CoverImage)))
++        {
++            if (NeedsColorSpace(series, forceColorScape))
++            {
++                imageService.UpdateColorScape(series);
++                unitOfWork.SeriesRepository.Update(series);
++                _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
++            }
++
++            return true;
++        }
++
++        var coverImageNameWithoutExtension = ImageService.GetSeriesFormat(series.Id);
++        var newCoverImage = coverImageNameWithoutExtension + encodeFormat.GetExtension();
++        var configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
++        if (forceUpdate || !File.Exists(configCoverFilePath))
++        {
++            var title = string.IsNullOrWhiteSpace(series.Name) ? series.OriginalName : series.Name;
++            var generatedCover = imageService.CreateTitleCover(title, "TEXT", coverImageNameWithoutExtension, encodeFormat, coverImageSize);
++            if (string.IsNullOrEmpty(generatedCover)) return false;
++            newCoverImage = generatedCover;
++            configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
++        }
++
++        if (!File.Exists(configCoverFilePath)) return false;
++
++        if (!preserveSeriesCover)
++        {
++            var shouldUpdateSeriesColor = series.CoverImage != newCoverImage || NeedsColorSpace(series, forceColorScape);
++            series.CoverImage = newCoverImage;
++            if (shouldUpdateSeriesColor)
++            {
++                imageService.UpdateColorScape(series);
++            }
++            unitOfWork.SeriesRepository.Update(series);
++            _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
++        }
++
++        foreach (var volume in series.Volumes)
++        {
++            volume.Chapters ??= [];
++
++            if (!volume.CoverImageLocked)
++            {
++                var shouldUpdateVolumeColor = volume.CoverImage != newCoverImage || NeedsColorSpace(volume, forceColorScape);
++                volume.CoverImage = newCoverImage;
++                if (shouldUpdateVolumeColor)
++                {
++                    imageService.UpdateColorScape(volume);
++                }
++                unitOfWork.VolumeRepository.Update(volume);
++                _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
++            }
++
++            foreach (var chapter in volume.Chapters)
++            {
++                if (chapter.CoverImageLocked) continue;
++                var shouldUpdateChapterColor = chapter.CoverImage != newCoverImage || NeedsColorSpace(chapter, forceColorScape);
++                chapter.CoverImage = newCoverImage;
++                if (shouldUpdateChapterColor)
++                {
++                    imageService.UpdateColorScape(chapter);
++                }
++                unitOfWork.ChapterRepository.Update(chapter);
++                _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
++            }
++        }
++
++        return true;
++    }
++
++    private bool TryApplyGdsFolderCover(Series series, bool forceUpdate, bool forceColorScape)
++    {
++        if (string.IsNullOrWhiteSpace(series.FolderPath)) return false;
++
++        var coverFilePath = Path.Join(series.FolderPath, "cover.jpg");
++        var newCoverImage = "_s" + series.Id + ".jpg";
++        if (!File.Exists(coverFilePath))
++        {
++            coverFilePath = Path.Join(series.FolderPath, "cover.png");
++            newCoverImage = "_s" + series.Id + ".png";
++        }
++        if (!File.Exists(coverFilePath))
++        {
++            coverFilePath = Path.Join(series.FolderPath, "cover.webp");
++            newCoverImage = "_s" + series.Id + ".webp";
++        }
++
++        var configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
++        if (!File.Exists(coverFilePath))
++        {
++            return false;
++        }
++
++        var shouldCopy = forceUpdate || !File.Exists(configCoverFilePath) ||
++                         new FileInfo(coverFilePath).Length != new FileInfo(configCoverFilePath).Length;
++
++        var seriesAlreadyUsesCover = series.CoverImage == newCoverImage;
++        var needsColorScape = NeedsColorSpace(series, forceColorScape);
++        if (!shouldCopy && seriesAlreadyUsesCover && !needsColorScape)
++        {
++            return true;
++        }
++
++        if (shouldCopy)
++        {
++            File.Copy(coverFilePath, configCoverFilePath, true);
++        }
++
++        if (!File.Exists(configCoverFilePath)) return false;
++
++        var shouldUpdateSeriesColor = shouldCopy || series.CoverImage != newCoverImage ||
++                                      NeedsColorSpace(series, forceColorScape);
++        series.CoverImage = newCoverImage;
++        if (shouldUpdateSeriesColor)
++        {
++            imageService.UpdateColorScape(series);
++        }
++        unitOfWork.SeriesRepository.Update(series);
++        _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
++
++        return true;
++    }
++}
+diff --git a/Kavita.Services/Helpers/GdsMetadataParser.cs b/Kavita.Services/Helpers/GdsMetadataParser.cs
+index a9202de44..3d296f718 100644
+--- a/Kavita.Services/Helpers/GdsMetadataParser.cs
++++ b/Kavita.Services/Helpers/GdsMetadataParser.cs
+@@ -115,6 +115,7 @@ public static class GdsMetadataParser
+         try
+         {
+             var yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
++            if (yaml == null) return false;
+             if (!TryGetMap(yaml, "files", out var files)) return false;
+ 
+             foreach (var (sourceKey, value) in files)
+@@ -126,7 +127,7 @@ public static class GdsMetadataParser
+                 return TryNormalizeBase64Cover(cover, out encodedImage);
+             }
+         }
+-        catch (YamlDotNet.Core.YamlException)
++        catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException or InvalidOperationException or ArgumentException)
+         {
+             return TryGetCoverBase64FromLines(yamlPath, fileName, out encodedImage);
+         }
+@@ -140,37 +141,44 @@ public static class GdsMetadataParser
+         var inFiles = false;
+         var inTargetFile = false;
+ 
+-        foreach (var line in File.ReadLines(yamlPath))
++        try
+         {
+-            if (!inFiles)
++            foreach (var line in File.ReadLines(yamlPath))
+             {
+-                if (TryParseIndentedKey(line, 0, out var rootKey) &&
+-                    string.Equals(rootKey, "files", StringComparison.OrdinalIgnoreCase))
++                if (!inFiles)
+                 {
+-                    inFiles = true;
+-                }
++                    if (TryParseIndentedKey(line, 0, out var rootKey) &&
++                        string.Equals(rootKey, "files", StringComparison.OrdinalIgnoreCase))
++                    {
++                        inFiles = true;
++                    }
+ 
+-                continue;
+-            }
++                    continue;
++                }
+ 
+-            if (!string.IsNullOrWhiteSpace(line) && !char.IsWhiteSpace(line[0]))
+-            {
+-                return false;
+-            }
++                if (!string.IsNullOrWhiteSpace(line) && !char.IsWhiteSpace(line[0]))
++                {
++                    return false;
++                }
+ 
+-            if (TryParseIndentedKey(line, 4, out var candidateFile))
+-            {
+-                inTargetFile = string.Equals(UnquoteYamlScalar(candidateFile), fileName, StringComparison.OrdinalIgnoreCase);
+-                continue;
+-            }
++                if (TryParseIndentedKey(line, 4, out var candidateFile))
++                {
++                    inTargetFile = string.Equals(UnquoteYamlScalar(candidateFile), fileName, StringComparison.OrdinalIgnoreCase);
++                    continue;
++                }
+ 
+-            if (!inTargetFile) continue;
++                if (!inTargetFile) continue;
+ 
+-            if (TryParseIndentedScalar(line, 8, "cover", out var cover))
+-            {
+-                return TryNormalizeBase64Cover(cover, out encodedImage);
++                if (TryParseIndentedScalar(line, 8, "cover", out var cover))
++                {
++                    return TryNormalizeBase64Cover(cover, out encodedImage);
++                }
+             }
+         }
++        catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
++        {
++            return false;
++        }
+ 
+         return false;
+     }
+@@ -220,10 +228,16 @@ public static class GdsMetadataParser
+     {
+         encodedImage = UnquoteYamlScalar(value);
+         if (string.IsNullOrWhiteSpace(encodedImage)) return false;
+-        if (string.Equals(encodedImage, "TEXT", StringComparison.OrdinalIgnoreCase)) return false;
++        if (string.Equals(encodedImage, "TEXT", StringComparison.OrdinalIgnoreCase))
++        {
++            encodedImage = string.Empty;
++            return false;
++        }
++
+         if (encodedImage.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+             encodedImage.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+         {
++            encodedImage = string.Empty;
+             return false;
+         }
+ 
+diff --git a/Kavita.Services/IGdsCoverService.cs b/Kavita.Services/IGdsCoverService.cs
+new file mode 100644
+index 000000000..fc2232f5c
+--- /dev/null
++++ b/Kavita.Services/IGdsCoverService.cs
+@@ -0,0 +1,16 @@
++using System.Collections.Generic;
++using System.Threading.Tasks;
++using Kavita.Models.DTOs.Settings;
++using Kavita.Models.DTOs.SignalR;
++using Kavita.Models.Entities;
++using Kavita.Models.Entities.Enums;
++
++namespace Kavita.Services;
++
++public interface IGdsCoverService
++{
++    Task<GdsCoverGenerationResult> ProcessSeriesCoverGen(Series series, bool forceUpdate, EncodeFormat encodeFormat,
++        CoverImageSize coverImageSize, bool forceColorScape = false);
++}
++
++public sealed record GdsCoverGenerationResult(bool Handled, IReadOnlyCollection<SignalRMessage> UpdateEvents);
+diff --git a/Kavita.Services/MetadataService.cs b/Kavita.Services/MetadataService.cs
+index 71ade4dce..be104850e 100644
+--- a/Kavita.Services/MetadataService.cs
++++ b/Kavita.Services/MetadataService.cs
+@@ -10,6 +10,7 @@ using Kavita.API.Database;
+ using Kavita.API.Services;
+ using Kavita.API.Services.Helpers;
+ using Kavita.API.Services.SignalR;
++using Kavita.Common;
+ using Kavita.Common.Extensions;
+ using Kavita.Common.Helpers;
+ using Kavita.Models.DTOs.Settings;
+@@ -20,7 +21,6 @@ using Kavita.Models.Entities.Interfaces;
+ using Kavita.Models.Extensions;
+ using Kavita.Services.Comparators;
+ using Kavita.Services.Extensions;
+-using Kavita.Services.Helpers;
+ using Microsoft.Extensions.Logging;
+ 
+ namespace Kavita.Services;
+@@ -35,7 +35,8 @@ public class MetadataService(
+     ICacheHelper cacheHelper,
+     IReadingItemService readingItemService,
+     IDirectoryService directoryService,
+-    IImageService imageService)
++    IImageService imageService,
++    IGdsCoverService gdsCoverService)
+     : IMetadataService
+ {
+     public const string Name = "MetadataService";
+@@ -69,12 +70,23 @@ public class MetadataService(
+             return false;
+         }
+ 
+-
+         logger.LogDebug("[MetadataService] Generating cover image for {File}", firstFile.FilePath);
+ 
+-        chapter.CoverImage = readingItemService.GetCoverImage(firstFile.FilePath,
+-            ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), firstFile.Format, encodeFormat, coverImageSize);
++        string coverImage;
++        try
++        {
++            coverImage = readingItemService.GetCoverImage(firstFile.FilePath,
++                ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), firstFile.Format, encodeFormat, coverImageSize);
++        }
++        catch (Exception ex) when (ex is KavitaException or InvalidDataException or IOException or InvalidOperationException)
++        {
++            logger.LogWarning(ex, "[MetadataService] Failed to generate cover image for {File}", firstFile.FilePath);
++            return false;
++        }
++
++        if (string.IsNullOrEmpty(coverImage)) return false;
+ 
++        chapter.CoverImage = coverImage;
+         imageService.UpdateColorScape(chapter);
+ 
+         unitOfWork.ChapterRepository.Update(chapter);
+@@ -141,6 +153,7 @@ public class MetadataService(
+             volume.CoverImage = firstChapter.CoverImage;
+         }
+         imageService.UpdateColorScape(volume);
++        unitOfWork.VolumeRepository.Update(volume);
+ 
+         _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
+ 
+@@ -178,6 +191,7 @@ public class MetadataService(
+         }
+ 
+         imageService.UpdateColorScape(series);
++        unitOfWork.SeriesRepository.Update(series);
+ 
+         _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+     }
+@@ -194,14 +208,19 @@ public class MetadataService(
+         logger.LogDebug("[MetadataService] Processing cover image generation for series: {SeriesName}", series.OriginalName);
+         try
+         {
+-            var preserveGdsSeriesCover = series.Library?.Type == LibraryType.GDS &&
+-                                         TryApplyGdsFolderCover(series, forceUpdate, forceColorScape);
+-
+-            if (series.Library?.Type == LibraryType.GDS &&
+-                await ProcessGdsSeriesCoverGen(series, forceUpdate, encodeFormat, coverImageSize, forceColorScape,
+-                    preserveGdsSeriesCover))
++            if (series.Library?.Type == LibraryType.GDS)
+             {
+-                return;
++                var result = await gdsCoverService.ProcessSeriesCoverGen(series, forceUpdate, encodeFormat,
++                    coverImageSize, forceColorScape);
++                if (result.Handled)
++                {
++                    foreach (var updateEvent in result.UpdateEvents)
++                    {
++                        _updateEvents.Add(updateEvent);
++                    }
++
++                    return;
++                }
+             }
+ 
+             var totalVolumes = series.Volumes.Count;
+@@ -244,230 +263,6 @@ public class MetadataService(
+         }
+     }
+ 
+-    private async Task<bool> ProcessGdsSeriesCoverGen(Series series, bool forceUpdate, EncodeFormat encodeFormat,
+-        CoverImageSize coverImageSize, bool forceColorScape, bool preserveSeriesCover)
+-    {
+-        series.Volumes ??= [];
+-        var firstVolume = series.Volumes.MinBy(volume => volume.MinNumber);
+-        if (firstVolume == null) return false;
+-
+-        firstVolume.Chapters ??= [];
+-        var firstChapter = firstVolume.Chapters.FirstOrDefault(chapter => chapter.MinNumber.Is(1f)) ??
+-                           firstVolume.Chapters.MinBy(chapter => chapter.SortOrder, ChapterSortComparerDefaultFirst.Default);
+-        if (firstChapter == null) return false;
+-
+-        var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
+-        if (firstFile?.Format == MangaFormat.Text)
+-        {
+-            return TryApplyGdsTextTitleCover(series, firstChapter, forceUpdate, encodeFormat, coverImageSize,
+-                forceColorScape, preserveSeriesCover);
+-        }
+-
+-        var totalVolumes = series.Volumes.Count;
+-        var volumeIndex = 0;
+-        var firstVolumeUpdated = false;
+-        foreach (var volume in series.Volumes)
+-        {
+-            volume.Chapters ??= [];
+-
+-            var firstChapterUpdated = false;
+-            var chapterIndex = 0;
+-            foreach (var chapter in volume.Chapters)
+-            {
+-                var chapterUpdated = UpdateGdsChapterCoverFromYaml(chapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
+-                if (!chapterUpdated)
+-                {
+-                    chapterUpdated = UpdateChapterCoverImage(chapter, forceUpdate, encodeFormat, coverImageSize, forceColorScape);
+-                }
+-
+-                UpdateChapterLastModified(chapter, forceUpdate || chapterUpdated);
+-                if (chapterIndex == 0 && chapterUpdated)
+-                {
+-                    firstChapterUpdated = true;
+-                }
+-
+-                chapterIndex++;
+-            }
+-
+-            var volumeUpdated = UpdateVolumeCoverImage(volume, firstChapterUpdated || forceUpdate, forceColorScape);
+-            if (volumeIndex == 0 && volumeUpdated)
+-            {
+-                firstVolumeUpdated = true;
+-            }
+-
+-            await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+-                MessageFactory.CoverUpdateProgressEvent(series.LibraryId, volumeIndex / (float) totalVolumes, ProgressEventType.Started, series.Name));
+-
+-            volumeIndex++;
+-        }
+-
+-        if (!preserveSeriesCover)
+-        {
+-            UpdateSeriesCoverImage(series, firstVolumeUpdated || forceUpdate, forceColorScape);
+-        }
+-
+-        return true;
+-    }
+-
+-    private bool UpdateGdsChapterCoverFromYaml(Chapter chapter, bool forceUpdate, EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape)
+-    {
+-        var firstFile = chapter.Files.MinBy(x => x.Chapter);
+-        if (firstFile == null) return false;
+-
+-        if (!cacheHelper.ShouldUpdateCoverImage(
+-                directoryService.FileSystem.Path.Join(directoryService.CoverImageDirectory, chapter.CoverImage),
+-                firstFile, chapter.Created, forceUpdate, chapter.CoverImageLocked))
+-        {
+-            return false;
+-        }
+-
+-        if (!GdsMetadataParser.TryGetCoverBase64(firstFile.FilePath, out var encodedImage)) return false;
+-
+-        var thumbnailWidth = coverImageSize.GetDimensions().Width;
+-        var coverImage = imageService.CreateThumbnailFromBase64(encodedImage,
+-            ImageService.GetChapterFormat(chapter.Id, chapter.VolumeId), encodeFormat, thumbnailWidth);
+-        if (string.IsNullOrEmpty(coverImage)) return false;
+-
+-        chapter.CoverImage = coverImage;
+-        imageService.UpdateColorScape(chapter);
+-        unitOfWork.ChapterRepository.Update(chapter);
+-        _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+-
+-        return true;
+-    }
+-
+-    private bool TryApplyGdsTextTitleCover(Series series, Chapter firstChapter, bool forceUpdate,
+-        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape, bool preserveSeriesCover)
+-    {
+-        var firstFile = firstChapter.Files.MinBy(x => x.Chapter);
+-        if (firstFile?.Format != MangaFormat.Text) return false;
+-        if (series.CoverImageLocked && !forceUpdate && !preserveSeriesCover) return false;
+-
+-        if (!preserveSeriesCover && !forceUpdate && !string.IsNullOrWhiteSpace(series.CoverImage) &&
+-            File.Exists(Path.Join(directoryService.CoverImageDirectory, series.CoverImage)))
+-        {
+-            if (NeedsColorSpace(series, forceColorScape))
+-            {
+-                imageService.UpdateColorScape(series);
+-                unitOfWork.SeriesRepository.Update(series);
+-                _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+-            }
+-
+-            return true;
+-        }
+-
+-        var coverImageNameWithoutExtension = ImageService.GetSeriesFormat(series.Id);
+-        var newCoverImage = coverImageNameWithoutExtension + encodeFormat.GetExtension();
+-        var configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
+-        if (forceUpdate || !File.Exists(configCoverFilePath))
+-        {
+-            var title = string.IsNullOrWhiteSpace(series.Name) ? series.OriginalName : series.Name;
+-            var generatedCover = imageService.CreateTitleCover(title, "TEXT", coverImageNameWithoutExtension, encodeFormat, coverImageSize);
+-            if (string.IsNullOrEmpty(generatedCover)) return false;
+-            newCoverImage = generatedCover;
+-            configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
+-        }
+-
+-        if (!File.Exists(configCoverFilePath)) return false;
+-
+-        if (!preserveSeriesCover)
+-        {
+-            var shouldUpdateSeriesColor = series.CoverImage != newCoverImage || NeedsColorSpace(series, forceColorScape);
+-            series.CoverImage = newCoverImage;
+-            if (shouldUpdateSeriesColor)
+-            {
+-                imageService.UpdateColorScape(series);
+-            }
+-            unitOfWork.SeriesRepository.Update(series);
+-            _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+-        }
+-
+-        foreach (var volume in series.Volumes)
+-        {
+-            volume.Chapters ??= [];
+-
+-            if (!volume.CoverImageLocked)
+-            {
+-                var shouldUpdateVolumeColor = volume.CoverImage != newCoverImage || NeedsColorSpace(volume, forceColorScape);
+-                volume.CoverImage = newCoverImage;
+-                if (shouldUpdateVolumeColor)
+-                {
+-                    imageService.UpdateColorScape(volume);
+-                }
+-                unitOfWork.VolumeRepository.Update(volume);
+-                _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
+-            }
+-
+-            foreach (var chapter in volume.Chapters)
+-            {
+-                if (chapter.CoverImageLocked) continue;
+-                var shouldUpdateChapterColor = chapter.CoverImage != newCoverImage || NeedsColorSpace(chapter, forceColorScape);
+-                chapter.CoverImage = newCoverImage;
+-                if (shouldUpdateChapterColor)
+-                {
+-                    imageService.UpdateColorScape(chapter);
+-                }
+-                unitOfWork.ChapterRepository.Update(chapter);
+-                _updateEvents.Add(MessageFactory.CoverUpdateEvent(chapter.Id, MessageFactoryEntityTypes.Chapter));
+-            }
+-        }
+-
+-        return true;
+-    }
+-
+-    private bool TryApplyGdsFolderCover(Series series, bool forceUpdate, bool forceColorScape)
+-    {
+-        if (string.IsNullOrWhiteSpace(series.FolderPath)) return false;
+-
+-        var coverFilePath = Path.Join(series.FolderPath, "cover.jpg");
+-        var newCoverImage = "_s" + series.Id + ".jpg";
+-        if (!File.Exists(coverFilePath))
+-        {
+-            coverFilePath = Path.Join(series.FolderPath, "cover.png");
+-            newCoverImage = "_s" + series.Id + ".png";
+-        }
+-        if (!File.Exists(coverFilePath))
+-        {
+-            coverFilePath = Path.Join(series.FolderPath, "cover.webp");
+-            newCoverImage = "_s" + series.Id + ".webp";
+-        }
+-
+-        var configCoverFilePath = Path.Join(directoryService.CoverImageDirectory, newCoverImage);
+-        if (!File.Exists(coverFilePath))
+-        {
+-            return false;
+-        }
+-
+-        var shouldCopy = forceUpdate || !File.Exists(configCoverFilePath) ||
+-                         new FileInfo(coverFilePath).Length != new FileInfo(configCoverFilePath).Length;
+-
+-        var seriesAlreadyUsesCover = series.CoverImage == newCoverImage;
+-        var needsColorScape = NeedsColorSpace(series, forceColorScape);
+-        if (!shouldCopy && seriesAlreadyUsesCover && !needsColorScape)
+-        {
+-            return true;
+-        }
+-
+-        if (shouldCopy)
+-        {
+-            File.Copy(coverFilePath, configCoverFilePath, true);
+-        }
+-
+-        if (!File.Exists(configCoverFilePath)) return false;
+-
+-        var shouldUpdateSeriesColor = shouldCopy || series.CoverImage != newCoverImage ||
+-                                      NeedsColorSpace(series, forceColorScape);
+-        series.CoverImage = newCoverImage;
+-        if (shouldUpdateSeriesColor)
+-        {
+-            imageService.UpdateColorScape(series);
+-        }
+-        unitOfWork.SeriesRepository.Update(series);
+-        _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
+-
+-        return true;
+-    }
+-
+ 
+     /// <summary>
+     /// Refreshes Cover Images for a whole library
+-- 
+2.47.3
+
+
+From e6818e89b12c9387c6f2ce0f10a2ba130340d460 Mon Sep 17 00:00:00 2001
+From: suikano1304 <suikano1304@users.noreply.github.com>
+Date: Tue, 9 Jun 2026 20:03:03 +0900
+Subject: [PATCH 2/3] fix: restore SQLite default commit path
+
+---
+ Kavita.API/Database/IUnitOfWork.cs            |  5 --
+ .../ApplicationServiceExtensions.cs           |  5 --
+ .../Interceptors/SqlitePragmaInterceptor.cs   | 46 -------------------
+ Kavita.Database/UnitOfWork.cs                 | 10 +---
+ 4 files changed, 1 insertion(+), 65 deletions(-)
+ delete mode 100644 Kavita.Database/Interceptors/SqlitePragmaInterceptor.cs
+
+diff --git a/Kavita.API/Database/IUnitOfWork.cs b/Kavita.API/Database/IUnitOfWork.cs
+index b6a560a58..47830c941 100644
+--- a/Kavita.API/Database/IUnitOfWork.cs
++++ b/Kavita.API/Database/IUnitOfWork.cs
+@@ -38,11 +38,6 @@ public interface IUnitOfWork
+     IReadingListRemapRuleRepository RemapRuleRepository { get; }
+     IKavitaPlusAuditRepository KavitaPlusAuditRepository { get; }
+ 
+-    /// <summary>
+-    /// Commits pending changes to the database inside an IMMEDIATE transaction so writer
+-    /// contention waits on the SQLite writer lock (via busy_timeout) instead of failing with
+-    /// SQLITE_BUSY_SNAPSHOT.
+-    /// </summary>
+     Task<bool> CommitAsync(CancellationToken ct = default);
+     bool HasChanges();
+     Task<bool> RollbackAsync(CancellationToken ct = default);
+diff --git a/Kavita.Database/Extensions/ApplicationServiceExtensions.cs b/Kavita.Database/Extensions/ApplicationServiceExtensions.cs
+index 68e2adb00..618c041aa 100644
+--- a/Kavita.Database/Extensions/ApplicationServiceExtensions.cs
++++ b/Kavita.Database/Extensions/ApplicationServiceExtensions.cs
+@@ -1,6 +1,5 @@
+ using Kavita.API.Database;
+ using Kavita.Common.EnvironmentInfo;
+-using Kavita.Database.Interceptors;
+ using Microsoft.AspNetCore.DataProtection;
+ using Microsoft.EntityFrameworkCore;
+ using Microsoft.EntityFrameworkCore.Diagnostics;
+@@ -33,11 +32,7 @@ public static class ApplicationServiceExtensions
+             options.UseSqlite("Data source=config/kavita.db", builder =>
+             {
+                 builder.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
+-                // Must exceed the SQLite busy_timeout (30s) applied by SqlitePragmaInterceptor,
+-                // otherwise EF cancels the command before SQLite's writer-lock wait can finish.
+-                builder.CommandTimeout(60);
+             });
+-            options.AddInterceptors(new SqlitePragmaInterceptor());
+             options.EnableDetailedErrors();
+             options.EnableSensitiveDataLogging();
+             options.ConfigureWarnings(warnings =>
+diff --git a/Kavita.Database/Interceptors/SqlitePragmaInterceptor.cs b/Kavita.Database/Interceptors/SqlitePragmaInterceptor.cs
+deleted file mode 100644
+index 18a54443b..000000000
+--- a/Kavita.Database/Interceptors/SqlitePragmaInterceptor.cs
++++ /dev/null
+@@ -1,46 +0,0 @@
+-using System.Data.Common;
+-using System.Threading;
+-using System.Threading.Tasks;
+-using Microsoft.EntityFrameworkCore.Diagnostics;
+-
+-namespace Kavita.Database.Interceptors;
+-
+-/// <summary>
+-/// Applies per-connection PRAGMAs every time a SQLite connection is opened.
+-/// Runs on every pooled connection - <c>AddDbContextPool</c> reuses <c>DbContext</c> instances
+-/// but the underlying <c>SqliteConnection</c> can open/close across operations, so a one-shot
+-/// startup PRAGMA is not sufficient.
+-///
+-/// <c>busy_timeout</c> makes SQLite sleep up to the given number of milliseconds waiting for
+-/// the writer lock rather than returning <c>SQLITE_BUSY</c> immediately. This only helps when
+-/// paired with IMMEDIATE transactions (see <c>UnitOfWork.CommitAsync</c>); DEFERRED transactions
+-/// still fail with the non-retriable <c>SQLITE_BUSY_SNAPSHOT</c>.
+-/// </summary>
+-public sealed class SqlitePragmaInterceptor : DbConnectionInterceptor
+-{
+-    private const int BusyTimeoutMs = 30_000;
+-
+-    public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
+-    {
+-        ApplyPragmas(connection);
+-    }
+-
+-    public override async Task ConnectionOpenedAsync(DbConnection connection, ConnectionEndEventData eventData, CancellationToken cancellationToken = default)
+-    {
+-        await ApplyPragmasAsync(connection, cancellationToken);
+-    }
+-
+-    private static void ApplyPragmas(DbConnection connection)
+-    {
+-        using var command = connection.CreateCommand();
+-        command.CommandText = $"PRAGMA busy_timeout = {BusyTimeoutMs};";
+-        command.ExecuteNonQuery();
+-    }
+-
+-    private static async Task ApplyPragmasAsync(DbConnection connection, CancellationToken ct)
+-    {
+-        await using var command = connection.CreateCommand();
+-        command.CommandText = $"PRAGMA busy_timeout = {BusyTimeoutMs};";
+-        await command.ExecuteNonQueryAsync(ct);
+-    }
+-}
+diff --git a/Kavita.Database/UnitOfWork.cs b/Kavita.Database/UnitOfWork.cs
+index 829196517..6987cd6fe 100644
+--- a/Kavita.Database/UnitOfWork.cs
++++ b/Kavita.Database/UnitOfWork.cs
+@@ -1,5 +1,4 @@
+ ﻿using System;
+-using System.Data;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using AutoMapper;
+@@ -92,16 +91,9 @@ public class UnitOfWork : IUnitOfWork
+     public IReadingListRemapRuleRepository RemapRuleRepository { get; }
+     public IKavitaPlusAuditRepository KavitaPlusAuditRepository { get; }
+ 
+-    /// <summary>
+-    /// Commits pending changes inside an IMMEDIATE SQLite transaction so writer contention
+-    /// waits on the writer lock (via busy_timeout) instead of failing with SQLITE_BUSY_SNAPSHOT.
+-    /// </summary>
+     public async Task<bool> CommitAsync(CancellationToken ct = default)
+     {
+-        await using var tx = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+-        var result = await _context.SaveChangesAsync(ct) > 0;
+-        await tx.CommitAsync(ct);
+-        return result;
++        return await _context.SaveChangesAsync(ct) > 0;
+     }
+ 
+     /// <summary>
+-- 
+2.47.3
+
+
+From b8f53ea5e323cdc5ce5b32d2cc5faf5863f44626 Mon Sep 17 00:00:00 2001
+From: suikano1304 <suikano1304@users.noreply.github.com>
+Date: Tue, 9 Jun 2026 20:20:52 +0900
+Subject: [PATCH 3/3] test: align parser tests with GDS text support
+
+---
+ Kavita.Services.Tests/DirectoryServiceTests.cs     | 2 +-
+ Kavita.Services.Tests/Parsing/MangaParsingTests.cs | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Kavita.Services.Tests/DirectoryServiceTests.cs b/Kavita.Services.Tests/DirectoryServiceTests.cs
+index 7839b9326..441076865 100644
+--- a/Kavita.Services.Tests/DirectoryServiceTests.cs
++++ b/Kavita.Services.Tests/DirectoryServiceTests.cs
+@@ -1046,7 +1046,7 @@ public class DirectoryServiceTests: AbstractFsTest
+ 
+         var allFiles = ds.ScanFiles("C:/Data/", Parser.SupportedExtensions);
+ 
+-        Assert.Equal(5, allFiles.Count);
++        Assert.Equal(6, allFiles.Count);
+ 
+         return Task.CompletedTask;
+     }
+diff --git a/Kavita.Services.Tests/Parsing/MangaParsingTests.cs b/Kavita.Services.Tests/Parsing/MangaParsingTests.cs
+index 19ae5c18f..539142861 100644
+--- a/Kavita.Services.Tests/Parsing/MangaParsingTests.cs
++++ b/Kavita.Services.Tests/Parsing/MangaParsingTests.cs
+@@ -440,7 +440,7 @@ public class MangaParsingTests
+     [Theory]
+     [InlineData("image.png", MangaFormat.Image)]
+     [InlineData("image.cbz", MangaFormat.Archive)]
+-    [InlineData("image.txt", MangaFormat.Unknown)]
++    [InlineData("image.txt", MangaFormat.Text)]
+     public void ParseFormatTest(string inputFile, MangaFormat expected)
+     {
+         Assert.Equal(expected, Parser.ParseFormat(inputFile));
+-- 
+2.47.3
+

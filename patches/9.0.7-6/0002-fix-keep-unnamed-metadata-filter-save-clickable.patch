@@ -1,0 +1,53 @@
+From 980a3db642b45bba13d25d87a804700e79fa2af8 Mon Sep 17 00:00:00 2001
+From: suikano1304 <suikano1304@users.noreply.github.com>
+Date: Thu, 11 Jun 2026 17:13:55 +0900
+Subject: [PATCH] fix: keep unnamed metadata filter save clickable
+
+---
+ .../src/app/metadata-filter/metadata-filter.component.html | 7 +++----
+ .../src/app/metadata-filter/metadata-filter.component.ts   | 4 ++++
+ 2 files changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/UI/Web/src/app/metadata-filter/metadata-filter.component.html b/UI/Web/src/app/metadata-filter/metadata-filter.component.html
+index 1ed768299..a7dc49fd1 100644
+--- a/UI/Web/src/app/metadata-filter/metadata-filter.component.html
++++ b/UI/Web/src/app/metadata-filter/metadata-filter.component.html
+@@ -75,12 +75,12 @@
+   <ng-template #buttons>
+     <!-- TODO: I might want to put a Clear button which blanks out the whole filter -->
+     <div class="col-md-6 col-sm-6 mt-4 pt-2 d-flex justify-content-between">
+-      <button class="btn btn-secondary col-6 me-1" (click)="clear()"><i class="fa-solid fa-arrow-rotate-left me-1" aria-hidden="true"></i>{{t('reset')}}</button>
+-      <button class="btn btn-primary col-6" (click)="apply()"><i class="fa-solid fa-play me-1" aria-hidden="true"></i>{{t('apply')}}</button>
++      <button type="button" class="btn btn-secondary col-6 me-1" (click)="clear()"><i class="fa-solid fa-arrow-rotate-left me-1" aria-hidden="true"></i>{{t('reset')}}</button>
++      <button type="button" class="btn btn-primary col-6" (click)="apply()"><i class="fa-solid fa-play me-1" aria-hidden="true"></i>{{t('apply')}}</button>
+     </div>
+     <div class="col-md-2 col-sm-6 mt-4 pt-2">
+       <div class="d-flex flex-grow-1"> <!-- TODO: How can we make this wider (col-12, old behv) if no extra buttons are present -->
+-        <button class="btn btn-primary" (click)="save()" [disabled]="filterSettings().saveDisabled">
++        <button type="button" class="btn btn-primary" (click)="save()" [disabled]="isSaveDisabled()">
+           <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>
+           {{t('save')}}
+         </button>
+@@ -89,4 +89,3 @@
+     </div>
+   </ng-template>
+ </ng-container>
+-
+diff --git a/UI/Web/src/app/metadata-filter/metadata-filter.component.ts b/UI/Web/src/app/metadata-filter/metadata-filter.component.ts
+index 7b1de0270..d0701b17b 100644
+--- a/UI/Web/src/app/metadata-filter/metadata-filter.component.ts
++++ b/UI/Web/src/app/metadata-filter/metadata-filter.component.ts
+@@ -230,6 +230,10 @@ export class MetadataFilterComponent<TFilter extends number = number, TSort exte
+     this.cdRef.markForCheck();
+   }
+ 
++  isSaveDisabled() {
++    return this.filterSettings().saveDisabled;
++  }
++
+   save() {
+     if (!this.filterV2) return;
+     this.filterV2.name = this.sortGroup.get('name')?.value?.trim() || '';
+-- 
+2.47.3
+

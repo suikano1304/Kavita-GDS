@@ -1,0 +1,29 @@
+services:
+  kavita:
+    image: ghcr.io/suikano1304/kavita-gds:9.0.10-3
+    container_name: kavita
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "5657:5000"
+    volumes:
+      # Change this to your Kavita config directory.
+      - /your/kavita/config:/kavita/config
+      - type: bind
+        # Change this to your read-only GDS/rclone/media mount.
+        source: /your/gds/mount
+        target: /mnt/gds
+        read_only: true
+        bind:
+          propagation: rslave
+    environment:
+      PUID: "0"
+      PGID: "0"
+      TZ: "${TZ:-Asia/Seoul}"
+      WAIT_ANCHOR_DIRS: "${KAVITA_WAIT_ANCHOR_DIRS:-/mnt/gds/READING_ROOT}"
+    logging:
+      driver: json-file
+      options:
+        max-size: "1024k"
+        max-file: "5"

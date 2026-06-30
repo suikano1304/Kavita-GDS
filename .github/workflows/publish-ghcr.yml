@@ -1,0 +1,56 @@
+name: Publish GHCR multi-arch OCI image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: GHCR image tag to publish
+        required: true
+      release_asset_url:
+        description: GitHub Release OCI archive URL
+        required: true
+      release_asset_sha256:
+        description: SHA256 of the OCI archive
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/kavita-gds
+  IMAGE_TAG: ${{ inputs.image_tag }}
+  RELEASE_ASSET_URL: ${{ inputs.release_asset_url }}
+  RELEASE_ASSET_SHA256: ${{ inputs.release_asset_sha256 }}
+  OCI_ARCHIVE_PATH: docker-image/kavita-gds.oci.tar
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Download release package
+        run: |
+          curl -L -o kavita-gds-oci.tar.gz "$RELEASE_ASSET_URL"
+          echo "$RELEASE_ASSET_SHA256  kavita-gds-oci.tar.gz" | sha256sum -c -
+          tar -xzf kavita-gds-oci.tar.gz
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ github.token }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish version tag
+        run: |
+          skopeo --tmpdir "$RUNNER_TEMP" copy --all \
+            "oci-archive:${OCI_ARCHIVE_PATH}" \
+            "docker://${IMAGE_NAME}:${IMAGE_TAG}"
+
+      - name: Publish latest tag
+        run: |
+          skopeo --tmpdir "$RUNNER_TEMP" copy --all \
+            "oci-archive:${OCI_ARCHIVE_PATH}" \
+            "docker://${IMAGE_NAME}:latest"

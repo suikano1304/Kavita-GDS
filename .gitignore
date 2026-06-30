@@ -1,0 +1,6 @@
+*.tar
+*.tar.gz
+*.oci
+*.docker
+*.log
+
