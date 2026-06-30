@@ -50,7 +50,7 @@ GHCR는 Docker buildx `--push`로 직접 publish했습니다.
 
 ## 검증 내용
 
-- official `0.9.0.12` nightly source에 기존 GDS patch set을 포팅했습니다.
+- official `0.9.0.12` nightly source에 기존 GDS patch set(41커밋)을 포팅했습니다.
 - upstream `0.9.0.12`의 변경사항을 유지했습니다.
 - `0.9.0.12-1`에는 `9.0.10-3`까지의 WebUI, reader/cache, scanner, cover 관련 GDS hotfix와 `0.9.0.12` official base port를 포함했습니다.
 - 웹소설 파일명 completion marker와 range marker 인식을 보강했고, WebUI 우측 JumpBar/list 클릭 스크롤과 한국어 `Ended` 표시를 보정했습니다.

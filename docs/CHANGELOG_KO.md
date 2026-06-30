@@ -6,6 +6,18 @@
 
 참고: 운영 컨테이너가 이전 태그를 계속 쓰는 경우, source/release/운영 기준이 다시 달라질 수 있습니다. 운영 검증은 적용 전 baseline과 적용 후 postflight를 같은 진단 스크립트로 비교하세요.
 
+## 2026-06-28: `0.9.0.12` official `0.9.0.12` nightly 포팅 릴리스
+
+아래 변경은 공개 릴리스 태그 `0.9.0.12`에 포함했습니다.
+
+- official Kavita `0.9.0.12` nightly를 새 base로 사용하고 기존 GDS patch set(41커밋)을 포팅했습니다.
+- upstream `0.9.0.12`의 변경사항을 유지했습니다.
+- `ImageService.cs`: upstream thumbnailHeight 파라미터 + GDS CreateTitleCover 공존 (6-arg 시그니처).
+- GHCR `0.9.0.12`와 `latest`는 같은 multi-arch manifest digest `sha256:e6c12f19a77edb051eeb439c9655ae650133e08baf1c7df70ec4e682b298bd61`로 push했습니다.
+- 포함 플랫폼은 `linux/amd64`, `linux/arm64`, `linux/arm/v7`입니다.
+- Windows .NET 10 SDK 10.0.301 + node v23 + Docker Desktop buildx `gdswin`으로 빌드했습니다.
+- 운영 컨테이너를 `9.0.10-3`에서 `0.9.0.12`로 교체했고 `/api/health=Ok`, Docker health `healthy`를 확인했습니다.
+
 ## 2026-06-30: `0.9.0.12-1` GDS mtime 우회 핫픽스
 
 - rclone FUSE 마운트(`--dir-cache-time=1000h`)에서 디렉터리 mtime이 마운트 시점에 고정되어 Library Scan이 신규 파일을 감지하지 못하는 문제를 수정했습니다.

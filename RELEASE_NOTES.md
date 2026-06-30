@@ -30,6 +30,15 @@ GHCR is the primary distribution channel for this release. Use the unified versi
 - Windows qemu smoke for `linux/arm64` image reached container startup.
 - Production `kavita` was rolled to `0.9.0.12-1` and verified with `/api/health` `Ok`, Docker health `healthy`.
 
+## Previous `0.9.0.12` Port
+
+- Built from the official Kavita `0.9.0.12` nightly source with the GDS patch set (41 commits) ported forward.
+- Resolved merge conflicts: `ImageService.cs` (upstream thumbnailHeight + GDS CreateTitleCover 6-arg signature), `GdsCoverServiceTests.cs` (mock 5-arg→6-arg).
+- Published GHCR `0.9.0.12` and `latest` as one multi-arch manifest covering `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+- Manifest digest: `sha256:e6c12f19a77edb051eeb439c9655ae650133e08baf1c7df70ec4e682b298bd61`.
+- Windows .NET 10 SDK 10.0.301 + node v23 + Docker Desktop buildx `gdswin`.
+- Production `kavita` was rolled from `9.0.10-3` to `0.9.0.12` and verified healthy.
+
 ## Previous `9.0.10-3` Verification
 
 - Built from the official Kavita `0.9.0.7` nightly source with the GDS patch set ported forward.
