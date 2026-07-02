@@ -1524,6 +1524,7 @@ public class ExternalMetadataService : IExternalMetadataService
 
         var from = chapter.TitleName;
         chapter.TitleName = title;
+        chapter.NormalizedTitleName = title.ToNormalized();
         chapter.AddKPlusOverride(MetadataSettingField.ChapterTitle);
 
         return (true, new MetadataFieldChangeDto(MetadataFieldChangeKind.Title, from, title));
@@ -1725,11 +1726,13 @@ public class ExternalMetadataService : IExternalMetadataService
             if (validSynonyms.Count == 0) return (false, null);
 
             series.LocalizedName = validSynonyms[^1];
+            series.NormalizedLocalizedName = series.LocalizedName.ToNormalized();
             series.LocalizedNameLocked = true;
         }
         else if (IsRomanCharacters(externalMetadata.Name))
         {
             series.LocalizedName = externalMetadata.Name;
+            series.NormalizedLocalizedName = series.LocalizedName.ToNormalized();
             series.LocalizedNameLocked = true;
         }
 

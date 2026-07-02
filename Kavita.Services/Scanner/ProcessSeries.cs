@@ -1049,6 +1049,7 @@ public class ProcessSeries(
         if (!chapter.TitleNameLocked)
         {
             chapter.TitleName = comicInfo.Title.Trim();
+            chapter.NormalizedTitleName = chapter.TitleName.ToNormalized();
         }
 
         if (!chapter.SummaryLocked)

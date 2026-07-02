@@ -10,6 +10,10 @@ public class Library : IEntityDate, IHasCoverImage
 {
     public int Id { get; set; }
     public required string Name { get; set; }
+    /// <summary>
+    /// Used internally for whitespace/case-insensitive name matching. <see cref="Kavita.Common.Extensions.StringExtensions.ToNormalized"/>
+    /// </summary>
+    public string NormalizedName { get; set; } = string.Empty;
     public string? CoverImage { get; set; }
     public string PrimaryColor { get; set; }
     public string SecondaryColor { get; set; }

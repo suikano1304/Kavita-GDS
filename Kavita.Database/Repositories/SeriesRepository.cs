@@ -252,7 +252,8 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
                 (EF.Functions.Like(s.Name, $"%{searchQuery}%")
                  || (s.OriginalName != null && EF.Functions.Like(s.OriginalName, $"%{searchQuery}%"))
                  || (s.LocalizedName != null && EF.Functions.Like(s.LocalizedName, $"%{searchQuery}%"))
-                 || EF.Functions.Like(s.NormalizedName, $"%{searchQueryNormalized}%")))
+                 || EF.Functions.Like(s.NormalizedName, $"%{searchQueryNormalized}%")
+                 || EF.Functions.Like(s.NormalizedLocalizedName, $"%{searchQueryNormalized}%")))
             .WhereIf(hasYearInQuery, s =>
                 s.Metadata.ReleaseYear == yearComparison
                 || s.Name.Contains(justYear)
@@ -362,6 +363,7 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
                 .Where(c => c.Volume.Series.LibraryId > 0 && // Ensure navigation works
                             libraryIds.Contains(c.Volume.Series.LibraryId))
                 .Where(c => EF.Functions.Like(c.TitleName, $"%{searchQuery}%")
+                            || EF.Functions.Like(c.NormalizedTitleName, $"%{searchQueryNormalized}%")
                             || EF.Functions.Like(c.ISBN, $"%{searchQuery}%")
                             || EF.Functions.Like(c.Range, $"%{searchQuery}%"));
 
