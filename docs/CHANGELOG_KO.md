@@ -2,9 +2,18 @@
 
 기준 버전: `kavita-gds-0.9.0.2-scan-20260528`
 
-현재 공개 릴리즈: `0.9.0.12-3`
+현재 공개 릴리즈: `0.9.0.12-4`
 
 참고: 운영 컨테이너가 이전 태그를 계속 쓰는 경우, source/release/운영 기준이 다시 달라질 수 있습니다. 운영 검증은 적용 전 baseline과 적용 후 postflight를 같은 진단 스크립트로 비교하세요.
+
+## 2026-07-03: `0.9.0.12-4` GDS 스캔 메모리 및 최신성 정렬 보강
+
+- GDS 전체 스캔 처리 단계에서 `ParserInfo`/`ComicInfo` 목록을 끝까지 보관하지 않도록, 삭제 감지용 `ParsedSeries` 키와 실제 처리 대상 키를 분리했습니다.
+- fingerprint가 같아 skip된 series는 즉시 parser metadata 참조를 비우고, 처리 대상 series도 한 series 처리 직후 참조를 비워 대형 라이브러리 스캔 중 유지되는 heap을 줄였습니다.
+- GDS 경로는 전체 `toProcess` 묶음을 만들지 않고 series 단위 저메모리 순차 처리 루프를 사용합니다.
+- 사용자-facing "마지막 수정" 기준인 `ContentLastModified`가 파일 timestamp뿐 아니라 새 Chapter/MangaFile의 DB 생성 시각도 포함합니다. 파일 timestamp가 과거로 보존된 신규 콘텐츠도 최근 항목으로 정렬될 수 있습니다.
+- 홈 "최근 업데이트 시리즈"에서 전체 목록으로 이동할 때 `LastChapterAdded`가 아니라 라이브러리의 "마지막 수정"과 같은 `LastModifiedDate` desc 정렬을 사용합니다.
+- `kavita.yaml`/sidecar 변경은 fingerprint mismatch를 일으키지만, sidecar 자체 변경 시각은 사용자-facing "마지막 수정" 날짜에 포함하지 않습니다.
 
 ## 2026-07-03: `0.9.0.12-3` GDS 스캔 fingerprint 및 콘텐츠 수정일 분리
 

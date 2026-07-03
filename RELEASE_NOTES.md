@@ -2,9 +2,28 @@
 
 This release provides the Kavita official `0.9.0.12` nightly based GDS build as a GHCR multi-arch Docker image.
 
-Version: `0.9.0.12-3`
+Version: `0.9.0.12-4`
 
 ## Verification
+
+- **GDS scan memory reduction**: GDS scans now keep only lightweight series keys for the processing queue. ParserInfo/ComicInfo lists are cleared as soon as a series is skipped or processed, reducing retained heap during large library scans.
+- **GDS scan memory checkpoints**: The low-memory GDS path now logs managed heap, working set, and private memory after forced compacting GC at scan start, every 25 processed series, and scan completion so memory recovery can be verified from logs.
+- **Last Modified includes newly added content**: The content date used by "Last Modified" sorting now includes chapter/file database creation time in addition to file write/create timestamps. Newly imported content can surface correctly even when the underlying files preserve older filesystem timestamps.
+- **Dashboard alignment**: Opening the dashboard "Recently Updated Series" stream now routes to the same Last Modified sort used by library/all-series browsing.
+- Windows build validation confirmed .NET Release build and production Angular WebUI build.
+- `tkavita` and production rollout validation confirmed `/api/health` `Ok`, Docker health `healthy`, and hashed WebUI assets served with HTTP 200.
+
+## Publish Evidence
+
+- GHCR `0.9.0.12-4` and `latest` multi-arch manifest digest: `sha256:2d5d15bab9014407a03940c34edb13ea90348d31b938d7b402bdab56476bade8`.
+- Per-platform manifests:
+  - `linux/amd64`: `sha256:74bd796c8e7dbed7e436520caa1905be6cb9f648c26e60f3b0d6f1e7231f0ae7`
+  - `linux/arm64`: `sha256:28c4b1cd896f36062bfeedd0ebb68c5b2ac8997160dc3b67690c7f19628b642e`
+  - `linux/arm/v7`: `sha256:a920c7cdd549ba96304ba7d7200b0f537c08df7ed3d647e0a94750a4fb2a3444`
+- Rebuilt the final image with the production WebUI hash configuration; `tkavita` and production both served hashed JS/CSS assets with HTTP 200.
+- Pushed GHCR startup smoke returned `/api/health` `Ok` for `linux/amd64`, `linux/arm64`, and `linux/arm/v7` under Windows Docker Desktop/qemu.
+
+## Previous `0.9.0.12-3` Verification
 
 - **GDS scan fingerprint optimization**: GDS library scans still enumerate directories/files to avoid missing new content, but now skip `ProcessSeries` for unchanged series by comparing a per-series fingerprint built from file path, size, timestamps, format, and sidecar state.
 - **Content-based last modified sorting**: Added a separate content-last-modified date based on actual series files. The "Last Modified" sort and JumpBar date now use content file timestamps instead of the database scan/update timestamp. `kavita.yaml` changes still invalidate the scan fingerprint but do not update the user-facing content date.
@@ -13,7 +32,7 @@ Version: `0.9.0.12-3`
 - `tkavita` validation confirmed `/api/health` `Ok`, Docker health `healthy`, Series API `contentLastModified`, and GDS fingerprint skip logs on a copied fixture.
 - Production `kavita` was rolled to `0.9.0.12-3` and verified with `/api/health` `Ok`, Docker health `healthy`, and the new `Series` migration columns present.
 
-## Publish Evidence
+## Previous `0.9.0.12-3` Publish Evidence
 
 - GHCR `0.9.0.12-3` and `latest` multi-arch manifest digest: `sha256:fc773b9e217366663c3cf7c1f6b8a107cdd9439def97d2b8fe41fd04cadc4c78`.
 - Per-platform manifests:

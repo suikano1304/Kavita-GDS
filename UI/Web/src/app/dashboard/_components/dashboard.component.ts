@@ -330,7 +330,7 @@ export class DashboardComponent {
       params['title'] = translate('dashboard.recently-updated-title');
       const filter = this.metadataService.createDefaultFilterDto('series');
       if (filter.sortOptions) {
-        filter.sortOptions.sortField = SeriesSortField.LastChapterAdded;
+        filter.sortOptions.sortField = SeriesSortField.LastModified;
         filter.sortOptions.isAscending = false;
       }
       this.filterUtilityService.applyFilterWithParams(['all-series'], filter, params).subscribe();

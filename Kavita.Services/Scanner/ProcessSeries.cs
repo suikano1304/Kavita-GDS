@@ -177,10 +177,11 @@ public class ProcessSeries(
 
             var isGdsLibrary = library.Type == LibraryType.GDS;
             var gdsScanState = GdsScanFingerprintHelper.Calculate(parsedInfos, isGdsLibrary);
-            if (gdsScanState.ContentLastModifiedUtc > DateTime.MinValue)
+            var contentLastModifiedUtc = GetSeriesContentActivityUtc(series, gdsScanState.ContentLastModifiedUtc);
+            if (contentLastModifiedUtc > DateTime.MinValue)
             {
-                series.ContentLastModifiedUtc = gdsScanState.ContentLastModifiedUtc;
-                series.ContentLastModified = gdsScanState.ContentLastModifiedUtc.ToLocalTime();
+                series.ContentLastModifiedUtc = contentLastModifiedUtc;
+                series.ContentLastModified = contentLastModifiedUtc.ToLocalTime();
             }
 
             if (isGdsLibrary)
@@ -1174,6 +1175,30 @@ public class ProcessSeries(
         {
             logger.LogError(ex, "There was an error updating the chapter tags");
         }
+    }
+
+    private static DateTime GetSeriesContentActivityUtc(Series series, DateTime fileSystemContentLastModifiedUtc)
+    {
+        var latest = fileSystemContentLastModifiedUtc;
+
+        foreach (var chapter in series.Volumes.SelectMany(volume => volume.Chapters))
+        {
+            latest = MaxDate(latest, chapter.CreatedUtc);
+
+            foreach (var file in chapter.Files)
+            {
+                latest = MaxDate(latest, file.LastModifiedUtc);
+                latest = MaxDate(latest, file.FileCreatedUtc);
+                latest = MaxDate(latest, file.CreatedUtc);
+            }
+        }
+
+        return latest;
+    }
+
+    private static DateTime MaxDate(DateTime left, DateTime right)
+    {
+        return left >= right ? left : right;
     }
 
     private async Task<Dictionary<string, Person>> LoadAndCreateMissingChapterPeople(Series series, IList<ParserInfo> parserInfos)

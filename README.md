@@ -22,14 +22,16 @@ your reading collection with your friends and family!
 
 ## Kavita-GDS Fork Release
 
-This fork publishes GDS-focused Kavita builds through GHCR. The current public release is `0.9.0.12-3`, based on the official Kavita `0.9.0.12` nightly source plus the GDS patch stack.
+This fork publishes GDS-focused Kavita builds through GHCR. The current public release is `0.9.0.12-4`, based on the official Kavita `0.9.0.12` nightly source plus the GDS patch stack.
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-3
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-4
 ```
 
-The `0.9.0.12-3` release includes:
+The `0.9.0.12-4` release includes:
 
+- Lower-memory GDS processing that releases parsed series metadata after each skipped or processed series.
+- "Last Modified" sorting that treats newly added content as content activity, so newly imported files with old filesystem timestamps can still surface correctly.
 - GDS scan fingerprints so unchanged series can skip expensive processing without relying on folder mtime skip behavior.
 - Content-file based "Last Modified" sorting and JumpBar dates, separate from DB entity update time.
 - Cached `kavita.yaml`/`kavita.yml` reads during scan passes.

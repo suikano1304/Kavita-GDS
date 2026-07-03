@@ -700,6 +700,7 @@ public class ScannerService(
         var forceFileSystemScan = forceUpdate;
         var (scanElapsedTime, parsedSeries) = await ScanFiles(library, libraryFolderPaths,
             shouldUseLibraryScan, forceFileSystemScan);
+        var foundSeries = parsedSeries.Keys.ToList();
 
         // We need to remove any keys where there is no actual parser info
         logger.LogDebug("[ScannerService] Library {LibraryName} Step 2: Process and Update Database", library.Name);
@@ -725,7 +726,7 @@ public class ScannerService(
             }
 
             logger.LogDebug("[ScannerService] Library {LibraryName} Step 5: Remove Deleted Series", library.Name);
-            await RemoveSeriesNotFound(parsedSeries, library);
+            await RemoveSeriesNotFound(foundSeries, library);
         }
         else
         {
@@ -742,13 +743,13 @@ public class ScannerService(
             library.Name, sw.ElapsedMilliseconds);
     }
 
-    private async Task RemoveSeriesNotFound(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, Library library)
+    private async Task RemoveSeriesNotFound(IList<ParsedSeries> parsedSeries, Library library)
     {
         try
         {
             logger.LogDebug("[ScannerService] Removing series that were not found during the scan");
 
-            var removedSeries = await unitOfWork.SeriesRepository.RemoveSeriesNotInListAsync(parsedSeries.Keys.ToList(), library.Id);
+            var removedSeries = await unitOfWork.SeriesRepository.RemoveSeriesNotInListAsync(parsedSeries, library.Id);
             logger.LogDebug("[ScannerService] Found {Count} series to remove: {SeriesList}",
                 removedSeries.Count, string.Join(", ", removedSeries.Select(s => s.Name)));
 
@@ -775,21 +776,16 @@ public class ScannerService(
 
     private async Task<int> ProcessParsedSeries(bool forceUpdate, Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, Library library, long scanElapsedTime)
     {
+        if (library.Type == LibraryType.GDS)
+        {
+            return await ProcessParsedGdsSeries(forceUpdate, parsedSeries, library, scanElapsedTime);
+        }
+
         // Iterate over the dictionary and remove only the ParserInfos that don't need processing
         var toProcess = new Dictionary<ParsedSeries, IList<ParserInfo>>();
         var scanSw = Stopwatch.StartNew();
 
         var settings = await unitOfWork.SettingsRepository.GetMetadataSettingDto();
-        Dictionary<string, SeriesScanFingerprintInfo> gdsFingerprintInfo = [];
-        if (library.Type == LibraryType.GDS && !forceUpdate)
-        {
-            gdsFingerprintInfo = (await unitOfWork.SeriesRepository.GetGdsScanFingerprintInfoAsync(library.Id))
-                .GroupBy(info => GdsScanFingerprintHelper.BuildKey(info.NormalizedName, info.Format))
-                .Where(group => group.Count() == 1)
-                .ToDictionary(
-                    group => group.Key,
-                    group => group.Single());
-        }
 
         foreach (var series in parsedSeries)
         {
@@ -804,21 +800,6 @@ public class ScannerService(
 
             if (validInfos.Count != 0)
             {
-                if (library.Type == LibraryType.GDS && !forceUpdate &&
-                    gdsFingerprintInfo.TryGetValue(
-                        GdsScanFingerprintHelper.BuildKey(series.Key.NormalizedName, series.Key.Format),
-                        out var existingFingerprint))
-                {
-                    var currentFingerprint = GdsScanFingerprintHelper.Calculate(validInfos);
-                    if (existingFingerprint.GdsScanFingerprintVersion == GdsScanFingerprintHelper.FingerprintVersion &&
-                        string.Equals(existingFingerprint.GdsScanFingerprint, currentFingerprint.Fingerprint,
-                            StringComparison.Ordinal))
-                    {
-                        logger.LogDebug("[ScannerService] Skipping unchanged GDS series {SeriesName} by scan fingerprint", series.Key.Name);
-                        continue;
-                    }
-                }
-
                 toProcess[series.Key] = validInfos;
             }
         }
@@ -855,6 +836,80 @@ public class ScannerService(
         var totalFiles = await ProcessParserInfo(settings, toProcess.Values.ToList(), library, forceUpdate);
 
         logger.LogInformation("[ScannerService] Finished scan in {ScanAndUpdateTime} milliseconds.", scanSw.ElapsedMilliseconds + scanElapsedTime);
+
+        return totalFiles;
+    }
+
+    private async Task<int> ProcessParsedGdsSeries(bool forceUpdate, Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries,
+        Library library, long scanElapsedTime)
+    {
+        var scanSw = Stopwatch.StartNew();
+        var settings = await unitOfWork.SettingsRepository.GetMetadataSettingDto();
+        var seriesKeys = parsedSeries.Keys.ToList();
+        var keysToProcess = new List<ParsedSeries>();
+        Dictionary<string, SeriesScanFingerprintInfo> gdsFingerprintInfo = [];
+
+        if (!forceUpdate)
+        {
+            gdsFingerprintInfo = (await unitOfWork.SeriesRepository.GetGdsScanFingerprintInfoAsync(library.Id))
+                .GroupBy(info => GdsScanFingerprintHelper.BuildKey(info.NormalizedName, info.Format))
+                .Where(group => group.Count() == 1)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Single());
+        }
+
+        foreach (var seriesKey in seriesKeys)
+        {
+            if (!parsedSeries.TryGetValue(seriesKey, out var parserInfos))
+            {
+                continue;
+            }
+
+            if (!seriesKey.HasChanged)
+            {
+                logger.LogDebug("{Series} hasn't changed", seriesKey.Name);
+                parsedSeries[seriesKey] = [];
+                continue;
+            }
+
+            var validInfos = parserInfos.Where(info => !string.IsNullOrEmpty(info.Filename)).ToList();
+            if (validInfos.Count == 0)
+            {
+                parsedSeries[seriesKey] = [];
+                continue;
+            }
+
+            if (!forceUpdate &&
+                gdsFingerprintInfo.TryGetValue(
+                    GdsScanFingerprintHelper.BuildKey(seriesKey.NormalizedName, seriesKey.Format),
+                    out var existingFingerprint))
+            {
+                var currentFingerprint = GdsScanFingerprintHelper.Calculate(validInfos);
+                if (existingFingerprint.GdsScanFingerprintVersion == GdsScanFingerprintHelper.FingerprintVersion &&
+                    string.Equals(existingFingerprint.GdsScanFingerprint, currentFingerprint.Fingerprint,
+                        StringComparison.Ordinal))
+                {
+                    logger.LogDebug("[ScannerService] Skipping unchanged GDS series {SeriesName} by scan fingerprint", seriesKey.Name);
+                    parsedSeries[seriesKey] = [];
+                    continue;
+                }
+            }
+
+            parsedSeries[seriesKey] = validInfos;
+            keysToProcess.Add(seriesKey);
+        }
+
+        logger.LogInformation("[ScannerService] Found {SeriesCount} Series that need processing in {Time} ms",
+            keysToProcess.Count, scanSw.ElapsedMilliseconds + scanElapsedTime);
+
+        seriesKeys.Clear();
+        gdsFingerprintInfo.Clear();
+
+        var totalFiles = await ProcessGdsParserInfoByKey(settings, parsedSeries, keysToProcess, library, forceUpdate);
+
+        logger.LogInformation("[ScannerService] Finished scan in {ScanAndUpdateTime} milliseconds.",
+            scanSw.ElapsedMilliseconds + scanElapsedTime);
 
         return totalFiles;
     }
@@ -973,6 +1028,119 @@ public class ScannerService(
             toProcess.Count, sw.ElapsedMilliseconds);
 
         return totalFiles;
+    }
+
+    private async Task<int> ProcessGdsParserInfoByKey(MetadataSettingsDto settings,
+        Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, IList<ParsedSeries> keysToProcess,
+        Library library, bool forceUpdate)
+    {
+        var sw = Stopwatch.StartNew();
+        var serverSettings = await unitOfWork.SettingsRepository.GetSettingsDtoAsync();
+        var totalFiles = 0;
+        var seriesLeftToProcess = keysToProcess.Count;
+        var totalSeriesToProcess = keysToProcess.Count;
+        var processedSeriesCount = 0;
+
+        logger.LogInformation(
+            "[ScannerService] Using low-memory sequential GDS scan path for {LibraryName}. Series to process: {SeriesCount}",
+            library.Name, totalSeriesToProcess);
+        LogGdsMemoryCheckpoint(library.Name, processedSeriesCount, totalSeriesToProcess);
+
+        foreach (var seriesKey in keysToProcess)
+        {
+            IList<ParserInfo> pSeries = [];
+            try
+            {
+                if (!parsedSeries.TryGetValue(seriesKey, out var parserInfos))
+                {
+                    continue;
+                }
+
+                pSeries = parserInfos.Any(info => string.IsNullOrEmpty(info.Filename))
+                    ? parserInfos.Where(info => !string.IsNullOrEmpty(info.Filename)).ToList()
+                    : parserInfos;
+                if (pSeries.Count == 0)
+                {
+                    continue;
+                }
+
+                totalFiles += pSeries.Count;
+
+                int? seriesId;
+                using (var scope = scopeFactory.CreateScope())
+                {
+                    var scopedUnitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                    var processSeries = scope.ServiceProvider.GetRequiredService<IProcessSeries>();
+
+                    var scopedLibrary = (await scopedUnitOfWork.LibraryRepository.GetLibraryForIdAsync(library.Id,
+                        LibraryIncludes.Folders | LibraryIncludes.FileTypes | LibraryIncludes.ExcludePatterns))!;
+
+                    seriesId = await processSeries.ProcessSeriesAsync(settings, pSeries, new ProcessSeriesArgs
+                    {
+                        Library = scopedLibrary,
+                        LeftToProcess = seriesLeftToProcess,
+                        TotalToProcess = totalSeriesToProcess,
+                        ForceUpdate = forceUpdate,
+                    });
+                }
+
+                if (seriesId != null)
+                {
+                    using var scope = scopeFactory.CreateScope();
+                    var scopedMetadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
+
+                    await scopedMetadataService.GenerateCoversForSeries(serverSettings, library.Id, seriesId.Value, false, false);
+                }
+            }
+            finally
+            {
+                parsedSeries[seriesKey] = [];
+                pSeries = [];
+            }
+
+            processedSeriesCount++;
+            seriesLeftToProcess--;
+
+            if (processedSeriesCount % 25 == 0)
+            {
+                LogGdsMemoryCheckpoint(library.Name, processedSeriesCount, totalSeriesToProcess);
+            }
+        }
+
+        LogGdsMemoryCheckpoint(library.Name, processedSeriesCount, totalSeriesToProcess);
+
+        await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+            MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Ended));
+
+        logger.LogDebug("[ScannerService] Finished low-memory GDS scan path for {Count} series in {Elapsed}ms",
+            keysToProcess.Count, sw.ElapsedMilliseconds);
+
+        return totalFiles;
+    }
+
+    private void LogGdsMemoryCheckpoint(string libraryName, int processedSeriesCount, int totalSeriesToProcess)
+    {
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+
+        var managedBytes = GC.GetTotalMemory(forceFullCollection: false);
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+
+        logger.LogInformation(
+            "[ScannerService] Low-memory GDS checkpoint {Processed}/{Total} series for {LibraryName}: managed={ManagedMemoryMb}MB, workingSet={WorkingSetMb}MB, private={PrivateMemoryMb}MB",
+            processedSeriesCount,
+            totalSeriesToProcess,
+            libraryName,
+            ToMegabytes(managedBytes),
+            ToMegabytes(process.WorkingSet64),
+            ToMegabytes(process.PrivateMemorySize64));
+    }
+
+    private static long ToMegabytes(long bytes)
+    {
+        return bytes / 1024 / 1024;
     }
 
     /// <summary>
