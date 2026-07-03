@@ -63,6 +63,8 @@ public sealed record SeriesDto : IHasReadTimeEstimate, IHasCoverImage, IHasMetad
     public DateTime Created { get; set; }
     /// <inheritdoc cref="API.Entities.Series.LastModified"/>
     public DateTime LastModified { get; set; }
+    /// <inheritdoc cref="API.Entities.Series.ContentLastModified"/>
+    public DateTime ContentLastModified { get; set; }
 
     /// <inheritdoc cref="API.Entities.Series.SortNameLocked"/>
     public bool SortNameLocked { get; set; }

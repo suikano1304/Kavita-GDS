@@ -43,6 +43,10 @@ export interface Series extends IHasCover, IHasReadingTime, IHasProgress, IHasMe
    */
   lastModified: string;
   /**
+   * DateTime the underlying content files in the series were last created or modified
+   */
+  contentLastModified: string;
+  /**
    * Format of the Series
    */
   format: MangaFormat;

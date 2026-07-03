@@ -144,7 +144,7 @@ export class JumpbarService {
       case SeriesSortField.Created:
         return this.getSampledJumpKeys(data, s => this.getDateKey(s.created));
       case SeriesSortField.LastModified:
-        return this.getSampledJumpKeys(data, s => this.getDateKey(s.lastModified || s.created));
+        return this.getSampledJumpKeys(data, s => this.getDateKey(s.contentLastModified || s.lastModified || s.created));
       case SeriesSortField.LastChapterAdded:
         return this.getSampledJumpKeys(data, s => this.getDateKey(s.lastChapterAdded));
       case SeriesSortField.TimeToRead:

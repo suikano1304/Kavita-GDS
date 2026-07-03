@@ -2,9 +2,22 @@
 
 기준 버전: `kavita-gds-0.9.0.2-scan-20260528`
 
-현재 공개 릴리즈: `0.9.0.12-2`
+현재 공개 릴리즈: `0.9.0.12-3`
 
 참고: 운영 컨테이너가 이전 태그를 계속 쓰는 경우, source/release/운영 기준이 다시 달라질 수 있습니다. 운영 검증은 적용 전 baseline과 적용 후 postflight를 같은 진단 스크립트로 비교하세요.
+
+## 2026-07-03: `0.9.0.12-3` GDS 스캔 fingerprint 및 콘텐츠 수정일 분리
+
+- GDS Library Scan은 신규 파일 누락을 막기 위해 폴더 mtime skip을 사용하지 않고 계속 디렉터리/파일을 열거합니다.
+- 열거된 series별 파일 경로, 크기, `LastWriteTimeUtc`, `CreationTimeUtc`, format/확장자, `kavita.yaml`/`kavita.yml`/`.special`/cover sidecar 상태로 scan fingerprint를 계산합니다.
+- 이전 fingerprint와 같은 GDS series는 `ProcessSeries`를 건너뛰어 실제 변경 없는 기존 시리즈 재처리를 줄입니다.
+- `Series.LastModified`는 DB 엔티티 수정일로 유지하고, 실제 콘텐츠 파일 기준 날짜인 `ContentLastModified`를 추가했습니다.
+- WebUI의 "마지막 수정" 정렬과 오른쪽 JumpBar 날짜는 `ContentLastModified`를 사용합니다.
+- `kavita.yaml` 변경은 fingerprint mismatch를 일으켜 재처리 대상이 되지만, 사용자-facing "마지막 수정" 날짜는 바꾸지 않습니다.
+- scan pass 안에서 `kavita.yaml`/`kavita.yml` 파싱을 경로별로 캐시해 remote-backed filesystem의 반복 sidecar 읽기를 줄였습니다.
+- Docker fixture 검증에서 동일 fixture 재스캔은 `Found 0 Series that need processing`, `kavita.yaml`만 변경한 경우 콘텐츠 날짜 유지, 신규 archive 추가 시 콘텐츠 날짜 상승을 확인했습니다.
+- `tkavita` fixture 검증에서 `/api/health=Ok`, Docker health `healthy`, Series API `contentLastModified`, GDS fingerprint skip 로그를 확인했습니다.
+- 프로덕션 `kavita` 롤아웃은 이번 단계에 포함하지 않았습니다.
 
 ## 2026-07-02: `0.9.0.12-2` 한국어 검색 공백/유니코드 정규화 개선 (GDS 자체 패치)
 

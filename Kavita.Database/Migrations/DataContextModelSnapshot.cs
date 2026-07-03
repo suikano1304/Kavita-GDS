@@ -859,6 +859,12 @@ namespace Kavita.Database.Migrations
                     b.Property<string>("Extension")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime>("FileCreated")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("FileCreatedUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("FileName")
                         .HasColumnType("TEXT");
 
@@ -1804,6 +1810,12 @@ namespace Kavita.Database.Migrations
                     b.Property<bool>("CoverImageLocked")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime>("ContentLastModified")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ContentLastModifiedUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("Created")
                         .HasColumnType("TEXT");
 
@@ -2211,6 +2223,12 @@ namespace Kavita.Database.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Format")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("GdsScanFingerprint")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("GdsScanFingerprintVersion")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("HardcoverId")

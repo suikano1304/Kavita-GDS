@@ -175,6 +175,20 @@ public class ProcessSeries(
             // Update series FolderPath here
             await UpdateSeriesFolderPath(parsedInfos, library, series);
 
+            var isGdsLibrary = library.Type == LibraryType.GDS;
+            var gdsScanState = GdsScanFingerprintHelper.Calculate(parsedInfos, isGdsLibrary);
+            if (gdsScanState.ContentLastModifiedUtc > DateTime.MinValue)
+            {
+                series.ContentLastModifiedUtc = gdsScanState.ContentLastModifiedUtc;
+                series.ContentLastModified = gdsScanState.ContentLastModifiedUtc.ToLocalTime();
+            }
+
+            if (isGdsLibrary)
+            {
+                series.GdsScanFingerprint = gdsScanState.Fingerprint;
+                series.GdsScanFingerprintVersion = GdsScanFingerprintHelper.FingerprintVersion;
+            }
+
             series.UpdateLastFolderScanned();
 
             if (unitOfWork.HasChanges())
@@ -935,6 +949,8 @@ public class ProcessSeries(
         {
             // TODO: I wonder if we can simplify this force check.
             existingFile.Format = info.Format;
+            existingFile.FileCreated = fileInfo.CreationTime;
+            existingFile.FileCreatedUtc = fileInfo.CreationTimeUtc;
 
             if (skipExpensiveFileStats && !fileService.HasFileBeenModifiedSince(existingFile.FilePath, existingFile.LastModified))
             {
@@ -950,6 +966,10 @@ public class ProcessSeries(
                 !fileService.HasFileBeenModifiedSince(existingFile.FilePath, existingFile.LastModified) &&
                 existingFile.Pages != 0)
             {
+                existingFile.Extension = fileInfo.Extension.ToLowerInvariant();
+                existingFile.FileName = Parser.RemoveExtensionIfSupported(existingFile.FilePath);
+                existingFile.FilePath = Parser.NormalizePath(existingFile.FilePath);
+                existingFile.Bytes = fileInfo.Length;
                 return;
             }
 

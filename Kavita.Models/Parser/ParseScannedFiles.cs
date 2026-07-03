@@ -24,6 +24,14 @@ public class ParsedSeries
     public bool HasChanged { get; set; }
 }
 
+public sealed record SeriesScanFingerprintInfo
+{
+    public required string NormalizedName { get; init; }
+    public MangaFormat Format { get; init; }
+    public string? GdsScanFingerprint { get; init; }
+    public int GdsScanFingerprintVersion { get; init; }
+}
+
 public class ScanResult
 {
     /// <summary>

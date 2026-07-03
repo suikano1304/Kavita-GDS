@@ -47,6 +47,11 @@ public class MangaFile : IEntityDate
 
     public DateTime CreatedUtc { get; set; }
     public DateTime LastModifiedUtc { get; set; }
+    /// <summary>
+    /// Creation time of the underlying file on disk.
+    /// </summary>
+    public DateTime FileCreated { get; set; }
+    public DateTime FileCreatedUtc { get; set; }
 
     /// <summary>
     /// Last time file analysis ran on this file
@@ -68,6 +73,8 @@ public class MangaFile : IEntityDate
         if (FilePath == null) return;
         LastModified = File.GetLastWriteTime(FilePath);
         LastModifiedUtc = File.GetLastWriteTimeUtc(FilePath);
+        FileCreated = File.GetCreationTime(FilePath);
+        FileCreatedUtc = File.GetCreationTimeUtc(FilePath);
     }
 
     public void UpdateLastFileAnalysis()

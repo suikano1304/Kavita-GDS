@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Kavita.Models.DTOs.Filtering;
 using Kavita.Models.DTOs.Filtering.v2.SortFields;
@@ -29,7 +30,7 @@ public static class SeriesSortExtensions
         {
             SeriesSortField.SortName => query.DoOrderBy(s => s.SortName.ToLower(), sortOptions),
             SeriesSortField.CreatedDate => query.DoOrderBy(s => s.Created, sortOptions),
-            SeriesSortField.LastModifiedDate => query.DoOrderBy(s => s.LastModified, sortOptions),
+            SeriesSortField.LastModifiedDate => query.DoOrderBy(s => s.ContentLastModified == DateTime.MinValue ? s.LastModified : s.ContentLastModified, sortOptions),
             SeriesSortField.LastChapterAdded => query.DoOrderBy(s => s.LastChapterAdded, sortOptions),
             SeriesSortField.TimeToRead => query.DoOrderBy(s => s.AvgHoursToRead, sortOptions),
             SeriesSortField.ReleaseYear => query.DoOrderBy(s => s.Metadata.ReleaseYear, sortOptions),

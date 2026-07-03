@@ -22,6 +22,8 @@ public class MangaFileBuilder : IEntityBuilder<MangaFile>
             Pages = pages,
             LastModified = File.GetLastWriteTime(filePath),
             LastModifiedUtc = File.GetLastWriteTimeUtc(filePath),
+            FileCreated = File.GetCreationTime(filePath),
+            FileCreatedUtc = File.GetCreationTimeUtc(filePath),
             FileName = Parser.RemoveExtensionIfSupported(filePath)
         };
     }
@@ -54,6 +56,13 @@ public class MangaFileBuilder : IEntityBuilder<MangaFile>
     {
         _mangaFile.LastModified = dateTime;
         _mangaFile.LastModifiedUtc = dateTime.ToUniversalTime();
+        return this;
+    }
+
+    public MangaFileBuilder WithFileCreated(DateTime dateTime)
+    {
+        _mangaFile.FileCreated = dateTime;
+        _mangaFile.FileCreatedUtc = dateTime.ToUniversalTime();
         return this;
     }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -14,6 +15,7 @@ namespace Kavita.Services.Helpers;
 public static class GdsMetadataParser
 {
     private static readonly IDeserializer Deserializer = new DeserializerBuilder().Build();
+    private static readonly ConcurrentDictionary<string, CachedYaml> YamlCache = new(StringComparer.OrdinalIgnoreCase);
 
     public static ComicInfo? GetComicInfo(string filePath, ComicInfo? baseInfo = null)
     {
@@ -23,12 +25,8 @@ public static class GdsMetadataParser
         var yamlPath = GetMetadataPath(directory);
         if (string.IsNullOrEmpty(yamlPath)) return baseInfo;
 
-        Dictionary<object, object?>? yaml;
-        try
-        {
-            yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
-        }
-        catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException or InvalidOperationException or ArgumentException)
+        var yaml = GetCachedYaml(yamlPath);
+        if (yaml == null)
         {
             return BuildFallbackComicInfo(filePath, baseInfo);
         }
@@ -114,7 +112,7 @@ public static class GdsMetadataParser
         var fileName = Path.GetFileName(filePath);
         try
         {
-            var yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
+            var yaml = GetCachedYaml(yamlPath);
             if (yaml == null) return false;
             if (!TryGetMap(yaml, "files", out var files)) return false;
 
@@ -269,6 +267,36 @@ public static class GdsMetadataParser
         return File.Exists(yamlPath) ? yamlPath : null;
     }
 
+    private static Dictionary<object, object?>? GetCachedYaml(string yamlPath)
+    {
+        FileInfo? fileInfo = null;
+        try
+        {
+            fileInfo = new FileInfo(yamlPath);
+            if (!fileInfo.Exists) return null;
+
+            if (YamlCache.TryGetValue(yamlPath, out var cached) &&
+                cached.Length == fileInfo.Length &&
+                cached.LastWriteTimeUtc == fileInfo.LastWriteTimeUtc)
+            {
+                return cached.Yaml;
+            }
+
+            var yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
+            YamlCache[yamlPath] = new CachedYaml(fileInfo.Length, fileInfo.LastWriteTimeUtc, yaml);
+            return yaml;
+        }
+        catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException or InvalidOperationException or ArgumentException)
+        {
+            if (fileInfo?.Exists == true)
+            {
+                YamlCache[yamlPath] = new CachedYaml(fileInfo.Length, fileInfo.LastWriteTimeUtc, null);
+            }
+
+            return null;
+        }
+    }
+
     private static void Apply(IReadOnlyDictionary<object, object?> map, string key, Action<string> setter)
     {
         if (!TryGetScalar(map, key, out var value)) return;
@@ -323,4 +351,6 @@ public static class GdsMetadataParser
         title = Regex.Replace(title, @"\s{2,}", " ");
         return title.Trim();
     }
+
+    private sealed record CachedYaml(long Length, DateTime LastWriteTimeUtc, Dictionary<object, object?>? Yaml);
 }

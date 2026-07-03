@@ -1785,6 +1785,22 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
         return map;
     }
 
+    public async Task<IList<SeriesScanFingerprintInfo>> GetGdsScanFingerprintInfoAsync(int libraryId,
+        CancellationToken ct = default)
+    {
+        return await context.Series
+            .Where(s => s.LibraryId == libraryId)
+            .AsNoTracking()
+            .Select(s => new SeriesScanFingerprintInfo
+            {
+                NormalizedName = s.NormalizedName,
+                Format = s.Format,
+                GdsScanFingerprint = s.GdsScanFingerprint,
+                GdsScanFingerprintVersion = s.GdsScanFingerprintVersion
+            })
+            .ToListAsync(ct);
+    }
+
     /// <summary>
     /// Returns the highest Age Rating for a list of Series. Defaults to <see cref="AgeRating.Unknown"/>
     /// </summary>

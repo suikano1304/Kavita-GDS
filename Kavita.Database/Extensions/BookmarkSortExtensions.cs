@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Kavita.Models.DTOs.Filtering;
 using Kavita.Models.DTOs.Filtering.v2.SortFields;
@@ -29,7 +30,7 @@ public static class BookmarkSortExtensions
         {
             SeriesSortField.SortName => query.DoOrderBy(s => s.Series.SortName.ToLower(), sortOptions),
             SeriesSortField.CreatedDate => query.DoOrderBy(s => s.Series.Created, sortOptions),
-            SeriesSortField.LastModifiedDate => query.DoOrderBy(s => s.Series.LastModified, sortOptions),
+            SeriesSortField.LastModifiedDate => query.DoOrderBy(s => s.Series.ContentLastModified == DateTime.MinValue ? s.Series.LastModified : s.Series.ContentLastModified, sortOptions),
             SeriesSortField.LastChapterAdded => query.DoOrderBy(s => s.Series.LastChapterAdded, sortOptions),
             SeriesSortField.TimeToRead => query.DoOrderBy(s => s.Series.AvgHoursToRead, sortOptions),
             SeriesSortField.ReleaseYear => query.DoOrderBy(s => s.Series.Metadata.ReleaseYear, sortOptions),

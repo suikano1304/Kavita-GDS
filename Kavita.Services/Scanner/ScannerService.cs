@@ -780,6 +780,16 @@ public class ScannerService(
         var scanSw = Stopwatch.StartNew();
 
         var settings = await unitOfWork.SettingsRepository.GetMetadataSettingDto();
+        Dictionary<string, SeriesScanFingerprintInfo> gdsFingerprintInfo = [];
+        if (library.Type == LibraryType.GDS && !forceUpdate)
+        {
+            gdsFingerprintInfo = (await unitOfWork.SeriesRepository.GetGdsScanFingerprintInfoAsync(library.Id))
+                .GroupBy(info => GdsScanFingerprintHelper.BuildKey(info.NormalizedName, info.Format))
+                .Where(group => group.Count() == 1)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Single());
+        }
 
         foreach (var series in parsedSeries)
         {
@@ -794,6 +804,21 @@ public class ScannerService(
 
             if (validInfos.Count != 0)
             {
+                if (library.Type == LibraryType.GDS && !forceUpdate &&
+                    gdsFingerprintInfo.TryGetValue(
+                        GdsScanFingerprintHelper.BuildKey(series.Key.NormalizedName, series.Key.Format),
+                        out var existingFingerprint))
+                {
+                    var currentFingerprint = GdsScanFingerprintHelper.Calculate(validInfos);
+                    if (existingFingerprint.GdsScanFingerprintVersion == GdsScanFingerprintHelper.FingerprintVersion &&
+                        string.Equals(existingFingerprint.GdsScanFingerprint, currentFingerprint.Fingerprint,
+                            StringComparison.Ordinal))
+                    {
+                        logger.LogDebug("[ScannerService] Skipping unchanged GDS series {SeriesName} by scan fingerprint", series.Key.Name);
+                        continue;
+                    }
+                }
+
                 toProcess[series.Key] = validInfos;
             }
         }

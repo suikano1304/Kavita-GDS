@@ -2,9 +2,9 @@
 
 ## 목적
 
-Kavita official `0.9.0.12` nightly 기반 GDS 빌드 `0.9.0.12-2`를 Docker/GHCR 배포용으로 패키징했습니다.
+Kavita official `0.9.0.12` nightly 기반 GDS 빌드 `0.9.0.12-3`를 Docker/GHCR 배포용으로 패키징했습니다.
 
-이번 배포는 한국어 검색 공백/유니코드(NFC/NFD) 정규화 개선을 포함하는 GDS 자체 패치입니다. 이전 `0.9.0.12-1`까지의 GDS/rclone 수정과 official Kavita `0.9.0.12` nightly 병합 내용도 그대로 포함합니다. 상세 변경 내역은 [CHANGELOG_KO.md](CHANGELOG_KO.md)를 참고하세요.
+이번 배포는 GDS scan fingerprint 최적화와 콘텐츠 파일 기준 "마지막 수정" 정렬 변경을 포함하는 GDS 자체 패치입니다. 이전 `0.9.0.12-2` 한국어 검색 정규화 개선, `0.9.0.12-1` GDS/rclone 수정과 official Kavita `0.9.0.12` nightly 병합 내용도 그대로 포함합니다. 상세 변경 내역은 [CHANGELOG_KO.md](CHANGELOG_KO.md)를 참고하세요.
 
 ## 포함 플랫폼
 
@@ -17,7 +17,7 @@ Kavita official `0.9.0.12` nightly 기반 GDS 빌드 `0.9.0.12-2`를 Docker/GHCR
 Primary release image:
 
 ```text
-ghcr.io/suikano1304/kavita-gds:0.9.0.12-2
+ghcr.io/suikano1304/kavita-gds:0.9.0.12-3
 ghcr.io/suikano1304/kavita-gds:latest
 ```
 
@@ -32,21 +32,28 @@ kavita-linux-arm.tar.gz
 권장 이미지 태그:
 
 ```text
-ghcr.io/suikano1304/kavita-gds:0.9.0.12-2
+ghcr.io/suikano1304/kavita-gds:0.9.0.12-3
 ```
 
 현재 GHCR 기준:
 
 ```text
-ghcr.io/suikano1304/kavita-gds:0.9.0.12-2
+ghcr.io/suikano1304/kavita-gds:0.9.0.12-3
 ghcr.io/suikano1304/kavita-gds:latest
-multiarch digest=sha256:3ea108084fa6b71a7939d742aa55ff3c9a16cfe608261b90f75e520045b2c3d0
-linux/amd64=sha256:e3ab2aaf34df671c7bcffe8c1d1002ce50b6812a3de99f73028d01854314dda6
-linux/arm64=sha256:fef06bcae28254882c8007340c46be77b574f2d90825cb32f79415bbb0d83ffd
-linux/arm/v7=sha256:c570a08f06df8fb653e1f99827a4cc8475e545795e8e575060b44d281f430dc6
+multiarch digest=sha256:fc773b9e217366663c3cf7c1f6b8a107cdd9439def97d2b8fe41fd04cadc4c78
+linux/amd64=sha256:942c618babfc844a5daba34ca620037d1a5f2871ea62a3cef1f7568342f11b27
+linux/arm64=sha256:652a3fa1d64d1dccf8b202c154e2e306b6c9367239bcbc3d9c954f5fd3ec2dba
+linux/arm/v7=sha256:38387782c6a489a85ae283b0b570588719968df0e61e041b9b07a351a217ed24
 ```
 
-GHCR는 Docker buildx `--push`로 직접 publish했습니다 (`--no-cache` 전체 재빌드).
+GHCR는 Docker buildx `--push`로 직접 publish했습니다.
+
+이전 `0.9.0.12-2` GHCR 기준:
+
+```text
+ghcr.io/suikano1304/kavita-gds:0.9.0.12-2
+multiarch digest=sha256:3ea108084fa6b71a7939d742aa55ff3c9a16cfe608261b90f75e520045b2c3d0
+```
 
 이전 `0.9.0.12-1` GHCR 기준:
 
@@ -57,13 +64,14 @@ multiarch digest=sha256:8ed8199bf1c62b54e629f86e23482d81b43fb2880320b82c9275ea5e
 
 ## 검증 내용
 
+- **`0.9.0.12-3` GDS scan/content-date 검증**: Windows Docker fixture에서 첫 스캔은 처리 대상 1건, 동일 fixture 재스캔은 처리 대상 0건으로 감소함을 확인했습니다. `kavita.yaml`만 변경하면 재처리 대상이 되지만 `ContentLastModified`는 유지되고, 신규 archive 파일 추가 시 `ContentLastModified`가 새 파일 timestamp로 상승함을 확인했습니다. `tkavita` fixture에서도 `/api/health=Ok`, Docker health `healthy`, `contentLastModified` API 응답, fingerprint skip 로그를 확인했습니다.
 - **`0.9.0.12-2` 한국어 검색 정규화 개선**: `ToNormalized()`에 유니코드 NFC 정규화를 추가해 분해형(NFD) 한글 입력도 완성형(NFC) DB 데이터와 매칭되도록 했습니다. `Chapter.NormalizedTitleName`, `Library.NormalizedName` 필드를 추가해 챕터/라이브러리도 Series와 동일하게 띄어쓰기 무관 검색이 가능해졌습니다. `AppUserCollection`/`ReadingList`/`Library` 검색의 정규화 필드 누락·불일치 버그 3건을 수정했습니다. 신규 `ManualMigrateKoreanSearchNormalizationBackfill` 마이그레이션이 서버 시작 시 1회 자동으로 기존 레코드의 정규화 필드를 재계산합니다. `Kavita.Common.Tests`에 `ToNormalized()` 단위 테스트를 추가했습니다.
-- Docker buildx로 `linux/amd64`, `linux/arm64`, `linux/arm/v7` 이미지를 `--no-cache`로 재빌드하여 GHCR에 push했습니다.
+- Docker buildx로 `linux/amd64`, `linux/arm64`, `linux/arm/v7` 이미지를 GHCR에 push했습니다.
 - 로컬 tarball 패키징 시 실행 파일 rename(`Kavita.Server`→`Kavita`)과 `config/appsettings-init.json` 포함을 공식 `build.sh` 규칙과 동일하게 맞췄습니다.
 - push한 이미지를 검증할 때는 로컬 stale 태그를 피하기 위해 `docker rmi <tag> -f` 후 명시적으로 재pull하여 digest 일치를 확인했습니다.
-- `linux/amd64`, `linux/arm64`(qemu), `linux/arm/v7`(qemu, `tonistiigi/binfmt:qemu-v8.1.5` arm 핸들러로 uninstall 후 재install) 각각 pushed GHCR unified tag의 `/api/health` `Ok`, Docker health `healthy`를 확인했습니다.
+- pushed GHCR unified tag smoke에서 `linux/amd64`는 `/api/health` `Ok`와 Docker health `healthy`를 확인했습니다. `linux/arm64`는 Windows Docker qemu에서 `/api/health` `Ok`를 확인했고, `linux/arm/v7`는 CT101 qemu 8.1.5에서 `/api/health` `Ok`를 확인했습니다.
 - `docker buildx imagetools inspect`로 `linux/amd64`, `linux/arm64`, `linux/arm/v7` 3개 플랫폼 매니페스트가 모두 존재함을 확인했습니다.
-- 프로덕션 롤아웃은 사용자 확인 전까지 보류합니다.
+- 프로덕션 `kavita` 롤아웃은 이번 단계에 포함하지 않았습니다. 현재 운영은 기존 `0.9.0.12-2`를 유지합니다.
 - official `0.9.0.12` nightly source에 기존 GDS patch set(41커밋)을 포팅했습니다.
 - upstream `0.9.0.12`의 변경사항을 유지했습니다.
 - `0.9.0.12-1`에는 `9.0.10-3`까지의 WebUI, reader/cache, scanner, cover 관련 GDS hotfix와 `0.9.0.12` official base port를 포함했습니다.

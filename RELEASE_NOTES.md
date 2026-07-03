@@ -2,7 +2,25 @@
 
 This release provides the Kavita official `0.9.0.12` nightly based GDS build as a GHCR multi-arch Docker image.
 
-Version: `0.9.0.12-2`
+Version: `0.9.0.12-3`
+
+## Verification
+
+- **GDS scan fingerprint optimization**: GDS library scans still enumerate directories/files to avoid missing new content, but now skip `ProcessSeries` for unchanged series by comparing a per-series fingerprint built from file path, size, timestamps, format, and sidecar state.
+- **Content-based last modified sorting**: Added a separate content-last-modified date based on actual series files. The "Last Modified" sort and JumpBar date now use content file timestamps instead of the database scan/update timestamp. `kavita.yaml` changes still invalidate the scan fingerprint but do not update the user-facing content date.
+- **GDS YAML read cache**: `kavita.yaml`/`kavita.yml` parsing is cached during the scan pass to avoid repeated sidecar reads from remote-backed filesystems.
+- Windows Docker fixture validation confirmed: unchanged GDS rescan parsed the fixture series but found `0` series needing processing; `kavita.yaml`-only changes invalidated the scan fingerprint without changing the content date; adding a new archive raised `contentLastModified` to the new file timestamp.
+- `tkavita` validation confirmed `/api/health` `Ok`, Docker health `healthy`, Series API `contentLastModified`, and GDS fingerprint skip logs on a copied fixture.
+- Production rollout is intentionally not part of this release step.
+
+## Publish Evidence
+
+- GHCR `0.9.0.12-3` and `latest` multi-arch manifest digest: `sha256:fc773b9e217366663c3cf7c1f6b8a107cdd9439def97d2b8fe41fd04cadc4c78`.
+- Per-platform manifests:
+  - `linux/amd64`: `sha256:942c618babfc844a5daba34ca620037d1a5f2871ea62a3cef1f7568342f11b27`
+  - `linux/arm64`: `sha256:652a3fa1d64d1dccf8b202c154e2e306b6c9367239bcbc3d9c954f5fd3ec2dba`
+  - `linux/arm/v7`: `sha256:38387782c6a489a85ae283b0b570588719968df0e61e041b9b07a351a217ed24`
+- Pushed GHCR startup smoke: `linux/amd64` returned `/api/health` `Ok` with Docker health `healthy`; `linux/arm64` and `linux/arm/v7` returned `/api/health` `Ok` under qemu.
 
 ## Included Platforms
 
@@ -14,7 +32,7 @@ Version: `0.9.0.12-2`
 
 GHCR is the primary distribution channel for this release. Use the unified version tag; Docker will select the matching platform automatically.
 
-## Verification
+## Previous `0.9.0.12-2` Verification
 
 - **Korean search normalization improvement (0.9.0.12-2)**: Added Unicode NFC normalization to the search text normalizer so decomposed (NFD) Hangul input matches composed (NFC) database data. Added normalized-name fields for chapters and libraries so they get the same whitespace-insensitive search as series. Fixed three query mismatches where normalized fields were compared against non-normalized search terms or were missing entirely. A startup migration backfills normalized fields for existing records without a full library rescan.
 - Published GHCR `0.9.0.12-2` and `latest` as one multi-arch manifest covering `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
@@ -25,7 +43,7 @@ GHCR is the primary distribution channel for this release. Use the unified versi
   - `linux/arm/v7`: `sha256:c570a08f06df8fb653e1f99827a4cc8475e545795e8e575060b44d281f430dc6`
 - Windows Docker Desktop buildx built and pushed all 3 platforms with `--no-cache`.
 - Pushed GHCR `linux/amd64`, `linux/arm64`, and `linux/arm/v7` image startup all returned `/api/health` `Ok` (Docker health `healthy`) after an explicit `docker pull` of the pushed digest.
-- Production rollout is on hold for this release pending user confirmation.
+- Production `kavita` was rolled to `0.9.0.12-2` and verified with `/api/health` `Ok`, Docker health `healthy`.
 
 ## Previous `0.9.0.12-1` Verification
 
