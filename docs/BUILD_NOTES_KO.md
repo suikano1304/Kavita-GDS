@@ -71,7 +71,7 @@ multiarch digest=sha256:8ed8199bf1c62b54e629f86e23482d81b43fb2880320b82c9275ea5e
 - push한 이미지를 검증할 때는 로컬 stale 태그를 피하기 위해 `docker rmi <tag> -f` 후 명시적으로 재pull하여 digest 일치를 확인했습니다.
 - pushed GHCR unified tag smoke에서 `linux/amd64`는 `/api/health` `Ok`와 Docker health `healthy`를 확인했습니다. `linux/arm64`는 Windows Docker qemu에서 `/api/health` `Ok`를 확인했고, `linux/arm/v7`는 CT101 qemu 8.1.5에서 `/api/health` `Ok`를 확인했습니다.
 - `docker buildx imagetools inspect`로 `linux/amd64`, `linux/arm64`, `linux/arm/v7` 3개 플랫폼 매니페스트가 모두 존재함을 확인했습니다.
-- 프로덕션 `kavita` 롤아웃은 이번 단계에 포함하지 않았습니다. 현재 운영은 기존 `0.9.0.12-2`를 유지합니다.
+- 프로덕션 `kavita`를 `0.9.0.12-3`로 교체했고 `/api/health=Ok`, Docker health `healthy`, 신규 `Series` migration column 적용을 확인했습니다. 적용 전 운영 DB 온라인 백업을 생성했습니다.
 - official `0.9.0.12` nightly source에 기존 GDS patch set(41커밋)을 포팅했습니다.
 - upstream `0.9.0.12`의 변경사항을 유지했습니다.
 - `0.9.0.12-1`에는 `9.0.10-3`까지의 WebUI, reader/cache, scanner, cover 관련 GDS hotfix와 `0.9.0.12` official base port를 포함했습니다.

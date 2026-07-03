@@ -20,6 +20,22 @@ your reading collection with your friends and family!
 <img src="https://img.shields.io/endpoint?url=https://stats.kavitareader.com/api/ui/shield-badge"/>
 </div>
 
+## Kavita-GDS Fork Release
+
+This fork publishes GDS-focused Kavita builds through GHCR. The current public release is `0.9.0.12-3`, based on the official Kavita `0.9.0.12` nightly source plus the GDS patch stack.
+
+```bash
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-3
+```
+
+The `0.9.0.12-3` release includes:
+
+- GDS scan fingerprints so unchanged series can skip expensive processing without relying on folder mtime skip behavior.
+- Content-file based "Last Modified" sorting and JumpBar dates, separate from DB entity update time.
+- Cached `kavita.yaml`/`kavita.yml` reads during scan passes.
+- Multi-arch GHCR images for `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+
+See [RELEASE_NOTES.md](RELEASE_NOTES.md), [docs/BUILD_NOTES_KO.md](docs/BUILD_NOTES_KO.md), and [docs/CHANGELOG_KO.md](docs/CHANGELOG_KO.md) for release details and validation notes.
 
 ## What Kavita Provides
 - Serve up Manga/Webtoons/Comics (cbr, cbz, zip/rar/rar5, 7zip, raw images) and Books (epub, pdf)

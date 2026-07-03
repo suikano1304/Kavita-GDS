@@ -11,7 +11,7 @@ Version: `0.9.0.12-3`
 - **GDS YAML read cache**: `kavita.yaml`/`kavita.yml` parsing is cached during the scan pass to avoid repeated sidecar reads from remote-backed filesystems.
 - Windows Docker fixture validation confirmed: unchanged GDS rescan parsed the fixture series but found `0` series needing processing; `kavita.yaml`-only changes invalidated the scan fingerprint without changing the content date; adding a new archive raised `contentLastModified` to the new file timestamp.
 - `tkavita` validation confirmed `/api/health` `Ok`, Docker health `healthy`, Series API `contentLastModified`, and GDS fingerprint skip logs on a copied fixture.
-- Production rollout is intentionally not part of this release step.
+- Production `kavita` was rolled to `0.9.0.12-3` and verified with `/api/health` `Ok`, Docker health `healthy`, and the new `Series` migration columns present.
 
 ## Publish Evidence
 

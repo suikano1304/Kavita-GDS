@@ -17,7 +17,7 @@
 - scan pass 안에서 `kavita.yaml`/`kavita.yml` 파싱을 경로별로 캐시해 remote-backed filesystem의 반복 sidecar 읽기를 줄였습니다.
 - Docker fixture 검증에서 동일 fixture 재스캔은 `Found 0 Series that need processing`, `kavita.yaml`만 변경한 경우 콘텐츠 날짜 유지, 신규 archive 추가 시 콘텐츠 날짜 상승을 확인했습니다.
 - `tkavita` fixture 검증에서 `/api/health=Ok`, Docker health `healthy`, Series API `contentLastModified`, GDS fingerprint skip 로그를 확인했습니다.
-- 프로덕션 `kavita` 롤아웃은 이번 단계에 포함하지 않았습니다.
+- 프로덕션 `kavita`를 `0.9.0.12-3`로 교체했고 `/api/health=Ok`, Docker health `healthy`, 신규 `Series` migration column 적용을 확인했습니다.
 
 ## 2026-07-02: `0.9.0.12-2` 한국어 검색 공백/유니코드 정규화 개선 (GDS 자체 패치)
 
