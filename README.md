@@ -2,18 +2,18 @@
 
 Google Drive/rclone 같은 원격 저장소에 큰 만화/책 라이브러리를 두고 쓰는 환경을 위한 Kavita 비공식 Docker 빌드입니다. official Kavita `0.9.0.12` nightly를 기반으로 GDS 스캔, 표지, 페이지 수, reader/cache, 검색, 정렬 문제를 보정했습니다.
 
-현재 릴리즈: `0.9.0.12-3`
+현재 릴리즈: `0.9.0.12-5`
 
 ## 빠른 시작
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-3
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-5
 ```
 
 ```yaml
 services:
   kavita:
-    image: ghcr.io/suikano1304/kavita-gds:0.9.0.12-3
+    image: ghcr.io/suikano1304/kavita-gds:0.9.0.12-5
     container_name: kavita
     restart: always
     ports:
@@ -54,6 +54,8 @@ services:
 - **GDS mtime 우회 (0.9.0.12-1)**: rclone FUSE 마운트에서 `--dir-cache-time`으로 인해 디렉터리 mtime이 고정되어 Library Scan이 신규 파일을 누락하던 문제를 해결했습니다. GDS 라이브러리는 항상 디렉터리를 전수 열거합니다.
 - **한국어 검색 정규화 (0.9.0.12-2)**: 공백 제거와 유니코드 NFC 정규화를 적용해 분해형 한글 입력과 챕터/라이브러리 검색 매칭을 보강했습니다.
 - **GDS scan fingerprint / 콘텐츠 수정일 (0.9.0.12-3)**: 폴더 mtime skip 없이 파일은 계속 열거하되, 변경 없는 시리즈는 fingerprint로 재처리를 건너뜁니다. WebUI "마지막 수정" 정렬과 JumpBar 날짜는 DB 수정 시간이 아니라 실제 콘텐츠 파일 timestamp를 사용합니다.
+- **GDS scan memory / 최신성 정렬 (0.9.0.12-4)**: 처리 단계에서 parser metadata 참조를 series 단위로 해제하고, "마지막 수정" 정렬에 신규 추가 시각을 포함합니다.
+- **GDS broad scan hardening (0.9.0.12-5)**: scan phase 결과를 streaming grouping으로 처리하고, 대형 sidecar YAML, mixed-format fingerprint, 반복 재처리, post-scan CPU tail 문제를 보강했습니다.
 
 OPDS: upstream #4759에서 정식 해결되어(단일엔트리+병합cbz) GDS 패치스택에 별도 OPDS 커스텀 없이 upstream 동작을 그대로 상속합니다.
 
@@ -66,8 +68,10 @@ OPDS: upstream #4759에서 정식 해결되어(단일엔트리+병합cbz) GDS �
 - `linux/arm/v7` 이미지 CT101 qemu smoke 및 `/api/health=Ok`
 - Docker health `healthy`
 - 기존 reader/cache 회귀 검증 baseline 유지
-- GHCR `0.9.0.12-3`와 `latest`가 같은 multi-arch 이미지로 발행됨
-- 운영 컨테이너를 `0.9.0.12-3`로 교체했고 `/api/health=Ok`, Docker health `healthy`를 확인함
+- GHCR `0.9.0.12-5`와 `latest`가 같은 multi-arch 이미지로 발행됨
+- GHCR manifest digest: `sha256:621d93569d6205d48ea2ebfedb5fee6205f4b120415679ef5d6f20d6964c05ef`
+- 운영 컨테이너를 `0.9.0.12-5`로 교체했고 `/api/health=Ok`, Docker health `healthy`, restart count `0`을 확인함
+- 운영 대형 GDS no-change scan에서 `4668` series parse, 처리 대상 `0`건, 약 `148`초 완료, 완료 후 container memory 약 `350 MiB`를 확인함
 
 상세 변경 내역과 digest는 [RELEASE_NOTES.md](RELEASE_NOTES.md), [docs/CHANGELOG_KO.md](docs/CHANGELOG_KO.md)를 참고하세요.
 
@@ -76,7 +80,7 @@ OPDS: upstream #4759에서 정식 해결되어(단일엔트리+병합cbz) GDS �
 운영에서는 고정 버전 태그를 권장합니다.
 
 ```text
-ghcr.io/suikano1304/kavita-gds:0.9.0.12-3
+ghcr.io/suikano1304/kavita-gds:0.9.0.12-5
 ```
 
 지원 플랫폼: `linux/amd64`, `linux/arm64`, `linux/arm/v7`

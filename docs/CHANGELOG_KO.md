@@ -2,9 +2,37 @@
 
 기준 버전: `kavita-gds-0.9.0.2-scan-20260528`
 
-현재 공개 릴리즈: `0.9.0.12-1`
+현재 공개 릴리즈: `0.9.0.12-5`
 
 참고: 운영 컨테이너가 이전 태그를 계속 쓰는 경우, source/release/운영 기준이 다시 달라질 수 있습니다. 운영 검증은 적용 전 baseline과 적용 후 postflight를 같은 진단 스크립트로 비교하세요.
+
+## 2026-07-04: `0.9.0.12-5` GDS scan phase 메모리 및 대형 sidecar 보강
+
+- 대형 GDS 라이브러리 스캔에서 파일 스캔/파싱 단계가 끝나기 전에 RSS가 급증할 수 있던 구조를 보강했습니다.
+- GDS 라이브러리는 디렉터리별 `ScanResult`와 parser list를 전체 root 파싱 완료까지 보관하지 않고, 디렉터리 단위로 파싱 후 즉시 series grouping에 반영합니다.
+- 대형 `kavita.yaml`/`kavita.yml`은 필요한 `meta` scalar와 file page hint만 streaming으로 읽어 full YAML deserialize와 불필요한 cover payload retention을 피합니다.
+- sidecar metadata가 의도적으로 비어 있거나 일부만 있는 series를 매 scan마다 metadata backfill 대상으로 다시 잡지 않도록 했습니다.
+- mixed-format GDS series의 fingerprint lookup을 normalized series identity 기준으로 안정화했습니다.
+- GDS broad scan 완료 후 synchronous abandoned metadata cleanup을 건너뛰어 no-change scan 이후 긴 CPU 작업으로 이어지는 상황을 줄였습니다.
+- 동일 series 아래 한국어 `N부 M권` 형태의 part/volume 파일이 단순 volume number로 합쳐지지 않도록 parser를 보강했습니다.
+- 운영 대형 GDS 라이브러리 검증에서 `4668` series parse, 처리 대상 `0`건, 약 `148`초 완료, 완료 후 container memory 약 `350 MiB`, `/api/health=Ok`를 확인했습니다.
+
+## 2026-07-03: `0.9.0.12-4` GDS 스캔 메모리 및 최신성 정렬 보강
+
+- GDS 전체 스캔 처리 단계에서 `ParserInfo`/`ComicInfo` 목록을 끝까지 보관하지 않도록, 삭제 감지용 `ParsedSeries` 키와 실제 처리 대상 키를 분리했습니다.
+- 사용자-facing "마지막 수정" 기준인 `ContentLastModified`가 파일 timestamp뿐 아니라 새 Chapter/MangaFile의 DB 생성 시각도 포함합니다.
+- 홈 "최근 업데이트 시리즈"에서 전체 목록으로 이동할 때 `LastChapterAdded`가 아니라 라이브러리의 "마지막 수정"과 같은 `LastModifiedDate` desc 정렬을 사용합니다.
+
+## 2026-07-03: `0.9.0.12-3` GDS 스캔 fingerprint 및 콘텐츠 수정일 분리
+
+- GDS Library Scan은 신규 파일 누락을 막기 위해 폴더 mtime skip을 사용하지 않고 계속 디렉터리/파일을 열거합니다.
+- 이전 fingerprint와 같은 GDS series는 `ProcessSeries`를 건너뛰어 실제 변경 없는 기존 시리즈 재처리를 줄입니다.
+- WebUI의 "마지막 수정" 정렬과 오른쪽 JumpBar 날짜는 `ContentLastModified`를 사용합니다.
+
+## 2026-07-02: `0.9.0.12-2` 한국어 검색 공백/유니코드 정규화 개선
+
+- `ToNormalized()`에 유니코드 NFC 정규화를 추가했습니다. 일부 입력기/OS에서 생성되는 분해형 한글 자모가 완성형 DB 데이터와 검색 매칭에 실패하던 문제를 해결합니다.
+- `Chapter.NormalizedTitleName`, `Library.NormalizedName` 필드를 신규 추가했습니다.
 
 ## 2026-06-28: `0.9.0.12` official `0.9.0.12` nightly 포팅 릴리스
 
@@ -182,7 +210,7 @@
 - EPUB manifest의 duplicate item/id/href를 임시 copy에서 제거하고 spine 참조를 유지되는 item id로 rewrite하도록 보강했습니다.
 - EPUB repair 경로를 `book-info`, `book-page`, TOC, resource, metadata, word-count 경로에 적용했습니다.
 - EPUB 내부 resource 상대경로를 정규화해 `../Images/...` 같은 링크를 더 안정적으로 처리합니다.
-- `/mnt/gds` scanner는 원격 EPUB 전체 읽기를 하지 않도록 유지해 Web UI blocking을 피했습니다.
+- GDS scanner는 remote-backed EPUB 전체 읽기를 하지 않도록 유지해 Web UI blocking을 피했습니다.
 - GDS archive 커버 재생성 시 2권 이후 chapter/volume cover가 1권 cover로 고정되는 문제를 수정했습니다.
 - TXT fallback cover 한글 글꼴 깨짐을 막기 위해 runtime image에 Nanum Gothic Regular/Bold/ExtraBold를 포함했습니다.
 - 대형 GDS 강제 스캔에서 DB 갱신, 커버 생성, word-count 분석이 동시에 많이 쌓여 OOM으로 이어질 수 있어, GDS 라이브러리만 시리즈 단위 저메모리 직렬 처리 경로를 사용하도록 보강했습니다.
