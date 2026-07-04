@@ -383,6 +383,44 @@ public class MetadataService(
         await GenerateCoversForSeries(series, encodeFormat, coverImageSize, forceUpdate, forceColorScape, ct);
     }
 
+    public async Task GenerateRepresentativeCoverForSeries(ServerSettingDto serverSetting, int libraryId, int seriesId,
+        bool forceUpdate = false, bool forceColorScape = false, CancellationToken ct = default)
+    {
+        var series = await unitOfWork.SeriesRepository.GetFullSeriesForSeriesIdAsync(seriesId, ct);
+        if (series == null)
+        {
+            logger.LogError("[MetadataService] Series {SeriesId} was not found on Library {LibraryId}", seriesId, libraryId);
+            return;
+        }
+
+        var sw = Stopwatch.StartNew();
+        if (series.Library?.Type == LibraryType.GDS)
+        {
+            var result = await gdsCoverService.ProcessSeriesRepresentativeCoverGen(series, forceUpdate,
+                serverSetting.EncodeMediaAs, serverSetting.CoverImageSize, forceColorScape);
+            foreach (var updateEvent in result.UpdateEvents)
+            {
+                _updateEvents.Add(updateEvent);
+            }
+        }
+        else
+        {
+            await ProcessSeriesCoverGen(series, forceUpdate, serverSetting.EncodeMediaAs,
+                serverSetting.CoverImageSize, forceColorScape);
+        }
+
+        if (unitOfWork.HasChanges())
+        {
+            await unitOfWork.CommitAsync(ct);
+            logger.LogInformation("[MetadataService] Updated representative cover for {SeriesName} in {ElapsedMilliseconds} milliseconds",
+                series.Name, sw.ElapsedMilliseconds);
+        }
+
+        await eventHub.SendMessageAsync(MessageFactory.CoverUpdate,
+            MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series), false, ct);
+        await FlushEvents();
+    }
+
     /// <summary>
     /// Generate Cover for a Series. This is used by Scan Loop and should not be invoked directly via User Interaction.
     /// </summary>

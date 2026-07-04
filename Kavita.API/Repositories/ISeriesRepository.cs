@@ -113,6 +113,7 @@ public interface ISeriesRepository
     public Task<IList<Series>> GetAllSeriesByAnyNameAsync(string seriesName, string localizedName, int libraryId,
         MangaFormat format, CancellationToken ct = default);
     Task<IList<Series>> RemoveSeriesNotInListAsync(IList<ParsedSeries> seenSeries, int libraryId, CancellationToken ct = default);
+    Task<IList<Series>> RemoveGdsSeriesNotInNormalizedNamesAsync(ISet<string> seenNormalizedNames, int libraryId, CancellationToken ct = default);
     Task<IDictionary<string, IList<SeriesModified>>> GetFolderPathMapAsync(int libraryId, CancellationToken ct = default);
     Task<IList<SeriesScanFingerprintInfo>> GetGdsScanFingerprintInfoAsync(int libraryId, CancellationToken ct = default);
     Task<AgeRating> GetMaxAgeRatingFromSeriesAsyncAsync(IEnumerable<int> seriesIds, CancellationToken ct = default);

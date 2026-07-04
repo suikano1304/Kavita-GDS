@@ -2,9 +2,20 @@
 
 기준 버전: `kavita-gds-0.9.0.2-scan-20260528`
 
-현재 공개 릴리즈: `0.9.0.12-5`
+현재 공개 릴리즈: `0.9.0.12-6`
 
 참고: 운영 컨테이너가 이전 태그를 계속 쓰는 경우, source/release/운영 기준이 다시 달라질 수 있습니다. 운영 검증은 적용 전 baseline과 적용 후 postflight를 같은 진단 스크립트로 비교하세요.
+
+## 2026-07-05: `0.9.0.12-6` GDS scan 처리 메모리 및 커버 생성 보강
+
+- GDS 처리 단계에서 `ParsedSeries` 전체 값 목록을 오래 붙잡지 않도록 삭제 감지에는 normalized series key만 사용합니다.
+- 처리 대상 queue는 무거운 series result 객체 대신 index 목록으로 유지하고, skip/처리 완료 후 parser metadata 참조를 즉시 비웁니다.
+- scan 종료 시 GDS sidecar metadata cache를 명시적으로 비워 대형 sidecar scan 이후 retained memory를 줄입니다.
+- scan 중에는 대표 cover만 빠르게 보강하고, 전체 volume/chapter cover refresh는 metadata refresh 경로에서 수행하도록 분리했습니다.
+- sidecar cover base64는 fingerprint/metadata scan 중 중복 decode하지 않고 실제 thumbnail 생성 시점에만 검증합니다.
+- `tkavita` fixture 검증에서 변경 없음 재스캔 처리 대상 `0`, 파일 추가 후 처리 대상 `1`, sidecar 변경 후 재처리, 다권 합성 53개 chapter cover 누락 `0`, 재스캔 처리 대상 `0`을 확인했습니다.
+- Windows Docker Desktop에서 `linux/amd64`, `linux/arm64`, `linux/arm/v7` pushed GHCR image가 `/api/health=Ok`에 도달함을 확인했습니다.
+- 운영 적용은 기존 운영 스캔 완료 후 별도 postflight와 함께 진행합니다.
 
 ## 2026-07-04: `0.9.0.12-5` GDS scan phase 메모리 및 대형 sidecar 보강
 

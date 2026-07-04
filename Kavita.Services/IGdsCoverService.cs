@@ -11,6 +11,9 @@ public interface IGdsCoverService
 {
     Task<GdsCoverGenerationResult> ProcessSeriesCoverGen(Series series, bool forceUpdate, EncodeFormat encodeFormat,
         CoverImageSize coverImageSize, bool forceColorScape = false);
+
+    Task<GdsCoverGenerationResult> ProcessSeriesRepresentativeCoverGen(Series series, bool forceUpdate,
+        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape = false);
 }
 
 public sealed record GdsCoverGenerationResult(bool Handled, IReadOnlyCollection<SignalRMessage> UpdateEvents);

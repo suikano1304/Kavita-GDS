@@ -2,9 +2,28 @@
 
 This release provides the Kavita official `0.9.0.12` nightly based GDS build as a GHCR multi-arch Docker image.
 
-Version: `0.9.0.12-5`
+Version: `0.9.0.12-6`
 
 ## Verification
+
+- **GDS processing memory reduction**: GDS delete reconciliation now keeps normalized series keys instead of full parsed series values, and the processing queue stores lightweight indexes instead of duplicating scanned series objects.
+- **Scan cache cleanup**: GDS sidecar metadata cache is cleared at scan completion so large sidecar reads do not remain retained after a broad scan.
+- **Cover generation balance**: GDS scans use representative cover generation to avoid heavy scan-time cover work, while metadata refresh paths can still generate volume/chapter covers.
+- **Sidecar cover handling**: Sidecar cover payloads are no longer decoded twice during metadata/fingerprint handling; validation happens at thumbnail generation time.
+- `tkavita` fixture validation confirmed unchanged rescans found `0` series needing processing; adding one archive found `1` series; sidecar-only changes invalidated the fingerprint without changing content freshness; a 53-chapter synthetic multi-volume scan produced `0` missing chapter/volume covers and the next rescan returned to `0`.
+- Windows Docker pushed-image smoke confirmed `/api/health Ok` for `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+- Production rollout is intentionally held until the active production scan completes.
+
+## Publish Evidence
+
+- GHCR `0.9.0.12-6` and `latest` multi-arch manifest digest: `sha256:37393d6f42e9f09a6a5b2f0f49e07f92a706aec86dd0a87b2f09d8c1007091cf`.
+- Per-platform manifests:
+  - `linux/amd64`: `sha256:067c2671b6c210986855befc8753e6e58ea9a0c1ec67da2a3e33de62a26f86a1`
+  - `linux/arm64`: `sha256:4669931ff342652fac8e32ada2d29e235a2e301acd4f84b7e38effedc75d351f`
+  - `linux/arm/v7`: `sha256:7faf8457b1feb9a52a75bbb1913f3c954bd4c08fa350cbf335ffbafd24a9dd03`
+- Local/Windows Docker validation covered pushed GHCR image startup for `linux/amd64`, `linux/arm64`, and `linux/arm/v7`; armv7 qemu startup reached Docker health `healthy` and `/api/health Ok`.
+
+## Previous `0.9.0.12-5` Verification
 
 - **GDS scan-phase memory reduction**: GDS scans now stream directory scan results into series grouping instead of retaining every folder `ScanResult`, file list, and parser list until the whole root is parsed.
 - **Operational scan logs**: The GDS streaming scan path now logs scan start and grouped-series count at Information level so large production scans can confirm the low-memory scan path.
@@ -14,7 +33,7 @@ Version: `0.9.0.12-5`
 - `kavita-test` fixture validation confirmed: unchanged rescan found `0` series needing processing; adding one fixture archive found `1` series; the next rescan returned to `0`; memory stayed low after scan completion.
 - Production large-library validation confirmed: a broad GDS scan parsed `4668` series, found `0` series needing processing, finished in about `148` seconds, and settled around `350 MiB` container memory with `/api/health` returning `Ok`.
 
-## Publish Evidence
+## Previous `0.9.0.12-5` Publish Evidence
 
 - GHCR `0.9.0.12-5` and `latest` multi-arch manifest digest: `sha256:621d93569d6205d48ea2ebfedb5fee6205f4b120415679ef5d6f20d6964c05ef`.
 - Per-platform manifests:

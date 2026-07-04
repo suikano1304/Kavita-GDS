@@ -2,9 +2,9 @@
 
 ## 목적
 
-Kavita official `0.9.0.12` nightly 기반 GDS 빌드 `0.9.0.12-5`를 Docker/GHCR 배포용으로 패키징했습니다.
+Kavita official `0.9.0.12` nightly 기반 GDS 빌드 `0.9.0.12-6`를 Docker/GHCR 배포용으로 패키징했습니다.
 
-이번 배포는 GDS scan phase streaming 메모리 보강, 대형 sidecar YAML streaming parser, 반복 재처리 방지, mixed-format fingerprint 안정화, post-scan CPU 작업 축소를 포함하는 GDS 자체 패치입니다. 이전 `0.9.0.12-4` scan 처리 메모리/latest-sort 보강, `0.9.0.12-3` scan fingerprint/content-date 분리, `0.9.0.12-2` 한국어 검색 정규화 개선, `0.9.0.12-1` GDS/rclone 수정과 official Kavita `0.9.0.12` nightly 병합 내용도 그대로 포함합니다. 상세 변경 내역은 [CHANGELOG_KO.md](CHANGELOG_KO.md)를 참고하세요.
+이번 배포는 GDS scan 처리 queue/index 경량화, scan 종료 sidecar cache 해제, scan 중 대표 cover 경량 생성, metadata refresh 경로의 volume/chapter cover 보강을 포함합니다. 이전 `0.9.0.12-5` scan phase streaming 메모리 보강, 대형 sidecar YAML streaming parser, 반복 재처리 방지, mixed-format fingerprint 안정화, post-scan CPU 작업 축소도 그대로 포함합니다. 상세 변경 내역은 [CHANGELOG_KO.md](CHANGELOG_KO.md)를 참고하세요.
 
 ## 포함 플랫폼
 
@@ -17,7 +17,7 @@ Kavita official `0.9.0.12` nightly 기반 GDS 빌드 `0.9.0.12-5`를 Docker/GHCR
 Primary release image:
 
 ```text
-ghcr.io/suikano1304/kavita-gds:0.9.0.12-5
+ghcr.io/suikano1304/kavita-gds:0.9.0.12-6
 ghcr.io/suikano1304/kavita-gds:latest
 ```
 
@@ -32,18 +32,18 @@ kavita-linux-arm.tar.gz
 권장 이미지 태그:
 
 ```text
-ghcr.io/suikano1304/kavita-gds:0.9.0.12-5
+ghcr.io/suikano1304/kavita-gds:0.9.0.12-6
 ```
 
 현재 GHCR 기준:
 
 ```text
-ghcr.io/suikano1304/kavita-gds:0.9.0.12-5
+ghcr.io/suikano1304/kavita-gds:0.9.0.12-6
 ghcr.io/suikano1304/kavita-gds:latest
-multiarch digest=sha256:621d93569d6205d48ea2ebfedb5fee6205f4b120415679ef5d6f20d6964c05ef
-linux/amd64=sha256:c395d33052ff272d4552cc0cd77057a87d621052741414753f5e4efaf72cc989
-linux/arm64=sha256:8c9ace62d795fd6f233a2987b4b565456b03a774b3928f4048534b5492f60ffd
-linux/arm/v7=sha256:ad7f894ed997d1e6d46b5df3323ad6b1f83e90a666c8c987efeaa72ef506f524
+multiarch digest=sha256:37393d6f42e9f09a6a5b2f0f49e07f92a706aec86dd0a87b2f09d8c1007091cf
+linux/amd64=sha256:067c2671b6c210986855befc8753e6e58ea9a0c1ec67da2a3e33de62a26f86a1
+linux/arm64=sha256:4669931ff342652fac8e32ada2d29e235a2e301acd4f84b7e38effedc75d351f
+linux/arm/v7=sha256:7faf8457b1feb9a52a75bbb1913f3c954bd4c08fa350cbf335ffbafd24a9dd03
 ```
 
 GHCR는 Docker buildx `--push`로 직접 publish했습니다.
@@ -65,6 +65,7 @@ multiarch digest=sha256:8ed8199bf1c62b54e629f86e23482d81b43fb2880320b82c9275ea5e
 ## 검증 내용
 
 - **`0.9.0.12-5` GDS scan phase memory 검증**: Windows PC에서 Release build와 focused GDS service tests를 통과했습니다. `kavita-test` fixture에서 변경 없음 재스캔은 처리 대상 0건, archive 1개 추가 후 재스캔은 처리 대상 1건, 이후 재스캔은 다시 0건으로 돌아감을 확인했습니다. 테스트 컨테이너 메모리는 scan 후 낮은 수준으로 유지되었습니다.
+- **`0.9.0.12-6` GDS scan/cover memory 검증**: Windows PC에서 `linux/amd64`, `linux/arm64`, `linux/arm/v7` RID 패키지를 재생성하고 GHCR multi-arch image를 push했습니다. `tkavita` fixture에서 변경 없음 재스캔 처리 대상 0건, archive 추가 후 처리 대상 1건, sidecar 변경 fingerprint mismatch, 다권 합성 53개 chapter/volume cover 누락 0건, 이후 재스캔 처리 대상 0건을 확인했습니다. pushed GHCR image는 amd64/arm64/armv7 모두 `/api/health=Ok`를 반환했습니다.
 - **대형 GDS 운영 스캔 검증**: 운영 대형 GDS 라이브러리에서 broad scan이 `4668` series를 parse하고 처리 대상 `0`건으로 종료했습니다. 완료 시간은 약 `148`초였고, 완료 후 container memory는 약 `350 MiB`, `/api/health=Ok`였습니다.
 - **대형 sidecar YAML 검증**: GDS sidecar parser가 필요한 `meta` scalar와 file page hint만 streaming으로 읽도록 변경되어, 큰 `kavita.yaml`에서도 full YAML deserialize와 cover payload retention을 피합니다.
 - **반복 재처리 방지 검증**: sidecar metadata가 의도적으로 비어 있거나 일부만 있는 series를 매 scan마다 metadata backfill 대상으로 다시 잡지 않도록 했고, mixed-format GDS series fingerprint lookup을 normalized series identity 기준으로 안정화했습니다.

@@ -92,6 +92,40 @@ public sealed class GdsCoverService(
         return Result(true);
     }
 
+    public Task<GdsCoverGenerationResult> ProcessSeriesRepresentativeCoverGen(Series series, bool forceUpdate,
+        EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape = false)
+    {
+        _updateEvents.Clear();
+
+        if (TryApplyGdsFolderCover(series, forceUpdate, forceColorScape))
+        {
+            return Task.FromResult(Result(true));
+        }
+
+        series.Volumes ??= [];
+        foreach (var volume in series.Volumes)
+        {
+            volume.Chapters ??= [];
+            foreach (var chapter in volume.Chapters)
+            {
+                var chapterCoverResult = UpdateGdsChapterCover(series, chapter, forceUpdate, encodeFormat,
+                    coverImageSize, forceColorScape);
+
+                UpdateChapterLastModified(chapter, forceUpdate || chapterCoverResult.Updated);
+                if (string.IsNullOrEmpty(chapterCoverResult.CoverImage)) continue;
+
+                UpdateVolumeCoverImage(volume, chapterCoverResult.CoverImage,
+                    chapterCoverResult.Updated || forceUpdate, forceColorScape);
+                UpdateSeriesCoverImage(series, chapterCoverResult.CoverImage,
+                    chapterCoverResult.Updated || forceUpdate, forceColorScape);
+
+                return Task.FromResult(Result(true));
+            }
+        }
+
+        return Task.FromResult(Result(true));
+    }
+
     private static GdsChapterCoverResult BestCover(GdsChapterCoverResult current, GdsChapterCoverResult candidate)
     {
         if (candidate.Priority > current.Priority) return candidate;

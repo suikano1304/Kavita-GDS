@@ -31,6 +31,8 @@ public sealed record SeriesScanFingerprintInfo
     public MangaFormat Format { get; init; }
     public string? GdsScanFingerprint { get; init; }
     public int GdsScanFingerprintVersion { get; init; }
+    public bool NeedsSeriesCoverImage { get; init; }
+    public bool HasMissingNestedCoverImages { get; init; }
 }
 
 public class ScanResult

@@ -17,6 +17,11 @@ public static class GdsMetadataParser
     private const int MaxLargeYamlLinePrefixChars = 8 * 1024;
     private static readonly ConcurrentDictionary<string, CachedYaml> YamlCache = new(StringComparer.OrdinalIgnoreCase);
 
+    public static void ClearCache()
+    {
+        YamlCache.Clear();
+    }
+
     public static ComicInfo? GetComicInfo(string filePath, ComicInfo? baseInfo = null)
     {
         var directory = Path.GetDirectoryName(filePath);
@@ -259,16 +264,7 @@ public static class GdsMetadataParser
             encodedImage = encodedImage[(base64Index + base64Marker.Length)..];
         }
 
-        try
-        {
-            Convert.FromBase64String(encodedImage);
-            return true;
-        }
-        catch (FormatException)
-        {
-            encodedImage = string.Empty;
-            return false;
-        }
+        return true;
     }
 
     private static string? GetMetadataPath(string directory)

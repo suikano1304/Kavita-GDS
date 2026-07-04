@@ -1479,6 +1479,33 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
         return seriesToRemove;
     }
 
+    public async Task<IList<Series>> RemoveGdsSeriesNotInNormalizedNamesAsync(ISet<string> seenNormalizedNames,
+        int libraryId, CancellationToken ct = default)
+    {
+        if (seenNormalizedNames.Count == 0) return Array.Empty<Series>();
+
+        var dbSeries = await context.Series
+            .Where(s => s.LibraryId == libraryId)
+            .ToListAsync(ct);
+
+        var ids = dbSeries
+            .Where(s => seenNormalizedNames.Contains(s.NormalizedName))
+            .GroupBy(s => s.NormalizedName)
+            .Select(group => group
+                .OrderBy(s => s.Format == MangaFormat.Text ? 0 : 1)
+                .ThenBy(s => s.Id)
+                .First().Id)
+            .ToHashSet();
+
+        var seriesToRemove = dbSeries
+            .Where(s => !ids.Contains(s.Id))
+            .ToList();
+
+        context.Series.RemoveRange(seriesToRemove);
+
+        return seriesToRemove;
+    }
+
     public async Task<RelatedSeriesDto> GetRelatedSeriesAsync(int userId, int seriesId, CancellationToken ct = default)
     {
         var libraryIds = context.Library.GetUserLibraries(userId);
@@ -1810,7 +1837,11 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
                 NormalizedName = s.NormalizedName,
                 Format = s.Format,
                 GdsScanFingerprint = s.GdsScanFingerprint,
-                GdsScanFingerprintVersion = s.GdsScanFingerprintVersion
+                GdsScanFingerprintVersion = s.GdsScanFingerprintVersion,
+                NeedsSeriesCoverImage = string.IsNullOrEmpty(s.CoverImage) && !s.CoverImageLocked,
+                HasMissingNestedCoverImages = s.Volumes.Any(v =>
+                    (string.IsNullOrEmpty(v.CoverImage) && !v.CoverImageLocked) ||
+                    v.Chapters.Any(c => string.IsNullOrEmpty(c.CoverImage) && !c.CoverImageLocked))
             })
             .ToListAsync(ct);
     }
