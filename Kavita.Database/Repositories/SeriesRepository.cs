@@ -1437,22 +1437,35 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
             .Select(l => l.Type == LibraryType.GDS)
             .FirstOrDefaultAsync(ct);
 
-        // Get a set of matching series ids for the given parsedSeries
-        var ids = new HashSet<int>();
-
-        foreach (var parsedSeries in seenSeries)
+        HashSet<int> ids;
+        if (isGdsLibrary)
         {
-            var matchingSeries = dbSeries
-                .Where(s => (isGdsLibrary || s.Format == parsedSeries.Format) && s.NormalizedName == parsedSeries.NormalizedName)
-                .OrderBy(s => isGdsLibrary && s.Format == MangaFormat.Text ? 0 : 1)
-                .ThenBy(s => s.Id) // Sort to handle potential duplicates
-                .ToList();
+            var seenNames = seenSeries
+                .Select(s => s.NormalizedName)
+                .ToHashSet(StringComparer.Ordinal);
 
-            // Prefer the selected survivor and remove the remaining duplicates.
-            if (matchingSeries.Count != 0)
-            {
-                ids.Add(matchingSeries.First().Id);
-            }
+            ids = dbSeries
+                .Where(s => seenNames.Contains(s.NormalizedName))
+                .GroupBy(s => s.NormalizedName)
+                .Select(group => group
+                    .OrderBy(s => s.Format == MangaFormat.Text ? 0 : 1)
+                    .ThenBy(s => s.Id)
+                    .First().Id)
+                .ToHashSet();
+        }
+        else
+        {
+            var seenKeys = seenSeries
+                .Select(s => (s.NormalizedName, s.Format))
+                .ToHashSet();
+
+            ids = dbSeries
+                .Where(s => seenKeys.Contains((s.NormalizedName, s.Format)))
+                .GroupBy(s => (s.NormalizedName, s.Format))
+                .Select(group => group
+                    .OrderBy(s => s.Id)
+                    .First().Id)
+                .ToHashSet();
         }
 
         // Filter out series that are not in the seenSeries
@@ -1793,6 +1806,7 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
             .AsNoTracking()
             .Select(s => new SeriesScanFingerprintInfo
             {
+                SeriesId = s.Id,
                 NormalizedName = s.NormalizedName,
                 Format = s.Format,
                 GdsScanFingerprint = s.GdsScanFingerprint,

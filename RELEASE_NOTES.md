@@ -2,9 +2,28 @@
 
 This release provides the Kavita official `0.9.0.12` nightly based GDS build as a GHCR multi-arch Docker image.
 
-Version: `0.9.0.12-4`
+Version: `0.9.0.12-5`
 
 ## Verification
+
+- **GDS scan-phase memory reduction**: GDS scans now stream directory scan results into series grouping instead of retaining every folder `ScanResult`, file list, and parser list until the whole root is parsed.
+- **Operational scan logs**: The GDS streaming scan path now logs scan start and grouped-series count at Information level so large production scans can confirm the low-memory scan path.
+- **Large sidecar handling**: GDS sidecar metadata now uses a streaming parser for the required scalar metadata and page hints, avoiding full-file YAML materialization and unused cover payload retention during scans.
+- **Repeat-processing fixes**: Unchanged GDS series no longer reprocess only because sidecar metadata is intentionally sparse, and mixed-format GDS fingerprints now match by normalized series identity instead of a representative format.
+- **Post-scan CPU guard**: GDS broad scans skip the synchronous abandoned-metadata cleanup path after scan completion, keeping no-change scans from entering long post-scan CPU work.
+- `kavita-test` fixture validation confirmed: unchanged rescan found `0` series needing processing; adding one fixture archive found `1` series; the next rescan returned to `0`; memory stayed low after scan completion.
+- Production large-library validation confirmed: a broad GDS scan parsed `4668` series, found `0` series needing processing, finished in about `148` seconds, and settled around `350 MiB` container memory with `/api/health` returning `Ok`.
+
+## Publish Evidence
+
+- GHCR `0.9.0.12-5` and `latest` multi-arch manifest digest: `sha256:621d93569d6205d48ea2ebfedb5fee6205f4b120415679ef5d6f20d6964c05ef`.
+- Per-platform manifests:
+  - `linux/amd64`: `sha256:c395d33052ff272d4552cc0cd77057a87d621052741414753f5e4efaf72cc989`
+  - `linux/arm64`: `sha256:8c9ace62d795fd6f233a2987b4b565456b03a774b3928f4048534b5492f60ffd`
+  - `linux/arm/v7`: `sha256:ad7f894ed997d1e6d46b5df3323ad6b1f83e90a666c8c987efeaa72ef506f524`
+- Local/Windows Docker validation covered `linux/amd64` startup through production deployment, `linux/arm64` qemu `/api/health Ok`, and `linux/arm/v7` qemu `/api/health Ok`.
+
+## Previous `0.9.0.12-4` Verification
 
 - **GDS scan memory reduction**: GDS scans now keep only lightweight series keys for the processing queue. ParserInfo/ComicInfo lists are cleared as soon as a series is skipped or processed, reducing retained heap during large library scans.
 - **GDS scan memory checkpoints**: The low-memory GDS path now logs managed heap, working set, and private memory after forced compacting GC at scan start, every 25 processed series, and scan completion so memory recovery can be verified from logs.
@@ -13,7 +32,7 @@ Version: `0.9.0.12-4`
 - Windows build validation confirmed .NET Release build and production Angular WebUI build.
 - `tkavita` and production rollout validation confirmed `/api/health` `Ok`, Docker health `healthy`, and hashed WebUI assets served with HTTP 200.
 
-## Publish Evidence
+## Previous `0.9.0.12-4` Publish Evidence
 
 - GHCR `0.9.0.12-4` and `latest` multi-arch manifest digest: `sha256:2d5d15bab9014407a03940c34edb13ea90348d31b938d7b402bdab56476bade8`.
 - Per-platform manifests:
@@ -243,7 +262,7 @@ The local-only matrix with actual sample titles, raw ids, and media paths is kep
 - Expanded malformed EPUB manifest repair to duplicate exact items, duplicate ids, and duplicate `href + media-type` entries.
 - Applied the EPUB repair path across `book-info`, `book-page`, table-of-contents, resource, metadata, and word-count paths.
 - Normalized EPUB resource keys so relative `../Images/...` links can resolve correctly.
-- Kept GDS media mounts read-only and avoided scanner-side full EPUB reads against `/mnt/gds`.
+- Kept GDS media mounts read-only and avoided scanner-side full EPUB reads against remote-backed media roots.
 - Fixed GDS archive cover regeneration so later volumes/chapters do not reuse the first volume cover.
 - Fixed Korean TXT title-cover rendering by bundling Nanum Gothic Regular/Bold/ExtraBold in the runtime image.
 - Added a low-memory GDS scan path that keeps per-series DB update, cover generation, and word-count work sequential instead of running all post-scan work in parallel.

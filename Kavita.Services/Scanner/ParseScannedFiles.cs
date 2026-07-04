@@ -488,9 +488,9 @@ public class ParseScannedFiles
     /// </summary>
     /// <param name="scannedSeries">A localized list of a series' parsed infos</param>
     /// <param name="info"></param>
-    private void TrackSeries(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, ParserInfo? info, LibraryType libraryType)
+    private ParsedSeries? TrackSeries(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, ParserInfo? info, LibraryType libraryType)
     {
-        if (info == null || info.Series == string.Empty) return;
+        if (info == null || info.Series == string.Empty) return null;
 
         // Do not ingest series with no meaningful information as title. These break merging as they'll all merge into each other
         // They would also merge all series that don't have localised names previously
@@ -505,7 +505,7 @@ public class ParseScannedFiles
                 "Failed to parse a valid series name for a file",
                 $"{info.Series} is empty when normalized, this file will not be ingested! The filename does not follow our guidelines or this is a bug in the parser, please report this! https://github.com/Kareadita/Kavita/issues");
 
-            return;
+            return null;
         }
 
         // Check if normalized info.Series already exists and if so, update info to use that name instead
@@ -537,6 +537,8 @@ public class ParseScannedFiles
 
                 return oldValue;
             });
+
+            return existingKey;
         }
         catch (Exception ex)
         {
@@ -547,6 +549,8 @@ public class ParseScannedFiles
             {
                 _logger.LogCritical("[ScannerService] Matches: '{SeriesName}' matches on '{SeriesKey}'", info.Series, seriesKey.Name);
             }
+
+            return null;
         }
 
         bool Guard(ParsedSeries series)
@@ -664,6 +668,70 @@ public class ParseScannedFiles
         return processedScannedSeries.ToList();
     }
 
+    public async Task<IList<GdsScannedSeriesResult>> ScanGdsLibrariesForSeriesPlan(Library library,
+        IList<string> folders, bool isLibraryScan,
+        IDictionary<string, IList<SeriesModified>> seriesPaths, bool forceCheck = false)
+    {
+        await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+            MessageFactory.FileScanProgressEvent("File Scan Starting", library.Name, ProgressEventType.Started));
+
+        _logger.LogInformation("[ScannerService] Lightweight GDS scan plan starting for {LibraryName}. Roots: {RootCount}",
+            library.Name, folders.Count);
+
+        var scannedSeries = new ConcurrentDictionary<ParsedSeries, List<GdsScannedFileRef>>();
+        var changedSeries = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var folder in folders)
+        {
+            try
+            {
+                await ScanAndPlanGdsFolder(folder, library, isLibraryScan, seriesPaths, scannedSeries, changedSeries,
+                    forceCheck);
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogError(ex, "[ScannerService] The directory '{FolderPath}' does not exist", folder);
+            }
+        }
+
+        await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+            MessageFactory.FileScanProgressEvent("File Scan Done", library.Name, ProgressEventType.Ended));
+
+        _logger.LogInformation("[ScannerService] Lightweight GDS scan plan finished for {LibraryName}. Parsed series: {SeriesCount}",
+            library.Name, scannedSeries.Count);
+
+        return scannedSeries
+            .Where(pair => pair.Value.Count > 0)
+            .Select(pair => new GdsScannedSeriesResult
+            {
+                ParsedSeries = pair.Key,
+                HasChanged = changedSeries.Contains(BuildTrackedSeriesKey(pair.Key)),
+                Files = pair.Value
+            })
+            .ToList();
+    }
+
+    public async Task<IList<ParserInfo>> ParseGdsSeriesFiles(Library library, IList<GdsScannedFileRef> files,
+        IDictionary<string, IList<SeriesModified>> seriesPaths)
+    {
+        var scannedSeries = new ConcurrentDictionary<ParsedSeries, List<ParserInfo>>();
+
+        foreach (var group in files.GroupBy(file => (file.Folder, file.LibraryRoot)))
+        {
+            var scanResult = CreateScanResult(group.Key.Folder, group.Key.LibraryRoot, true,
+                group.Select(file => file.FilePath).ToList());
+            await ParseAndTrackGdsScanResult(scanResult, seriesPaths, library, scannedSeries, []);
+        }
+
+        UpdateSeriesSortOrder(scannedSeries);
+
+        return scannedSeries.Values
+            .SelectMany(infos => infos)
+            .GroupBy(info => Parser.NormalizePath(info.FullFilePath))
+            .Select(group => group.First())
+            .ToList();
+    }
+
     /// <summary>
     /// Helper method to scan and parse a folder
     /// </summary>
@@ -677,6 +745,13 @@ public class ParseScannedFiles
         bool isLibraryScan, IDictionary<string, IList<SeriesModified>> seriesPaths,
         ConcurrentBag<ScannedSeriesResult> processedScannedSeries, bool forceCheck)
     {
+        if (library.Type == LibraryType.GDS)
+        {
+            await ScanAndParseGdsFolder(folderPath, library, isLibraryScan, seriesPaths, processedScannedSeries,
+                forceCheck);
+            return;
+        }
+
         _logger.LogDebug("\t[ScannerService] Library {LibraryName} Step 1.B: Scan files in {Folder}", library.Name, folderPath);
         var scanResults = await ScanFiles(folderPath, isLibraryScan, seriesPaths, library, forceCheck);
 
@@ -699,6 +774,317 @@ public class ParseScannedFiles
         // Now transform and add to processedScannedSeries AFTER everything is processed
         _logger.LogDebug("\t[ScannerService] Library {LibraryName} Step 1.F: Generate Sort Order for Series and Finalize", library.Name);
         GenerateProcessedScannedSeries(scannedSeries, scanResults, processedScannedSeries, library.Type);
+    }
+
+    private async Task ScanAndParseGdsFolder(string folderPath, Library library, bool isLibraryScan,
+        IDictionary<string, IList<SeriesModified>> seriesPaths, ConcurrentBag<ScannedSeriesResult> processedScannedSeries,
+        bool forceCheck)
+    {
+        var fileExtensions = string.Join("|", library.LibraryFileTypes.Select(l => l.FileTypeGroup.GetRegex()));
+        if (string.IsNullOrWhiteSpace(fileExtensions))
+        {
+            return;
+        }
+
+        _logger.LogInformation("[ScannerService] Streaming GDS scan starting for {LibraryName} in {Folder}", library.Name, folderPath);
+
+        var matcher = BuildMatcher(library);
+        var scannedSeries = new ConcurrentDictionary<ParsedSeries, List<ParserInfo>>();
+        var changedSeries = new HashSet<string>(StringComparer.Ordinal);
+        var processedDirs = new HashSet<string>();
+        var processedDirectoryCount = 0;
+
+        if (isLibraryScan)
+        {
+            foreach (var directory in EnumerateDirectoriesBottomUp(folderPath, matcher))
+            {
+                processedDirectoryCount++;
+
+                if (HasProcessedDescendant(processedDirs, directory))
+                {
+                    var surfaceHasChanged = !HasSeriesFolderNotChangedSinceLastScan(library, seriesPaths, directory, forceCheck);
+                    await ParseAndTrackGdsSurfaceFiles(directory, folderPath, fileExtensions, matcher, seriesPaths,
+                        library, scannedSeries, changedSeries, surfaceHasChanged);
+                    continue;
+                }
+
+                if (directory.EndsWith("Specials", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogDebug("Skipping {Directory} as it ends with 'Specials'", directory);
+                    continue;
+                }
+
+                await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+                    MessageFactory.FileScanProgressEvent(directory, library.Name, ProgressEventType.Updated));
+
+                var hasChanged = !HasSeriesFolderNotChangedSinceLastScan(library, seriesPaths, directory, forceCheck);
+                var scanResult = hasChanged
+                    ? CreateScanResult(directory, folderPath, true, ScanDirectoryFiles(directory, fileExtensions, matcher))
+                    : CreateScanResult(directory, folderPath, false, ArraySegment<string>.Empty);
+
+                await ParseAndTrackGdsScanResult(scanResult, seriesPaths, library, scannedSeries, changedSeries);
+                processedDirs.Add(directory);
+
+                if (processedDirectoryCount % 250 == 0)
+                {
+                    _logger.LogDebug("[ScannerService] GDS streaming scan processed {DirectoryCount} directories for {FolderPath}",
+                        processedDirectoryCount, folderPath);
+                }
+            }
+        }
+        else
+        {
+            var normalizedPath = Parser.NormalizePath(folderPath);
+            var libraryRoot = library.Folders.FirstOrDefault(f =>
+                normalizedPath.Contains(Parser.NormalizePath(f.Path)))?.Path ?? folderPath;
+
+            await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+                MessageFactory.FileScanProgressEvent(normalizedPath, library.Name, ProgressEventType.Updated));
+
+            var hasChanged = !HasSeriesFolderNotChangedSinceLastScan(library, seriesPaths, normalizedPath, forceCheck);
+            var scanResult = hasChanged
+                ? CreateScanResult(normalizedPath, libraryRoot, true, ScanDirectoryFiles(folderPath, fileExtensions, matcher))
+                : CreateScanResult(normalizedPath, libraryRoot, false, ArraySegment<string>.Empty);
+
+            await ParseAndTrackGdsScanResult(scanResult, seriesPaths, library, scannedSeries, changedSeries);
+            processedDirectoryCount = 1;
+        }
+
+        _logger.LogInformation("[ScannerService] Streaming GDS scan grouped {SeriesCount} series from {DirectoryCount} directories for {LibraryName}",
+            scannedSeries.Count, processedDirectoryCount, library.Name);
+        _logger.LogDebug("\t[ScannerService] Library {LibraryName} Step 1.C: GDS streaming scan grouped {SeriesCount} series from {DirectoryCount} directories",
+            library.Name, scannedSeries.Count, processedDirectoryCount);
+
+        UpdateSeriesSortOrder(scannedSeries);
+        CreateFinalGdsSeriesResults(scannedSeries, changedSeries, processedScannedSeries);
+    }
+
+    private async Task ScanAndPlanGdsFolder(string folderPath, Library library, bool isLibraryScan,
+        IDictionary<string, IList<SeriesModified>> seriesPaths,
+        ConcurrentDictionary<ParsedSeries, List<GdsScannedFileRef>> scannedSeries, HashSet<string> changedSeries,
+        bool forceCheck)
+    {
+        var fileExtensions = string.Join("|", library.LibraryFileTypes.Select(l => l.FileTypeGroup.GetRegex()));
+        if (string.IsNullOrWhiteSpace(fileExtensions))
+        {
+            return;
+        }
+
+        var matcher = BuildMatcher(library);
+        var processedDirs = new HashSet<string>();
+
+        if (isLibraryScan)
+        {
+            foreach (var directory in EnumerateDirectoriesBottomUp(folderPath, matcher))
+            {
+                if (HasProcessedDescendant(processedDirs, directory))
+                {
+                    var surfaceHasChanged = !HasSeriesFolderNotChangedSinceLastScan(library, seriesPaths, directory, forceCheck);
+                    await ParseAndPlanGdsSurfaceFiles(directory, folderPath, fileExtensions, matcher, seriesPaths,
+                        library, scannedSeries, changedSeries, surfaceHasChanged);
+                    continue;
+                }
+
+                if (directory.EndsWith("Specials", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogDebug("Skipping {Directory} as it ends with 'Specials'", directory);
+                    continue;
+                }
+
+                await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+                    MessageFactory.FileScanProgressEvent(directory, library.Name, ProgressEventType.Updated));
+
+                var hasChanged = !HasSeriesFolderNotChangedSinceLastScan(library, seriesPaths, directory, forceCheck);
+                var scanResult = hasChanged
+                    ? CreateScanResult(directory, folderPath, true, ScanDirectoryFiles(directory, fileExtensions, matcher))
+                    : CreateScanResult(directory, folderPath, false, ArraySegment<string>.Empty);
+
+                await ParseAndPlanGdsScanResult(scanResult, seriesPaths, library, scannedSeries, changedSeries);
+                processedDirs.Add(directory);
+            }
+        }
+        else
+        {
+            var normalizedPath = Parser.NormalizePath(folderPath);
+            var libraryRoot = library.Folders.FirstOrDefault(f =>
+                normalizedPath.Contains(Parser.NormalizePath(f.Path)))?.Path ?? folderPath;
+
+            await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+                MessageFactory.FileScanProgressEvent(normalizedPath, library.Name, ProgressEventType.Updated));
+
+            var hasChanged = !HasSeriesFolderNotChangedSinceLastScan(library, seriesPaths, normalizedPath, forceCheck);
+            var scanResult = hasChanged
+                ? CreateScanResult(normalizedPath, libraryRoot, true, ScanDirectoryFiles(folderPath, fileExtensions, matcher))
+                : CreateScanResult(normalizedPath, libraryRoot, false, ArraySegment<string>.Empty);
+
+            await ParseAndPlanGdsScanResult(scanResult, seriesPaths, library, scannedSeries, changedSeries);
+        }
+    }
+
+    private async Task ParseAndPlanGdsSurfaceFiles(string directory, string folderPath, string fileExtensions,
+        GlobMatcher matcher, IDictionary<string, IList<SeriesModified>> seriesPaths, Library library,
+        ConcurrentDictionary<ParsedSeries, List<GdsScannedFileRef>> scannedSeries, HashSet<string> changedSeries,
+        bool hasChanged)
+    {
+        var files = _directoryService.ScanFiles(directory, fileExtensions, matcher, SearchOption.TopDirectoryOnly);
+        if (files.Count == 0)
+        {
+            return;
+        }
+
+        await ParseAndPlanGdsScanResult(CreateScanResult(directory, folderPath, hasChanged, files), seriesPaths,
+            library, scannedSeries, changedSeries);
+    }
+
+    private async Task ParseAndPlanGdsScanResult(ScanResult scanResult,
+        IDictionary<string, IList<SeriesModified>> seriesPaths, Library library,
+        ConcurrentDictionary<ParsedSeries, List<GdsScannedFileRef>> scannedSeries, HashSet<string> changedSeries)
+    {
+        await ParseFiles(scanResult, seriesPaths, library);
+
+        foreach (var info in scanResult.ParserInfos)
+        {
+            ParsedSeries? series = null;
+            try
+            {
+                series = TrackGdsSeriesFile(scannedSeries, info, scanResult.Folder, scanResult.LibraryRoot);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[ScannerService] Exception occurred during GDS planning {FilePath}. Skipping this file",
+                    info?.FullFilePath);
+            }
+
+            if (scanResult.HasChanged && series != null)
+            {
+                changedSeries.Add(BuildTrackedSeriesKey(series));
+            }
+        }
+
+        scanResult.Files = ArraySegment<string>.Empty;
+        scanResult.ParserInfos = ArraySegment<ParserInfo>.Empty;
+    }
+
+    private ParsedSeries? TrackGdsSeriesFile(ConcurrentDictionary<ParsedSeries, List<GdsScannedFileRef>> scannedSeries,
+        ParserInfo? info, string folder, string libraryRoot)
+    {
+        if (info == null || string.IsNullOrEmpty(info.Series) || string.IsNullOrEmpty(info.FullFilePath)) return null;
+
+        if (string.IsNullOrEmpty(info.Series.ToNormalized()))
+        {
+            _logger.LogCritical("[ScannerService] {SeriesName} @ {FileName} is empty when normalized, this file will not be ingested!",
+                info.Series, info.Filename);
+            return null;
+        }
+
+        var normalizedSeries = info.Series.ToNormalized();
+        var normalizedSortSeries = info.SeriesSort.ToNormalized();
+        var normalizedLocalizedSeries = info.LocalizedSeries.ToNormalized();
+        var existingKey = scannedSeries.Keys.SingleOrDefault(series =>
+            MergeNameGuard(series.Format, series.NormalizedName, info.Format, LibraryType.GDS,
+                normalizedSeries, normalizedSortSeries, normalizedLocalizedSeries));
+        existingKey ??= new ParsedSeries
+        {
+            Format = info.Format,
+            Name = info.Series,
+            NormalizedName = normalizedSeries
+        };
+
+        var fileRef = new GdsScannedFileRef
+        {
+            FilePath = Parser.NormalizePath(info.FullFilePath),
+            Folder = Parser.NormalizePath(folder),
+            LibraryRoot = libraryRoot
+        };
+
+        scannedSeries.AddOrUpdate(existingKey, [fileRef], (_, oldValue) =>
+        {
+            oldValue ??= [];
+            if (oldValue.All(existing => !Parser.NormalizePath(existing.FilePath).Equals(fileRef.FilePath, StringComparison.OrdinalIgnoreCase)))
+            {
+                oldValue.Add(fileRef);
+            }
+
+            return oldValue;
+        });
+
+        return existingKey;
+    }
+
+    private IList<string> ScanDirectoryFiles(string directory, string fileExtensions, GlobMatcher matcher)
+    {
+        var files = _directoryService.ScanFiles(directory, fileExtensions, matcher);
+        if (files.Count == 0)
+        {
+            _logger.LogDebug("[ProcessFiles] Empty directory: {Directory}. Keeping empty will cause Kavita to scan this each time", directory);
+        }
+
+        return files;
+    }
+
+    private async Task ParseAndTrackGdsSurfaceFiles(string directory, string folderPath, string fileExtensions,
+        GlobMatcher matcher, IDictionary<string, IList<SeriesModified>> seriesPaths, Library library,
+        ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, HashSet<string> changedSeries,
+        bool hasChanged)
+    {
+        var files = _directoryService.ScanFiles(directory, fileExtensions, matcher, SearchOption.TopDirectoryOnly);
+        if (files.Count == 0)
+        {
+            return;
+        }
+
+        await ParseAndTrackGdsScanResult(CreateScanResult(directory, folderPath, hasChanged, files), seriesPaths,
+            library, scannedSeries, changedSeries);
+    }
+
+    private async Task ParseAndTrackGdsScanResult(ScanResult scanResult,
+        IDictionary<string, IList<SeriesModified>> seriesPaths, Library library,
+        ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, HashSet<string> changedSeries)
+    {
+        await ParseFiles(scanResult, seriesPaths, library);
+
+        foreach (var info in scanResult.ParserInfos)
+        {
+            ParsedSeries? series = null;
+            try
+            {
+                series = TrackSeries(scannedSeries, info, library.Type);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[ScannerService] Exception occurred during GDS tracking {FilePath}. Skipping this file",
+                    info?.FullFilePath);
+            }
+
+            if (scanResult.HasChanged && series != null)
+            {
+                changedSeries.Add(BuildTrackedSeriesKey(series));
+            }
+        }
+
+        scanResult.Files = ArraySegment<string>.Empty;
+        scanResult.ParserInfos = ArraySegment<ParserInfo>.Empty;
+    }
+
+    private static void CreateFinalGdsSeriesResults(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries,
+        HashSet<string> changedSeries, ConcurrentBag<ScannedSeriesResult> processedScannedSeries)
+    {
+        foreach (var series in scannedSeries.Keys)
+        {
+            if (scannedSeries[series].Count <= 0) continue;
+
+            processedScannedSeries.Add(new ScannedSeriesResult
+            {
+                HasChanged = changedSeries.Contains(BuildTrackedSeriesKey(series)),
+                ParsedSeries = series,
+                ParsedInfos = scannedSeries[series]
+            });
+        }
+    }
+
+    private static string BuildTrackedSeriesKey(ParsedSeries series)
+    {
+        return $"{series.Format}:{series.NormalizedName}";
     }
 
     /// <summary>

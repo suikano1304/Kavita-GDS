@@ -3,18 +3,18 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
 using Kavita.Common.Extensions;
 using Kavita.Models.Entities.Enums;
 using Kavita.Models.Metadata;
 using Kavita.Services.Extensions;
-using YamlDotNet.Serialization;
 
 namespace Kavita.Services.Helpers;
 
 public static class GdsMetadataParser
 {
-    private static readonly IDeserializer Deserializer = new DeserializerBuilder().Build();
+    private const int MaxLargeYamlLinePrefixChars = 8 * 1024;
     private static readonly ConcurrentDictionary<string, CachedYaml> YamlCache = new(StringComparer.OrdinalIgnoreCase);
 
     public static ComicInfo? GetComicInfo(string filePath, ComicInfo? baseInfo = null)
@@ -25,14 +25,18 @@ public static class GdsMetadataParser
         var yamlPath = GetMetadataPath(directory);
         if (string.IsNullOrEmpty(yamlPath)) return baseInfo;
 
-        var yaml = GetCachedYaml(yamlPath);
-        if (yaml == null)
+        var metadata = GetCachedYamlInfo(yamlPath)?.Metadata;
+        if (metadata == null || metadata.Count == 0)
         {
             return BuildFallbackComicInfo(filePath, baseInfo);
         }
 
-        if (yaml == null || !TryGetMap(yaml, "meta", out var meta)) return baseInfo;
+        return BuildComicInfo(filePath, baseInfo, key =>
+            metadata.TryGetValue(key, out var value) ? value : null);
+    }
 
+    private static ComicInfo BuildComicInfo(string filePath, ComicInfo? baseInfo, Func<string, string?> metadata)
+    {
         var info = baseInfo ?? new ComicInfo();
 
         if (string.IsNullOrWhiteSpace(info.Title))
@@ -40,28 +44,28 @@ public static class GdsMetadataParser
             info.Title = BuildTitleFromFileName(filePath);
         }
 
-        Apply(meta, "Summary", value => info.Summary = value);
-        Apply(meta, "Genres", value => info.Genre = value);
-        Apply(meta, "Tags", value => info.Tags = value);
-        Apply(meta, "Language", value => info.LanguageISO = value);
-        Apply(meta, "Web Links", value => info.Web = value);
-        Apply(meta, "Person Writers", value => info.Writer = value);
-        Apply(meta, "Writer", value => info.Writer = value);
-        Apply(meta, "Person Translator", value => info.Translator = value);
-        Apply(meta, "Person Publisher", value => info.Publisher = value);
-        Apply(meta, "Person Penciller", value => info.Penciller = value);
-        Apply(meta, "Person Inker", value => info.Inker = value);
-        Apply(meta, "Person Colorist", value => info.Colorist = value);
-        Apply(meta, "Person Letterer", value => info.Letterer = value);
-        Apply(meta, "Person CoverArtist", value => info.CoverArtist = value);
-        Apply(meta, "Person Editor", value => info.Editor = value);
-        Apply(meta, "Person Imprint", value => info.Imprint = value);
-        Apply(meta, "Person Character", value => info.Characters = value);
-        Apply(meta, "Person Team", value => info.Teams = value);
-        Apply(meta, "Person Location", value => info.Locations = value);
-        Apply(meta, "Age Rating", value => info.AgeRating = ParseAgeRating(value));
+        Apply(metadata, "Summary", value => info.Summary = value);
+        Apply(metadata, "Genres", value => info.Genre = value);
+        Apply(metadata, "Tags", value => info.Tags = value);
+        Apply(metadata, "Language", value => info.LanguageISO = value);
+        Apply(metadata, "Web Links", value => info.Web = value);
+        Apply(metadata, "Person Writers", value => info.Writer = value);
+        Apply(metadata, "Writer", value => info.Writer = value);
+        Apply(metadata, "Person Translator", value => info.Translator = value);
+        Apply(metadata, "Person Publisher", value => info.Publisher = value);
+        Apply(metadata, "Person Penciller", value => info.Penciller = value);
+        Apply(metadata, "Person Inker", value => info.Inker = value);
+        Apply(metadata, "Person Colorist", value => info.Colorist = value);
+        Apply(metadata, "Person Letterer", value => info.Letterer = value);
+        Apply(metadata, "Person CoverArtist", value => info.CoverArtist = value);
+        Apply(metadata, "Person Editor", value => info.Editor = value);
+        Apply(metadata, "Person Imprint", value => info.Imprint = value);
+        Apply(metadata, "Person Character", value => info.Characters = value);
+        Apply(metadata, "Person Team", value => info.Teams = value);
+        Apply(metadata, "Person Location", value => info.Locations = value);
+        Apply(metadata, "Age Rating", value => info.AgeRating = ParseAgeRating(value));
 
-        Apply(meta, "Release Date", value =>
+        Apply(metadata, "Release Date", value =>
         {
             if (DateTime.TryParseExact(value, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
             {
@@ -70,17 +74,29 @@ public static class GdsMetadataParser
                 info.Day = date.Day;
             }
         });
-        Apply(meta, "Year", value =>
+        Apply(metadata, "Year", value =>
         {
-            if (int.TryParse(value, out var year)) info.Year = year;
+            if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var year) &&
+                year is >= 1 and <= 9999)
+            {
+                info.Year = year;
+            }
         });
-        Apply(meta, "Month", value =>
+        Apply(metadata, "Month", value =>
         {
-            if (int.TryParse(value, out var month)) info.Month = month;
+            if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var month) &&
+                month is >= 1 and <= 12)
+            {
+                info.Month = month;
+            }
         });
-        Apply(meta, "Day", value =>
+        Apply(metadata, "Day", value =>
         {
-            if (int.TryParse(value, out var day)) info.Day = day;
+            if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var day) &&
+                day is >= 1 and <= 31)
+            {
+                info.Day = day;
+            }
         });
 
         info.CleanComicInfo();
@@ -110,27 +126,24 @@ public static class GdsMetadataParser
         if (string.IsNullOrEmpty(yamlPath)) return false;
 
         var fileName = Path.GetFileName(filePath);
-        try
-        {
-            var yaml = GetCachedYaml(yamlPath);
-            if (yaml == null) return false;
-            if (!TryGetMap(yaml, "files", out var files)) return false;
-
-            foreach (var (sourceKey, value) in files)
-            {
-                if (!string.Equals(sourceKey.ToString()?.Trim(), fileName, StringComparison.OrdinalIgnoreCase)) continue;
-                if (value is not Dictionary<object, object?> fileMetadata) return false;
-                if (!TryGetScalar(fileMetadata, "cover", out var cover)) return false;
-
-                return TryNormalizeBase64Cover(cover, out encodedImage);
-            }
-        }
-        catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException or InvalidOperationException or ArgumentException)
-        {
-            return TryGetCoverBase64FromLines(yamlPath, fileName, out encodedImage);
-        }
-
         return TryGetCoverBase64FromLines(yamlPath, fileName, out encodedImage);
+    }
+
+    public static bool TryGetPageCount(string filePath, out int pages)
+    {
+        pages = 0;
+
+        var directory = Path.GetDirectoryName(filePath);
+        if (string.IsNullOrEmpty(directory)) return false;
+
+        var yamlPath = GetMetadataPath(directory);
+        if (string.IsNullOrEmpty(yamlPath)) return false;
+
+        var fileName = Path.GetFileName(filePath);
+        if (string.IsNullOrEmpty(fileName)) return false;
+
+        var yamlInfo = GetCachedYamlInfo(yamlPath);
+        return yamlInfo?.FilePages.TryGetValue(fileName, out pages) == true && pages > 0;
     }
 
     private static bool TryGetCoverBase64FromLines(string yamlPath, string fileName, out string encodedImage)
@@ -267,7 +280,7 @@ public static class GdsMetadataParser
         return File.Exists(yamlPath) ? yamlPath : null;
     }
 
-    private static Dictionary<object, object?>? GetCachedYaml(string yamlPath)
+    private static LargeYamlInfo? GetCachedYamlInfo(string yamlPath)
     {
         FileInfo? fileInfo = null;
         try
@@ -277,58 +290,152 @@ public static class GdsMetadataParser
 
             if (YamlCache.TryGetValue(yamlPath, out var cached) &&
                 cached.Length == fileInfo.Length &&
-                cached.LastWriteTimeUtc == fileInfo.LastWriteTimeUtc)
+                cached.LastWriteTimeUtc == fileInfo.LastWriteTimeUtc &&
+                cached.LargeMetadata != null &&
+                cached.LargeFilePages != null)
             {
-                return cached.Yaml;
+                return new LargeYamlInfo(cached.LargeMetadata, cached.LargeFilePages);
             }
 
-            var yaml = Deserializer.Deserialize<Dictionary<object, object?>>(File.ReadAllText(yamlPath));
-            YamlCache[yamlPath] = new CachedYaml(fileInfo.Length, fileInfo.LastWriteTimeUtc, yaml);
-            return yaml;
+            var largeInfo = ReadLargeYamlInfo(yamlPath);
+            YamlCache[yamlPath] = new CachedYaml(fileInfo.Length, fileInfo.LastWriteTimeUtc,
+                largeInfo.Metadata, largeInfo.FilePages);
+            return largeInfo;
         }
-        catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException or InvalidOperationException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException or OutOfMemoryException)
         {
             if (fileInfo?.Exists == true)
             {
-                YamlCache[yamlPath] = new CachedYaml(fileInfo.Length, fileInfo.LastWriteTimeUtc, null);
+                YamlCache[yamlPath] = new CachedYaml(fileInfo.Length, fileInfo.LastWriteTimeUtc,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase));
             }
 
             return null;
         }
     }
 
-    private static void Apply(IReadOnlyDictionary<object, object?> map, string key, Action<string> setter)
+    private static LargeYamlInfo ReadLargeYamlInfo(string yamlPath)
     {
-        if (!TryGetScalar(map, key, out var value)) return;
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var filePages = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var inMeta = false;
+        var inFiles = false;
+        string? currentFile = null;
+
+        foreach (var cappedLine in ReadCappedLines(yamlPath, MaxLargeYamlLinePrefixChars))
+        {
+            var line = cappedLine.Text;
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            if (TryParseIndentedKey(line, 0, out var rootKey))
+            {
+                inMeta = string.Equals(rootKey, "meta", StringComparison.OrdinalIgnoreCase);
+                inFiles = string.Equals(rootKey, "files", StringComparison.OrdinalIgnoreCase);
+                currentFile = null;
+                continue;
+            }
+
+            if (inFiles)
+            {
+                if (!char.IsWhiteSpace(line[0]))
+                {
+                    inFiles = false;
+                    currentFile = null;
+                    continue;
+                }
+
+                if (TryParseIndentedKey(line, 4, out var fileName))
+                {
+                    currentFile = UnquoteYamlScalar(fileName);
+                    continue;
+                }
+
+                if (currentFile != null && !cappedLine.IsTruncated &&
+                    TryParseIndentedScalar(line, 8, "page", out var pageText) &&
+                    int.TryParse(UnquoteYamlScalar(pageText), NumberStyles.None, CultureInfo.InvariantCulture, out var page) &&
+                    page > 0)
+                {
+                    filePages[currentFile] = page;
+                }
+
+                continue;
+            }
+
+            if (inMeta)
+            {
+                if (!char.IsWhiteSpace(line[0]))
+                {
+                    inMeta = false;
+                    continue;
+                }
+                if (cappedLine.IsTruncated) continue;
+
+                if (!TryParseIndentedScalar(line, 4, out var key, out var value)) continue;
+                metadata[key] = UnquoteYamlScalar(value);
+            }
+        }
+
+        return new LargeYamlInfo(metadata, filePages);
+    }
+
+    private static IEnumerable<CappedLine> ReadCappedLines(string path, int maxChars)
+    {
+        using var stream = File.OpenRead(path);
+        using var reader = new StreamReader(stream, Encoding.UTF8, true, 64 * 1024);
+
+        var builder = new StringBuilder(Math.Min(maxChars, 1024));
+        var truncated = false;
+
+        while (reader.Read() is var current && current >= 0)
+        {
+            var ch = (char) current;
+            if (ch == '\r') continue;
+
+            if (ch == '\n')
+            {
+                yield return new CappedLine(builder.ToString(), truncated);
+                builder.Clear();
+                truncated = false;
+                continue;
+            }
+
+            if (builder.Length < maxChars)
+            {
+                builder.Append(ch);
+            }
+            else
+            {
+                truncated = true;
+            }
+        }
+
+        if (builder.Length > 0 || truncated)
+        {
+            yield return new CappedLine(builder.ToString(), truncated);
+        }
+    }
+
+    private static void Apply(Func<string, string?> metadata, string key, Action<string> setter)
+    {
+        var value = metadata(key);
+        if (string.IsNullOrWhiteSpace(value)) return;
         setter(value);
     }
 
-    private static bool TryGetMap(IReadOnlyDictionary<object, object?> source, string key,
-        out Dictionary<object, object?> map)
+    private static bool TryParseIndentedScalar(string line, int indent, out string key, out string value)
     {
-        map = [];
-        foreach (var (sourceKey, value) in source)
-        {
-            if (!string.Equals(sourceKey.ToString(), key, StringComparison.OrdinalIgnoreCase)) continue;
-            if (value is not Dictionary<object, object?> nested) return false;
-            map = nested;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool TryGetScalar(IReadOnlyDictionary<object, object?> source, string key, out string value)
-    {
+        key = string.Empty;
         value = string.Empty;
-        foreach (var (sourceKey, rawValue) in source)
-        {
-            if (!string.Equals(sourceKey.ToString(), key, StringComparison.OrdinalIgnoreCase)) continue;
-            value = rawValue?.ToString()?.Trim() ?? string.Empty;
-            return !string.IsNullOrWhiteSpace(value);
-        }
+        if (!HasIndent(line, indent)) return false;
 
-        return false;
+        var trimmed = line.Trim();
+        var separatorIndex = trimmed.IndexOf(':');
+        if (separatorIndex <= 0) return false;
+
+        key = trimmed[..separatorIndex].Trim();
+        value = trimmed[(separatorIndex + 1)..].Trim();
+        return !string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value);
     }
 
     private static string ParseAgeRating(string value)
@@ -352,5 +459,10 @@ public static class GdsMetadataParser
         return title.Trim();
     }
 
-    private sealed record CachedYaml(long Length, DateTime LastWriteTimeUtc, Dictionary<object, object?>? Yaml);
+    private readonly record struct CappedLine(string Text, bool IsTruncated);
+
+    private sealed record LargeYamlInfo(Dictionary<string, string> Metadata, Dictionary<string, int> FilePages);
+
+    private sealed record CachedYaml(long Length, DateTime LastWriteTimeUtc,
+        Dictionary<string, string>? LargeMetadata, Dictionary<string, int>? LargeFilePages);
 }

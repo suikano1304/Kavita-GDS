@@ -22,19 +22,23 @@ your reading collection with your friends and family!
 
 ## Kavita-GDS Fork Release
 
-This fork publishes GDS-focused Kavita builds through GHCR. The current public release is `0.9.0.12-4`, based on the official Kavita `0.9.0.12` nightly source plus the GDS patch stack.
+This fork publishes GDS-focused Kavita builds through GHCR. The current public release is `0.9.0.12-5`, based on the official Kavita `0.9.0.12` nightly source plus the GDS patch stack.
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-4
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-5
 ```
 
-The `0.9.0.12-4` release includes:
+The `0.9.0.12-5` release includes:
 
+- Streaming GDS scan-phase grouping that avoids retaining every per-directory scan result and parser list until the whole root is parsed.
 - Lower-memory GDS processing that releases parsed series metadata after each skipped or processed series.
 - "Last Modified" sorting that treats newly added content as content activity, so newly imported files with old filesystem timestamps can still surface correctly.
 - GDS scan fingerprints so unchanged series can skip expensive processing without relying on folder mtime skip behavior.
 - Content-file based "Last Modified" sorting and JumpBar dates, separate from DB entity update time.
-- Cached `kavita.yaml`/`kavita.yml` reads during scan passes.
+- Streaming `kavita.yaml`/`kavita.yml` metadata reads during scan passes, including large sidecar files, without loading unused cover payloads.
+- GDS page-count hints from sidecar metadata and filename page markers to avoid unnecessary archive opens during broad scans.
+- Stable GDS fingerprint matching for mixed-format series so unchanged mixed PDF/archive/text groups do not reprocess on every scan.
+- Korean part/volume parsing for series that intentionally contain separate part folders under the same normalized title.
 - Multi-arch GHCR images for `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
 
 See [RELEASE_NOTES.md](RELEASE_NOTES.md), [docs/BUILD_NOTES_KO.md](docs/BUILD_NOTES_KO.md), and [docs/CHANGELOG_KO.md](docs/CHANGELOG_KO.md) for release details and validation notes.

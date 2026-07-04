@@ -100,7 +100,27 @@ public static class GdsScanFingerprintHelper
 
     public static string BuildKey(string normalizedName, MangaFormat format)
     {
-        return $"{normalizedName}\u001f{(int) format}";
+        // GDS series can intentionally contain mixed formats. The representative Series.Format can differ
+        // from scan to scan depending on which file is parsed first, so fingerprint lookup must be name-based.
+        return normalizedName;
+    }
+
+    public static bool HasAnySidecars(IEnumerable<ParserInfo> parserInfos)
+    {
+        var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var specialDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var info in parserInfos.Where(p => !string.IsNullOrWhiteSpace(p.FullFilePath)))
+        {
+            var directory = Path.GetDirectoryName(Parser.NormalizePath(info.FullFilePath));
+            if (string.IsNullOrWhiteSpace(directory)) continue;
+
+            directories.Add(directory);
+            AddAncestorDirectories(directory, specialDirectories);
+        }
+
+        return directories.Any(HasDirectorySidecar) ||
+               specialDirectories.Any(directory => File.Exists(Path.Join(directory, ".special")));
     }
 
     private static IEnumerable<string> GetSidecarLines(string directory)
@@ -141,6 +161,16 @@ public static class GdsScanFingerprintHelper
         {
             return $"{prefix}|error|{normalizedPath}|{ex.GetType().Name}";
         }
+    }
+
+    private static bool HasDirectorySidecar(string directory)
+    {
+        foreach (var fileName in DirectorySidecars)
+        {
+            if (File.Exists(Path.Join(directory, fileName))) return true;
+        }
+
+        return false;
     }
 
     private static string ComputeHash(IEnumerable<string> lines)

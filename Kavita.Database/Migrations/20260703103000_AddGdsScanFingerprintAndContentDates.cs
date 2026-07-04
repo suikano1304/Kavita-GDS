@@ -70,19 +70,19 @@ namespace Kavita.Database.Migrations
             migrationBuilder.Sql("""
                 UPDATE Series
                 SET ContentLastModified = COALESCE((
-                    SELECT MAX(CASE WHEN mf.LastModified > mf.FileCreated THEN mf.LastModified ELSE mf.FileCreated END)
+                    SELECT MAX(MAX(mf.FileCreated, mf.Created, c.Created))
                     FROM Volume v
                     JOIN Chapter c ON c.VolumeId = v.Id
                     JOIN MangaFile mf ON mf.ChapterId = c.Id
                     WHERE v.SeriesId = Series.Id
-                ), LastModified),
+                ), Created),
                 ContentLastModifiedUtc = COALESCE((
-                    SELECT MAX(CASE WHEN mf.LastModifiedUtc > mf.FileCreatedUtc THEN mf.LastModifiedUtc ELSE mf.FileCreatedUtc END)
+                    SELECT MAX(MAX(mf.FileCreatedUtc, mf.CreatedUtc, c.CreatedUtc))
                     FROM Volume v
                     JOIN Chapter c ON c.VolumeId = v.Id
                     JOIN MangaFile mf ON mf.ChapterId = c.Id
                     WHERE v.SeriesId = Series.Id
-                ), LastModifiedUtc);
+                ), CreatedUtc);
                 """);
         }
 

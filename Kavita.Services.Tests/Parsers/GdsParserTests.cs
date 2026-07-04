@@ -65,4 +65,20 @@ public class GdsParserTests : AbstractFsTest
         Assert.False(actual.HasEndMarker);
         Assert.Null(ParsedCountHelper.GetTotalCount(actual));
     }
+
+    [Theory]
+    [InlineData("슛 Shoot/슛! 1부 01권 [1080x] (예스)#200.zip", "슛 Shoot 1부", "1")]
+    [InlineData("슛 Shoot/슛! 2부 01권 [1080x] (예스)#186.zip", "슛 Shoot 2부", "1")]
+    [InlineData("슛 Shoot 1부/슛! 1부 01권 [1080x] (예스)#200.zip", "슛 Shoot 1부", "1")]
+    public void Parse_GdsLibrary_KoreanPartVolume_ShouldSplitSeriesByPart(string relativePath, string expectedSeries,
+        string expectedVolume)
+    {
+        var filePath = Path.Join(_rootDirectory, relativePath);
+        var rootPath = Path.GetDirectoryName(filePath)!;
+        var actual = _parser.Parse(filePath, rootPath, _rootDirectory, LibraryType.GDS);
+
+        Assert.NotNull(actual);
+        Assert.Equal(expectedSeries, actual.Series);
+        Assert.Equal(expectedVolume, actual.Volumes);
+    }
 }

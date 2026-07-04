@@ -15,11 +15,15 @@ public class MangaFileBuilder : IEntityBuilder<MangaFile>
 
     public MangaFileBuilder(string filePath, MangaFormat format, int pages = 0)
     {
+        var now = DateTime.Now;
+        var utcNow = DateTime.UtcNow;
         _mangaFile = new MangaFile()
         {
             FilePath = Parser.NormalizePath(filePath),
             Format = format,
             Pages = pages,
+            Created = now,
+            CreatedUtc = utcNow,
             LastModified = File.GetLastWriteTime(filePath),
             LastModifiedUtc = File.GetLastWriteTimeUtc(filePath),
             FileCreated = File.GetCreationTime(filePath),

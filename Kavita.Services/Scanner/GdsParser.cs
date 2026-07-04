@@ -21,6 +21,10 @@ public class GdsParser(IDirectoryService directoryService, IDefaultParser imageP
         @"(?:^|[^\d#])(?<Range>\d+(?:\.\d+)?-\d+(?:\.\d+)?)(?=$|[\s_@~\-\[\]\(\)])",
         MatchOptions, Parser.RegexTimeout);
 
+    private static readonly Regex KoreanPartVolumeRegex = new(
+        @"(?<!\d)(?<Part>\d{1,3})\s*부\s*(?<Volume>\d{1,4}(?:\.\d+)?)\s*권",
+        MatchOptions, Parser.RegexTimeout);
+
     private static readonly HashSet<string> FormatFolderNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "archive", "archives", "book", "books", "cbz", "comic", "comics", "epub", "image", "images",
@@ -64,6 +68,11 @@ public class GdsParser(IDirectoryService directoryService, IDefaultParser imageP
         parentFolder = Regex.Replace(parentFolder, @"\s~{1,2}$", string.Empty, RegexOptions.None, Parser.RegexTimeout).Trim();
         ret.Series = parentFolder;
 
+        if (TryParseKoreanPart(fileName, out var part) && !SeriesAlreadyHasPartMarker(parentFolder, part))
+        {
+            ret.Series = $"{parentFolder} {part}부";
+        }
+
         ret.IsSpecial = ret.Volumes == Parser.LooseLeafVolume && Parser.IsDefaultChapter(ret.Chapters);
         if (Path.Exists(Path.Join(libraryRoot, ".special")) ||
             Path.Exists(Path.Join(Path.GetDirectoryName(filePath), ".special")))
@@ -91,6 +100,23 @@ public class GdsParser(IDirectoryService directoryService, IDefaultParser imageP
 
         var seriesPath = Path.GetDirectoryName(parentPath);
         return Path.GetFileName(seriesPath) ?? parentFolder;
+    }
+
+    private static bool TryParseKoreanPart(string fileName, out string part)
+    {
+        part = string.Empty;
+        var match = KoreanPartVolumeRegex.Match(fileName);
+        if (!match.Success) return false;
+
+        part = match.Groups["Part"].Value.TrimStart('0');
+        if (string.IsNullOrWhiteSpace(part)) part = "0";
+        return part != "0";
+    }
+
+    private static bool SeriesAlreadyHasPartMarker(string seriesName, string part)
+    {
+        return Regex.IsMatch(seriesName, $@"(?<!\d)0*{Regex.Escape(part)}\s*부(?!\d)", MatchOptions,
+            Parser.RegexTimeout);
     }
 
     public override bool IsApplicable(string filePath, LibraryType type)

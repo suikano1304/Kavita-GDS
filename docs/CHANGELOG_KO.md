@@ -2,9 +2,23 @@
 
 기준 버전: `kavita-gds-0.9.0.2-scan-20260528`
 
-현재 공개 릴리즈: `0.9.0.12-4`
+현재 공개 릴리즈: `0.9.0.12-5`
 
 참고: 운영 컨테이너가 이전 태그를 계속 쓰는 경우, source/release/운영 기준이 다시 달라질 수 있습니다. 운영 검증은 적용 전 baseline과 적용 후 postflight를 같은 진단 스크립트로 비교하세요.
+
+## 2026-07-04: `0.9.0.12-5` GDS scan phase 메모리 및 대형 sidecar 보강
+
+- 대형 GDS 라이브러리 스캔에서 파일 스캔/파싱 단계가 끝나기 전에 RSS가 급증할 수 있던 구조를 보강했습니다.
+- GDS 라이브러리는 디렉터리별 `ScanResult`와 parser list를 전체 root 파싱 완료까지 보관하지 않고, 디렉터리 단위로 파싱 후 즉시 series grouping에 반영합니다.
+- 운영 로그에서 새 경로를 확인할 수 있도록 GDS streaming scan 시작/그룹 완료 로그를 Information 레벨로 남깁니다.
+- 대형 `kavita.yaml`/`kavita.yml`은 필요한 `meta` scalar와 file page hint만 streaming으로 읽어 full YAML deserialize와 불필요한 cover payload retention을 피합니다.
+- GDS YAML page hint와 파일명 `#숫자` page marker를 우선 사용해 broad scan 중 불필요한 archive open을 줄였습니다.
+- sidecar metadata가 의도적으로 비어 있거나 일부만 있는 series를 매 scan마다 metadata backfill 대상으로 다시 잡지 않도록 했습니다.
+- mixed-format GDS series의 fingerprint lookup을 normalized series identity 기준으로 안정화해 대표 format 차이 때문에 같은 series가 반복 재처리되는 문제를 줄였습니다.
+- GDS broad scan 완료 후 synchronous abandoned metadata cleanup을 건너뛰어 no-change scan 이후 긴 CPU 작업으로 이어지는 상황을 줄였습니다.
+- 동일 series 아래 한국어 `N부 M권` 형태의 part/volume 파일이 단순 volume number로 합쳐지지 않도록 parser를 보강했습니다.
+- 운영 대형 GDS 라이브러리 검증에서 `4668` series parse, 처리 대상 `0`건, 약 `148`초 완료, 완료 후 container memory 약 `350 MiB`, `/api/health=Ok`를 확인했습니다.
+- `0.9.0.12-4`의 fingerprint skip, 처리 단계 parser 참조 해제, content freshness 기반 "마지막 수정" 정렬은 유지합니다.
 
 ## 2026-07-03: `0.9.0.12-4` GDS 스캔 메모리 및 최신성 정렬 보강
 
@@ -214,7 +228,7 @@
 - EPUB manifest의 duplicate item/id/href를 임시 copy에서 제거하고 spine 참조를 유지되는 item id로 rewrite하도록 보강했습니다.
 - EPUB repair 경로를 `book-info`, `book-page`, TOC, resource, metadata, word-count 경로에 적용했습니다.
 - EPUB 내부 resource 상대경로를 정규화해 `../Images/...` 같은 링크를 더 안정적으로 처리합니다.
-- `/mnt/gds` scanner는 원격 EPUB 전체 읽기를 하지 않도록 유지해 Web UI blocking을 피했습니다.
+- GDS scanner는 remote-backed EPUB 전체 읽기를 하지 않도록 유지해 Web UI blocking을 피했습니다.
 - GDS archive 커버 재생성 시 2권 이후 chapter/volume cover가 1권 cover로 고정되는 문제를 수정했습니다.
 - TXT fallback cover 한글 글꼴 깨짐을 막기 위해 runtime image에 Nanum Gothic Regular/Bold/ExtraBold를 포함했습니다.
 - 대형 GDS 강제 스캔에서 DB 갱신, 커버 생성, word-count 분석이 동시에 많이 쌓여 OOM으로 이어질 수 있어, GDS 라이브러리만 시리즈 단위 저메모리 직렬 처리 경로를 사용하도록 보강했습니다.
