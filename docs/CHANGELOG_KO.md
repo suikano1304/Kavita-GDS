@@ -2,37 +2,66 @@
 
 기준 버전: `kavita-gds-0.9.0.2-scan-20260528`
 
-현재 공개 릴리즈: `0.9.0.12-5`
+현재 공개 릴리즈: `0.9.0.12-6`
 
 참고: 운영 컨테이너가 이전 태그를 계속 쓰는 경우, source/release/운영 기준이 다시 달라질 수 있습니다. 운영 검증은 적용 전 baseline과 적용 후 postflight를 같은 진단 스크립트로 비교하세요.
+
+## 2026-07-05: `0.9.0.12-6` GDS scan 처리 메모리 및 커버 생성 보강
+
+- GDS 처리 단계에서 `ParsedSeries` 전체 값 목록을 오래 붙잡지 않도록 삭제 감지에는 normalized series key만 사용합니다.
+- 처리 대상 queue는 무거운 series result 객체 대신 index 목록으로 유지하고, skip/처리 완료 후 parser metadata 참조를 즉시 비웁니다.
+- scan 종료 시 GDS sidecar metadata cache를 명시적으로 비워 대형 sidecar scan 이후 retained memory를 줄입니다.
+- scan 중에는 대표 cover만 빠르게 보강하고, 전체 volume/chapter cover refresh는 metadata refresh 경로에서 수행하도록 분리했습니다.
+- sidecar cover base64는 fingerprint/metadata scan 중 중복 decode하지 않고 실제 thumbnail 생성 시점에만 검증합니다.
+- `tkavita` fixture 검증에서 변경 없음 재스캔 처리 대상 `0`, 파일 추가 후 처리 대상 `1`, sidecar 변경 후 재처리, 다권 합성 53개 chapter cover 누락 `0`, 재스캔 처리 대상 `0`을 확인했습니다.
+- Windows Docker Desktop에서 `linux/amd64`, `linux/arm64`, `linux/arm/v7` pushed GHCR image가 `/api/health=Ok`에 도달함을 확인했습니다.
+- 운영 적용은 기존 운영 스캔 완료 후 별도 postflight와 함께 진행합니다.
 
 ## 2026-07-04: `0.9.0.12-5` GDS scan phase 메모리 및 대형 sidecar 보강
 
 - 대형 GDS 라이브러리 스캔에서 파일 스캔/파싱 단계가 끝나기 전에 RSS가 급증할 수 있던 구조를 보강했습니다.
 - GDS 라이브러리는 디렉터리별 `ScanResult`와 parser list를 전체 root 파싱 완료까지 보관하지 않고, 디렉터리 단위로 파싱 후 즉시 series grouping에 반영합니다.
+- 운영 로그에서 새 경로를 확인할 수 있도록 GDS streaming scan 시작/그룹 완료 로그를 Information 레벨로 남깁니다.
 - 대형 `kavita.yaml`/`kavita.yml`은 필요한 `meta` scalar와 file page hint만 streaming으로 읽어 full YAML deserialize와 불필요한 cover payload retention을 피합니다.
+- GDS YAML page hint와 파일명 `#숫자` page marker를 우선 사용해 broad scan 중 불필요한 archive open을 줄였습니다.
 - sidecar metadata가 의도적으로 비어 있거나 일부만 있는 series를 매 scan마다 metadata backfill 대상으로 다시 잡지 않도록 했습니다.
-- mixed-format GDS series의 fingerprint lookup을 normalized series identity 기준으로 안정화했습니다.
+- mixed-format GDS series의 fingerprint lookup을 normalized series identity 기준으로 안정화해 대표 format 차이 때문에 같은 series가 반복 재처리되는 문제를 줄였습니다.
 - GDS broad scan 완료 후 synchronous abandoned metadata cleanup을 건너뛰어 no-change scan 이후 긴 CPU 작업으로 이어지는 상황을 줄였습니다.
 - 동일 series 아래 한국어 `N부 M권` 형태의 part/volume 파일이 단순 volume number로 합쳐지지 않도록 parser를 보강했습니다.
 - 운영 대형 GDS 라이브러리 검증에서 `4668` series parse, 처리 대상 `0`건, 약 `148`초 완료, 완료 후 container memory 약 `350 MiB`, `/api/health=Ok`를 확인했습니다.
+- `0.9.0.12-4`의 fingerprint skip, 처리 단계 parser 참조 해제, content freshness 기반 "마지막 수정" 정렬은 유지합니다.
 
 ## 2026-07-03: `0.9.0.12-4` GDS 스캔 메모리 및 최신성 정렬 보강
 
 - GDS 전체 스캔 처리 단계에서 `ParserInfo`/`ComicInfo` 목록을 끝까지 보관하지 않도록, 삭제 감지용 `ParsedSeries` 키와 실제 처리 대상 키를 분리했습니다.
-- 사용자-facing "마지막 수정" 기준인 `ContentLastModified`가 파일 timestamp뿐 아니라 새 Chapter/MangaFile의 DB 생성 시각도 포함합니다.
+- fingerprint가 같아 skip된 series는 즉시 parser metadata 참조를 비우고, 처리 대상 series도 한 series 처리 직후 참조를 비워 대형 라이브러리 스캔 중 유지되는 heap을 줄였습니다.
+- GDS 경로는 전체 `toProcess` 묶음을 만들지 않고 series 단위 저메모리 순차 처리 루프를 사용합니다.
+- 사용자-facing "마지막 수정" 기준인 `ContentLastModified`가 파일 timestamp뿐 아니라 새 Chapter/MangaFile의 DB 생성 시각도 포함합니다. 파일 timestamp가 과거로 보존된 신규 콘텐츠도 최근 항목으로 정렬될 수 있습니다.
 - 홈 "최근 업데이트 시리즈"에서 전체 목록으로 이동할 때 `LastChapterAdded`가 아니라 라이브러리의 "마지막 수정"과 같은 `LastModifiedDate` desc 정렬을 사용합니다.
+- `kavita.yaml`/sidecar 변경은 fingerprint mismatch를 일으키지만, sidecar 자체 변경 시각은 사용자-facing "마지막 수정" 날짜에 포함하지 않습니다.
 
 ## 2026-07-03: `0.9.0.12-3` GDS 스캔 fingerprint 및 콘텐츠 수정일 분리
 
 - GDS Library Scan은 신규 파일 누락을 막기 위해 폴더 mtime skip을 사용하지 않고 계속 디렉터리/파일을 열거합니다.
+- 열거된 series별 파일 경로, 크기, `LastWriteTimeUtc`, `CreationTimeUtc`, format/확장자, `kavita.yaml`/`kavita.yml`/`.special`/cover sidecar 상태로 scan fingerprint를 계산합니다.
 - 이전 fingerprint와 같은 GDS series는 `ProcessSeries`를 건너뛰어 실제 변경 없는 기존 시리즈 재처리를 줄입니다.
+- `Series.LastModified`는 DB 엔티티 수정일로 유지하고, 실제 콘텐츠 파일 기준 날짜인 `ContentLastModified`를 추가했습니다.
 - WebUI의 "마지막 수정" 정렬과 오른쪽 JumpBar 날짜는 `ContentLastModified`를 사용합니다.
+- `kavita.yaml` 변경은 fingerprint mismatch를 일으켜 재처리 대상이 되지만, 사용자-facing "마지막 수정" 날짜는 바꾸지 않습니다.
+- scan pass 안에서 `kavita.yaml`/`kavita.yml` 파싱을 경로별로 캐시해 remote-backed filesystem의 반복 sidecar 읽기를 줄였습니다.
+- Docker fixture 검증에서 동일 fixture 재스캔은 `Found 0 Series that need processing`, `kavita.yaml`만 변경한 경우 콘텐츠 날짜 유지, 신규 archive 추가 시 콘텐츠 날짜 상승을 확인했습니다.
+- `tkavita` fixture 검증에서 `/api/health=Ok`, Docker health `healthy`, Series API `contentLastModified`, GDS fingerprint skip 로그를 확인했습니다.
+- 프로덕션 `kavita`를 `0.9.0.12-3`로 교체했고 `/api/health=Ok`, Docker health `healthy`, 신규 `Series` migration column 적용을 확인했습니다.
 
-## 2026-07-02: `0.9.0.12-2` 한국어 검색 공백/유니코드 정규화 개선
+## 2026-07-02: `0.9.0.12-2` 한국어 검색 공백/유니코드 정규화 개선 (GDS 자체 패치)
 
-- `ToNormalized()`에 유니코드 NFC 정규화를 추가했습니다. 일부 입력기/OS에서 생성되는 분해형 한글 자모가 완성형 DB 데이터와 검색 매칭에 실패하던 문제를 해결합니다.
-- `Chapter.NormalizedTitleName`, `Library.NormalizedName` 필드를 신규 추가했습니다.
+- `ToNormalized()`에 유니코드 NFC 정규화를 추가했습니다. 일부 입력기/OS에서 생성되는 분해형(NFD) 한글 자모가 완성형(NFC) DB 데이터와 검색 매칭에 실패하던 문제를 해결합니다.
+- `Chapter.NormalizedTitleName`, `Library.NormalizedName` 필드를 신규 추가했습니다. 챕터 제목과 라이브러리 이름도 Series와 동일하게 띄어쓰기 무관 검색이 가능해졌습니다.
+- 검색 쿼리 정규화 불일치 버그 3건을 수정했습니다: `AppUserCollection` 검색이 정규화 필드를 정규화되지 않은 검색어로 비교하던 문제, `ReadingList` 검색이 `NormalizedTitle`을 전혀 사용하지 않던 문제, `Library` 검색에 정규화 필드가 아예 없던 문제.
+- `Series` 검색에서 미사용이던 `NormalizedLocalizedName` 필드를 검색 조건에 포함했습니다.
+- 신규 `ManualMigrateKoreanSearchNormalizationBackfill` 마이그레이션으로 기존 Series/Chapter/Library/Tag/Genre/Person/ReadingList/Collection의 정규화 필드를 전수 재계산합니다. 전체 라이브러리 재스캔 없이 서버 시작 시 1회 자동 적용됩니다.
+- 초성 검색, 조사(을/를/이/가 등) 제거 등 고급 한국어 검색 기능은 이번 범위에서 제외했습니다.
+- `Kavita.Common.Tests`에 `ToNormalized()` 공백 무관/NFC-NFD 동등성 단위 테스트를 추가했습니다.
 
 ## 2026-06-28: `0.9.0.12` official `0.9.0.12` nightly 포팅 릴리스
 

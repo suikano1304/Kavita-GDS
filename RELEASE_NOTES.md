@@ -2,17 +2,38 @@
 
 This release provides the Kavita official `0.9.0.12` nightly based GDS build as a GHCR multi-arch Docker image.
 
-Version: `0.9.0.12-5`
+Version: `0.9.0.12-6`
 
 ## Verification
 
+- **GDS processing memory reduction**: GDS delete reconciliation now keeps normalized series keys instead of full parsed series values, and the processing queue stores lightweight indexes instead of duplicating scanned series objects.
+- **Scan cache cleanup**: GDS sidecar metadata cache is cleared at scan completion so large sidecar reads do not remain retained after a broad scan.
+- **Cover generation balance**: GDS scans use representative cover generation to avoid heavy scan-time cover work, while metadata refresh paths can still generate volume/chapter covers.
+- **Sidecar cover handling**: Sidecar cover payloads are no longer decoded twice during metadata/fingerprint handling; validation happens at thumbnail generation time.
+- `tkavita` fixture validation confirmed unchanged rescans found `0` series needing processing; adding one archive found `1` series; sidecar-only changes invalidated the fingerprint without changing content freshness; a 53-chapter synthetic multi-volume scan produced `0` missing chapter/volume covers and the next rescan returned to `0`.
+- Windows Docker pushed-image smoke confirmed `/api/health Ok` for `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+- Production rollout is intentionally held until the active production scan completes.
+
+## Publish Evidence
+
+- GHCR `0.9.0.12-6` and `latest` multi-arch manifest digest: `sha256:37393d6f42e9f09a6a5b2f0f49e07f92a706aec86dd0a87b2f09d8c1007091cf`.
+- Per-platform manifests:
+  - `linux/amd64`: `sha256:067c2671b6c210986855befc8753e6e58ea9a0c1ec67da2a3e33de62a26f86a1`
+  - `linux/arm64`: `sha256:4669931ff342652fac8e32ada2d29e235a2e301acd4f84b7e38effedc75d351f`
+  - `linux/arm/v7`: `sha256:7faf8457b1feb9a52a75bbb1913f3c954bd4c08fa350cbf335ffbafd24a9dd03`
+- Local/Windows Docker validation covered pushed GHCR image startup for `linux/amd64`, `linux/arm64`, and `linux/arm/v7`; armv7 qemu startup reached Docker health `healthy` and `/api/health Ok`.
+
+## Previous `0.9.0.12-5` Verification
+
 - **GDS scan-phase memory reduction**: GDS scans now stream directory scan results into series grouping instead of retaining every folder `ScanResult`, file list, and parser list until the whole root is parsed.
+- **Operational scan logs**: The GDS streaming scan path now logs scan start and grouped-series count at Information level so large production scans can confirm the low-memory scan path.
 - **Large sidecar handling**: GDS sidecar metadata now uses a streaming parser for the required scalar metadata and page hints, avoiding full-file YAML materialization and unused cover payload retention during scans.
 - **Repeat-processing fixes**: Unchanged GDS series no longer reprocess only because sidecar metadata is intentionally sparse, and mixed-format GDS fingerprints now match by normalized series identity instead of a representative format.
 - **Post-scan CPU guard**: GDS broad scans skip the synchronous abandoned-metadata cleanup path after scan completion, keeping no-change scans from entering long post-scan CPU work.
+- `kavita-test` fixture validation confirmed: unchanged rescan found `0` series needing processing; adding one fixture archive found `1` series; the next rescan returned to `0`; memory stayed low after scan completion.
 - Production large-library validation confirmed: a broad GDS scan parsed `4668` series, found `0` series needing processing, finished in about `148` seconds, and settled around `350 MiB` container memory with `/api/health` returning `Ok`.
 
-## Publish Evidence
+## Previous `0.9.0.12-5` Publish Evidence
 
 - GHCR `0.9.0.12-5` and `latest` multi-arch manifest digest: `sha256:621d93569d6205d48ea2ebfedb5fee6205f4b120415679ef5d6f20d6964c05ef`.
 - Per-platform manifests:
@@ -23,24 +44,40 @@ Version: `0.9.0.12-5`
 
 ## Previous `0.9.0.12-4` Verification
 
-- **GDS scan memory reduction**: GDS scans keep only lightweight series keys for the processing queue. ParserInfo/ComicInfo lists are cleared as soon as a series is skipped or processed, reducing retained heap during large library scans.
-- **Last Modified includes newly added content**: The content date used by "Last Modified" sorting includes chapter/file database creation time in addition to file write/create timestamps.
-- **Dashboard alignment**: Opening the dashboard "Recently Updated Series" stream routes to the same Last Modified sort used by library/all-series browsing.
+- **GDS scan memory reduction**: GDS scans now keep only lightweight series keys for the processing queue. ParserInfo/ComicInfo lists are cleared as soon as a series is skipped or processed, reducing retained heap during large library scans.
+- **GDS scan memory checkpoints**: The low-memory GDS path now logs managed heap, working set, and private memory after forced compacting GC at scan start, every 25 processed series, and scan completion so memory recovery can be verified from logs.
+- **Last Modified includes newly added content**: The content date used by "Last Modified" sorting now includes chapter/file database creation time in addition to file write/create timestamps. Newly imported content can surface correctly even when the underlying files preserve older filesystem timestamps.
+- **Dashboard alignment**: Opening the dashboard "Recently Updated Series" stream now routes to the same Last Modified sort used by library/all-series browsing.
+- Windows build validation confirmed .NET Release build and production Angular WebUI build.
+- `tkavita` and production rollout validation confirmed `/api/health` `Ok`, Docker health `healthy`, and hashed WebUI assets served with HTTP 200.
 
 ## Previous `0.9.0.12-4` Publish Evidence
 
 - GHCR `0.9.0.12-4` and `latest` multi-arch manifest digest: `sha256:2d5d15bab9014407a03940c34edb13ea90348d31b938d7b402bdab56476bade8`.
+- Per-platform manifests:
+  - `linux/amd64`: `sha256:74bd796c8e7dbed7e436520caa1905be6cb9f648c26e60f3b0d6f1e7231f0ae7`
+  - `linux/arm64`: `sha256:28c4b1cd896f36062bfeedd0ebb68c5b2ac8997160dc3b67690c7f19628b642e`
+  - `linux/arm/v7`: `sha256:a920c7cdd549ba96304ba7d7200b0f537c08df7ed3d647e0a94750a4fb2a3444`
+- Rebuilt the final image with the production WebUI hash configuration; `tkavita` and production both served hashed JS/CSS assets with HTTP 200.
+- Pushed GHCR startup smoke returned `/api/health` `Ok` for `linux/amd64`, `linux/arm64`, and `linux/arm/v7` under Windows Docker Desktop/qemu.
 
 ## Previous `0.9.0.12-3` Verification
 
-- **GDS scan fingerprint optimization**: GDS library scans still enumerate directories/files to avoid missing new content, but skip `ProcessSeries` for unchanged series by comparing a per-series fingerprint built from file path, size, timestamps, format, and sidecar state.
-- **Content-based last modified sorting**: Added a separate content-last-modified date based on actual series files. The "Last Modified" sort and JumpBar date use content file timestamps instead of the database scan/update timestamp.
+- **GDS scan fingerprint optimization**: GDS library scans still enumerate directories/files to avoid missing new content, but now skip `ProcessSeries` for unchanged series by comparing a per-series fingerprint built from file path, size, timestamps, format, and sidecar state.
+- **Content-based last modified sorting**: Added a separate content-last-modified date based on actual series files. The "Last Modified" sort and JumpBar date now use content file timestamps instead of the database scan/update timestamp. `kavita.yaml` changes still invalidate the scan fingerprint but do not update the user-facing content date.
+- **GDS YAML read cache**: `kavita.yaml`/`kavita.yml` parsing is cached during the scan pass to avoid repeated sidecar reads from remote-backed filesystems.
+- Windows Docker fixture validation confirmed: unchanged GDS rescan parsed the fixture series but found `0` series needing processing; `kavita.yaml`-only changes invalidated the scan fingerprint without changing the content date; adding a new archive raised `contentLastModified` to the new file timestamp.
+- `tkavita` validation confirmed `/api/health` `Ok`, Docker health `healthy`, Series API `contentLastModified`, and GDS fingerprint skip logs on a copied fixture.
+- Production `kavita` was rolled to `0.9.0.12-3` and verified with `/api/health` `Ok`, Docker health `healthy`, and the new `Series` migration columns present.
 
-## Previous `0.9.0.12-2` Verification
+## Previous `0.9.0.12-3` Publish Evidence
 
-- **Korean search normalization improvement**: Added Unicode NFC normalization to the search text normalizer so decomposed Hangul input matches composed database data.
-
-## Previous `0.9.0.12-1` Verification
+- GHCR `0.9.0.12-3` and `latest` multi-arch manifest digest: `sha256:fc773b9e217366663c3cf7c1f6b8a107cdd9439def97d2b8fe41fd04cadc4c78`.
+- Per-platform manifests:
+  - `linux/amd64`: `sha256:942c618babfc844a5daba34ca620037d1a5f2871ea62a3cef1f7568342f11b27`
+  - `linux/arm64`: `sha256:652a3fa1d64d1dccf8b202c154e2e306b6c9367239bcbc3d9c954f5fd3ec2dba`
+  - `linux/arm/v7`: `sha256:38387782c6a489a85ae283b0b570588719968df0e61e041b9b07a351a217ed24`
+- Pushed GHCR startup smoke: `linux/amd64` returned `/api/health` `Ok` with Docker health `healthy`; `linux/arm64` and `linux/arm/v7` returned `/api/health` `Ok` under qemu.
 
 ## Included Platforms
 
@@ -52,7 +89,20 @@ Version: `0.9.0.12-5`
 
 GHCR is the primary distribution channel for this release. Use the unified version tag; Docker will select the matching platform automatically.
 
-## Verification
+## Previous `0.9.0.12-2` Verification
+
+- **Korean search normalization improvement (0.9.0.12-2)**: Added Unicode NFC normalization to the search text normalizer so decomposed (NFD) Hangul input matches composed (NFC) database data. Added normalized-name fields for chapters and libraries so they get the same whitespace-insensitive search as series. Fixed three query mismatches where normalized fields were compared against non-normalized search terms or were missing entirely. A startup migration backfills normalized fields for existing records without a full library rescan.
+- Published GHCR `0.9.0.12-2` and `latest` as one multi-arch manifest covering `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+- Manifest digest: `sha256:3ea108084fa6b71a7939d742aa55ff3c9a16cfe608261b90f75e520045b2c3d0`.
+- Per-platform manifests:
+  - `linux/amd64`: `sha256:e3ab2aaf34df671c7bcffe8c1d1002ce50b6812a3de99f73028d01854314dda6`
+  - `linux/arm64`: `sha256:fef06bcae28254882c8007340c46be77b574f2d90825cb32f79415bbb0d83ffd`
+  - `linux/arm/v7`: `sha256:c570a08f06df8fb653e1f99827a4cc8475e545795e8e575060b44d281f430dc6`
+- Windows Docker Desktop buildx built and pushed all 3 platforms with `--no-cache`.
+- Pushed GHCR `linux/amd64`, `linux/arm64`, and `linux/arm/v7` image startup all returned `/api/health` `Ok` (Docker health `healthy`) after an explicit `docker pull` of the pushed digest.
+- Production `kavita` was rolled to `0.9.0.12-2` and verified with `/api/health` `Ok`, Docker health `healthy`.
+
+## Previous `0.9.0.12-1` Verification
 
 - Built from the official Kavita `0.9.0.12` nightly source with the GDS patch set ported forward.
 - Published GHCR `0.9.0.12-1` and `latest` as one multi-arch manifest covering `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.

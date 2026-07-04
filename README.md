@@ -1,104 +1,140 @@
-# Kavita GDS
+﻿# [<img src="/Logo/kavita.svg" width="32" alt="">]() Kavita
+<div align="center">
 
-Google Drive/rclone 같은 원격 저장소에 큰 만화/책 라이브러리를 두고 쓰는 환경을 위한 Kavita 비공식 Docker 빌드입니다. official Kavita `0.9.0.12` nightly를 기반으로 GDS 스캔, 표지, 페이지 수, reader/cache, 검색, 정렬 문제를 보정했습니다.
+![new_github_preview_stills](https://github.com/user-attachments/assets/f016b34f-3c4c-4f07-8e72-12cd6f4e71ea)
 
-현재 릴리즈: `0.9.0.12-5`
+Kavita is a fast, feature rich, cross-platform reading server. Built with a focus for being a full solution for all your reading needs. Set up your own server and share
+your reading collection with your friends and family!
 
-## 빠른 시작
+[![Release](https://img.shields.io/github/release/Kareadita/Kavita.svg?style=flat&maxAge=3600)](https://github.com/Kareadita/Kavita/releases)
+[![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat)](https://github.com/Kareadita/Kavita/blob/master/LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/Kareadita/Kavita/total.svg?style=flat)](https://github.com/Kareadita/Kavita/releases)
+[![Docker Pulls](https://img.shields.io/docker/pulls/jvmilazz0/kavita.svg)](https://hub.docker.com/r/jvmilazz0/kavita)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=Kareadita_Kavita&metric=sqale_rating)](https://sonarcloud.io/dashboard?id=Kareadita_Kavita)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=Kareadita_Kavita&metric=security_rating)](https://sonarcloud.io/dashboard?id=Kareadita_Kavita)
+[![Backers on Open Collective](https://opencollective.com/kavita/backers/badge.svg)](#backers)
+[![Sponsors on Open Collective](https://opencollective.com/kavita/sponsors/badge.svg)](#sponsors)
+<a href="https://hosted.weblate.org/engage/kavita/">
+<img src="https://hosted.weblate.org/widgets/kavita/-/ui/svg-badge.svg" alt="Translation status" />
+</a>
+<img src="https://img.shields.io/endpoint?url=https://stats.kavitareader.com/api/ui/shield-badge"/>
+</div>
 
-```bash
-docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-5
-```
+## Kavita-GDS Fork Release
 
-```yaml
-services:
-  kavita:
-    image: ghcr.io/suikano1304/kavita-gds:0.9.0.12-5
-    container_name: kavita
-    restart: always
-    ports:
-      - "5657:5000"
-    volumes:
-      - /your/kavita/config:/kavita/config
-      - type: bind
-        source: /your/gds/mount
-        target: /mnt/gds
-        read_only: true
-        bind:
-          propagation: rslave
-    environment:
-      TZ: Asia/Seoul
-      WAIT_ANCHOR_DIRS: /mnt/gds/READING_ROOT
-```
-
-`/your/kavita/config`, `/your/gds/mount`, `WAIT_ANCHOR_DIRS`는 본인 환경에 맞게 바꾸세요. 원본 media mount는 읽기 전용으로 연결하는 것을 권장합니다. 전체 compose 예시는 [compose/docker-compose.production.yml](compose/docker-compose.production.yml)에 있습니다.
-
-## 이런 경우에 사용하세요
-
-- Google Drive, rclone, FUSE mount 같은 원격 media 경로를 Kavita에 연결합니다.
-- ZIP/CBZ, EPUB, PDF, TXT가 한 라이브러리 안에 섞여 있습니다.
-- 큰 라이브러리 스캔 중 멈춤, 메모리 부족, 반복 재스캔, 잘못된 페이지 수 문제가 있었습니다.
-- `kavita.yaml`/`kavita.yml`, folder cover, TXT/EPUB cover fallback을 사용합니다.
-
-일반 로컬 디스크 기반 Kavita만 쓰는 경우에는 official Kavita 이미지를 먼저 권장합니다.
-
-## 주요 수정
-
-- 필터 저장: 스마트 필터 이름 없이도 현재 정렬/필터를 기본값으로 저장합니다.
-- 읽기 안정화: 깨진 EPUB 정보와 정상 EPUB 정보가 함께 있을 때 읽을 수 있는 파일을 우선 선택합니다.
-- 스캔 안정화: 특정 시리즈 스캔이 큰 상위 폴더까지 번지는 일을 줄이고, 대형 GDS/rclone 라이브러리의 메모리 사용량을 낮췄습니다.
-- 페이지/표지 보정: EPUB, TXT, PDF, ZIP/CBZ의 페이지 수, 표지 선택, 한글 TXT 표지 fallback 문제를 줄였습니다.
-- 운영 진단: runtime image에 `sqlite3`와 읽기 전용 진단 스크립트를 포함했습니다.
-- 웹소설 완결 처리: 파일명 completion marker와 range marker 인식을 보강하고, 한국어 `Ended` 표시를 `종료`로 바로잡았습니다.
-- WebUI 이동: 우측 JumpBar/list 클릭이 현재 정렬 기준에서도 실제 항목으로 스크롤되도록 보정했고, 최근 수정순처럼 같은 날짜가 많은 목록에서도 점프 위치가 촘촘하게 잡히도록 보강했습니다.
-- **GDS mtime 우회 (0.9.0.12-1)**: rclone FUSE 마운트에서 `--dir-cache-time`으로 인해 디렉터리 mtime이 고정되어 Library Scan이 신규 파일을 누락하던 문제를 해결했습니다. GDS 라이브러리는 항상 디렉터리를 전수 열거합니다.
-- **한국어 검색 정규화 (0.9.0.12-2)**: 공백 제거와 유니코드 NFC 정규화를 적용해 분해형 한글 입력과 챕터/라이브러리 검색 매칭을 보강했습니다.
-- **GDS scan fingerprint / 콘텐츠 수정일 (0.9.0.12-3)**: 폴더 mtime skip 없이 파일은 계속 열거하되, 변경 없는 시리즈는 fingerprint로 재처리를 건너뜁니다. WebUI "마지막 수정" 정렬과 JumpBar 날짜는 DB 수정 시간이 아니라 실제 콘텐츠 파일 timestamp를 사용합니다.
-- **GDS scan memory / 최신성 정렬 (0.9.0.12-4)**: 처리 단계에서 parser metadata 참조를 series 단위로 해제하고, "마지막 수정" 정렬에 신규 추가 시각을 포함합니다.
-- **GDS broad scan hardening (0.9.0.12-5)**: scan phase 결과를 streaming grouping으로 처리하고, 대형 sidecar YAML, mixed-format fingerprint, 반복 재처리, post-scan CPU tail 문제를 보강했습니다.
-
-OPDS: upstream #4759에서 정식 해결되어(단일엔트리+병합cbz) GDS 패치스택에 별도 OPDS 커스텀 없이 upstream 동작을 그대로 상속합니다.
-
-## 검증
-
-배포 전 다음을 확인했습니다.
-
-- `linux/amd64` 이미지 시작 및 `/api/health=Ok`
-- `linux/arm64` 이미지 Windows Docker Desktop/WSL qemu smoke 및 `/api/health=Ok`
-- `linux/arm/v7` 이미지 CT101 qemu smoke 및 `/api/health=Ok`
-- Docker health `healthy`
-- 기존 reader/cache 회귀 검증 baseline 유지
-- GHCR `0.9.0.12-5`와 `latest`가 같은 multi-arch 이미지로 발행됨
-- GHCR manifest digest: `sha256:621d93569d6205d48ea2ebfedb5fee6205f4b120415679ef5d6f20d6964c05ef`
-- 운영 컨테이너를 `0.9.0.12-5`로 교체했고 `/api/health=Ok`, Docker health `healthy`, restart count `0`을 확인함
-- 운영 대형 GDS no-change scan에서 `4668` series parse, 처리 대상 `0`건, 약 `148`초 완료, 완료 후 container memory 약 `350 MiB`를 확인함
-
-상세 변경 내역과 digest는 [RELEASE_NOTES.md](RELEASE_NOTES.md), [docs/CHANGELOG_KO.md](docs/CHANGELOG_KO.md)를 참고하세요.
-
-## 태그와 플랫폼
-
-운영에서는 고정 버전 태그를 권장합니다.
-
-```text
-ghcr.io/suikano1304/kavita-gds:0.9.0.12-5
-```
-
-지원 플랫폼: `linux/amd64`, `linux/arm64`, `linux/arm/v7`
-
-## 업그레이드 주의
-
-기존 Kavita DB를 연결하기 전에는 config 디렉터리와 DB를 백업하세요.
+This fork publishes GDS-focused Kavita builds through GHCR. The current public release is `0.9.0.12-6`, based on the official Kavita `0.9.0.12` nightly source plus the GDS patch stack.
 
 ```bash
-cp -a /your/kavita/config /your/kavita/config.backup
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-6
 ```
 
-적용 후에는 다음을 확인하세요.
+The `0.9.0.12-6` release includes:
 
-```bash
-curl http://127.0.0.1:5657/api/health
-docker ps --filter name=kavita
+- Streaming GDS scan-phase grouping that avoids retaining every per-directory scan result and parser list until the whole root is parsed.
+- Lower-memory GDS processing that releases parsed series metadata after each skipped or processed series.
+- GDS processing queue compaction that stores only series indexes while processing and clears metadata caches after each scan.
+- Representative-cover generation during scans, with full per-volume/per-chapter cover generation available through metadata refresh paths.
+- "Last Modified" sorting that treats newly added content as content activity, so newly imported files with old filesystem timestamps can still surface correctly.
+- GDS scan fingerprints so unchanged series can skip expensive processing without relying on folder mtime skip behavior.
+- Content-file based "Last Modified" sorting and JumpBar dates, separate from DB entity update time.
+- Streaming `kavita.yaml`/`kavita.yml` metadata reads during scan passes, including large sidecar files, without loading unused cover payloads.
+- GDS page-count hints from sidecar metadata and filename page markers to avoid unnecessary archive opens during broad scans.
+- Stable GDS fingerprint matching for mixed-format series so unchanged mixed PDF/archive/text groups do not reprocess on every scan.
+- Korean part/volume parsing for series that intentionally contain separate part folders under the same normalized title.
+- Multi-arch GHCR images for `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+
+See [RELEASE_NOTES.md](RELEASE_NOTES.md), [docs/BUILD_NOTES_KO.md](docs/BUILD_NOTES_KO.md), and [docs/CHANGELOG_KO.md](docs/CHANGELOG_KO.md) for release details and validation notes.
+
+## What Kavita Provides
+- Serve up Manga/Webtoons/Comics (cbr, cbz, zip/rar/rar5, 7zip, raw images) and Books (epub, pdf)
+- First class responsive readers that work great on any device (phone, tablet, desktop)
+- Customizable theming support: [Theme Repo](https://github.com/Kareadita/Themes) and [Documentation](https://wiki.kavitareader.com/guides/themes)
+- External metadata integration and scrobbling for read status, ratings, and reviews (available via [Kavita+](https://wiki.kavitareader.com/kavita+)) 
+- Rich Metadata support with filtering, searching, and smart filters
+- Ways to group reading material: Collections, Reading Lists (CBL Import), Want to Read
+- Ability to manage users with rich Role-based management for age restrictions, abilities within the app, OIDC, etc
+- Rich web readers supporting webtoon, continuous reading mode (continue without leaving the reader), virtual pages (epub), etc
+- Ability to customize your dashboard and side nav with smart filters, custom order and visibility toggles
+- Full Localization Support ([Weblate](https://hosted.weblate.org/engage/kavita/))
+- Ability to download metadata, reviews, ratings, and more (available via [Kavita+](https://wiki.kavitareader.com/kavita+))
+- Epub-based Annotation/Highlight support 
+
+## Support
+[![Discord](https://img.shields.io/badge/discord-chat-7289DA.svg?maxAge=60)](https://discord.gg/eczRp9eeem)
+[![GitHub - Bugs Only](https://img.shields.io/badge/github-issues-red.svg?maxAge=60)](https://github.com/Kareadita/Kavita/issues)
+
+## Demo
+If you want to try out Kavita, a demo is available:
+[https://demo.kavitareader.com/](https://demo.kavitareader.com/login?apiKey=9003cf99-9213-4206-a787-af2fe4cc5f1f)
+```
+Username: demouser
+Password: Demouser64
 ```
 
-이 이미지는 official Kavita 이미지가 아닙니다. ARM 이미지는 qemu smoke test를 통과했지만, ARM 실서비스 환경에서는 적용 후 별도 확인을 권장합니다.
+## Setup
+The easiest way to get started is to visit our Wiki which has up-to-date information on a variety of
+install methods and platforms.
+[https://wiki.kavitareader.com/getting-started](https://wiki.kavitareader.com/getting-started)
+
+## Feature Requests
+Got a great idea? Throw it up on [Discussions](https://github.com/Kareadita/Kavita/discussions/2529) or vote on another idea. Many great features in Kavita are driven by our community. 
+
+## Notice
+Kavita is being actively developed and should be considered beta software until the 1.0.0 release.
+Kavita may be subject to changes in how the platform functions as it is being built out toward the
+vision. You may lose data and have to restart. The Kavita team strives to avoid any data loss.
+
+## Donate
+If you like Kavita, have gotten good use out of it, or feel like you want to say thanks with a few bucks, feel free to donate. Money will go towards
+expenses related to Kavita. Back us through [OpenCollective](https://opencollective.com/Kavita#backer). You can also use [Paypal](https://www.paypal.com/paypalme/majora2007?locale.x=en_US), however your name will not show below. Kavita+ is also an 
+option which provides funding, and you get a benefit.
+
+## Kavita+
+[Kavita+](https://wiki.kavitareader.com/kavita+) is a paid subscription that offers premium features that otherwise wouldn't be feasible to include in Kavita. It is run and operated by [majora2007](https://github.com/majora2007), the creator and primary developer of Kavita.
+
+If you are interested, you can use the promo code [`FIRSTTIME`](https://buy.stripe.com/00gcOQanFajG0hi5ko?prefilled_promo_code=FIRSTTIME) for your initial signup for a 50% discount on the first month (2$). This can be thought of as donating to Kavita's development and getting some sweet features out of it.
+
+**If you already contribute via OpenCollective, please reach out to majora2007 for a provisioned license.**
+
+## Localization
+Thank you to [Weblate](https://hosted.weblate.org/engage/kavita/) who hosts our localization infrastructure pro bono. If you want to see Kavita in your language, please help us localize. Drop by the discord and sign up for the `Translator` role.
+
+<a href="https://hosted.weblate.org/engage/kavita/">
+<img src="https://hosted.weblate.org/widget/kavita/horizontal-auto.svg" alt="Translation status" />
+</a>
+
+## PikaPods
+If you are looking to try your hand at self-hosting but lack the machine, [PikaPods](https://www.pikapods.com/pods?run=kavita) is a great service that 
+allows you to easily spin up a server. 20% of app revenues are contributed back to Kavita via OpenCollective.
+
+
+## Contributors
+
+This project exists thanks to all the people who contribute and upstream library maintainers. [Contribute](CONTRIBUTING.md).
+<a href="https://github.com/Kareadita/Kavita/graphs/contributors">
+<img src="https://opencollective.com/kavita/contributors.svg?width=890&button=false&avatarHeight=42" />
+</a>
+
+
+## Backers
+
+Thank you to all our backers! 🙏 [Become a backer](https://opencollective.com/Kavita#backer)
+
+<img src="https://opencollective.com/kavita/backers.svg?width=890&avatarHeight=42"></a>
+
+## Sponsors
+
+Support this project by becoming a sponsor. Your logo will show up here with a link to your website. [Become a sponsor](https://opencollective.com/Kavita#sponsor)
+
+<img src="https://opencollective.com/Kavita/sponsors.svg?width=890"></a>
+
+## Mega Sponsors
+<img src="https://opencollective.com/Kavita/tiers/mega-sponsor.svg?width=890"></a>
+
+## Powered By
+[![JetBrains logo.](https://resources.jetbrains.com/storage/products/company/brand/logos/jetbrains.svg)](https://jb.gg/OpenSource)
+
+### License
+* [GNU GPL v3](http://www.gnu.org/licenses/gpl.html)
+* Copyright 2020-2026
 
