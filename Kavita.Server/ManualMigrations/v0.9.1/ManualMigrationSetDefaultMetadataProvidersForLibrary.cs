@@ -19,6 +19,7 @@ public class ManualMigrationSetDefaultMetadataProvidersForLibrary: ManualMigrati
             library.MetadataProvider = library.Type switch
             {
                 LibraryType.Manga => MetadataProvider.Mangabaka,
+                LibraryType.GDS => MetadataProvider.Mangabaka,
                 LibraryType.Comic => MetadataProvider.ComicBookRoundup,
                 LibraryType.Book => MetadataProvider.Hardcover,
                 LibraryType.Image => MetadataProvider.Mangabaka,
