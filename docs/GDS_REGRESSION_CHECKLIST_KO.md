@@ -163,3 +163,31 @@ PASS 기준:
 ## 로컬 상세 매트릭스
 
 실제 작품명, raw id, media path, fixture path가 필요한 경우 공개 저장소 밖의 로컬 상세 매트릭스를 확인한다. 이 로컬 문서는 공개 GitHub 문서에 복사하지 않는다.
+
+## 0.9.0.12-5 추가 회귀 체크
+
+- 대형 GDS broad scan에서 파일/디렉터리 열거 후에도 RSS가 계속 증가해 OOM에 접근하지 않는지 확인한다.
+- 큰 `kavita.yaml`/`kavita.yml` sidecar가 있어도 필요한 metadata/page hint만 읽고 scan이 완료되는지 확인한다.
+- metadata가 비어 있거나 일부만 있는 sidecar가 매 scan마다 재처리 대상으로 반복 분류되지 않는지 확인한다.
+- mixed-format GDS series가 대표 format 차이 때문에 매 scan마다 fingerprint miss를 일으키지 않는지 확인한다.
+- no-change GDS scan 완료 후 post-scan cleanup CPU tail 없이 idle 상태로 돌아오는지 확인한다.
+- 한국어 `N부 M권` 형태의 part/volume 구성이 같은 `01권`으로 합쳐지지 않는지 확인한다.
+- 외부에서 파일을 다른 library root로 이동한 뒤 source/destination scan을 수행하면 이전 경로를 가리키는 검색 중복 series가 남지 않고, 새 series의 reader API가 HTTP 200을 반환하는지 확인한다.
+
+## 0.9.1.4 포팅 추가 회귀 항목
+
+- 시리즈 설명의 문자 그대로인 `\n`·`\r\n`, 실제 개행, YAML `|`·`>` 및 빈 문단이 올바르게 표시되는지 확인한다. 기존 DB 설명은 재스캔 없이 표시되어야 하고 HTML 정화는 유지되어야 한다.
+- 큰 표지 payload가 있는 sidecar도 metadata만 제한된 크기로 해석하고, 잘못된 Base64 표지는 거부해야 한다.
+- 시리즈 이름 변경 후 GDS scan cleanup이 원래 이름·현지화 이름으로 같은 시리즈를 유지하는지 확인한다.
+- UTC 읽기 기록 집계가 로컬 날짜 경계(+09:00/-07:00)에서 세션을 누락하지 않는지 확인한다.
+- 기존 Android 게임패드 snapshot 갱신 및 EPUB 상·하 스크롤 패치를 유지하고 새 UI에서 검증한다.
+
+### 라이브러리 공급자 검증
+
+- GDS와 Book 라이브러리는 외부 메타데이터 공급자 없이 생성·설정 저장할 수 있어야 합니다.
+- 공급자를 지원하는 다른 라이브러리 유형은 유효성 검증을 유지해야 합니다.
+
+### 기존 DB의 수동 마이그레이션
+
+- 기존 GDS 라이브러리가 포함된 DB로 실제 서버를 기동해 공급자 기본값 마이그레이션이 완료되는지 확인합니다.
+- EF 스키마 마이그레이션만으로 기동 검증을 대체하지 않습니다. 재실행 시 이력 중복과 외부 메타데이터 매칭 자동 활성화가 없어야 합니다.

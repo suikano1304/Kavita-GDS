@@ -1,19 +1,19 @@
 # Kavita GDS
 
-Google Drive/rclone 같은 원격 저장소에 큰 만화/책 라이브러리를 두고 쓰는 환경을 위한 Kavita 비공식 Docker 빌드입니다. official Kavita `0.9.0.12` nightly를 기반으로 GDS 스캔, 표지, 페이지 수, reader/cache, 검색, 정렬 문제를 보정했습니다.
+Google Drive/rclone 같은 원격 저장소에 큰 만화/책 라이브러리를 두고 쓰는 환경을 위한 Kavita 비공식 Docker 빌드입니다. official Kavita `0.9.1.4`를 기반으로 GDS 스캔, 표지, 페이지 수, reader/cache, 검색, 정렬 문제를 보정했습니다.
 
-현재 릴리즈: `0.9.0.12-6`
+현재 릴리즈: `0.9.1.4-1`
 
 ## 빠른 시작
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-6
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.1.4-1
 ```
 
 ```yaml
 services:
   kavita:
-    image: ghcr.io/suikano1304/kavita-gds:0.9.0.12-6
+    image: ghcr.io/suikano1304/kavita-gds:0.9.1.4-1
     container_name: kavita
     restart: always
     ports:
@@ -60,28 +60,20 @@ services:
 
 OPDS: upstream #4759에서 정식 해결되어(단일엔트리+병합cbz) GDS 패치스택에 별도 OPDS 커스텀 없이 upstream 동작을 그대로 상속합니다.
 
-## 검증
+## 이번 버전
 
-배포 전 다음을 확인했습니다.
+- 시리즈 설명의 `\n`·`\r\n`, 실제 줄바꿈, YAML 여러 줄 문자열 표시를 복원했습니다. 기존 저장된 설명도 전체 재스캔 없이 표시됩니다.
+- GDS/Book 라이브러리 생성·설정 저장과 시간대 경계의 읽기 기록 집계를 수정했습니다.
+- 기존 GDS 기능과 게임패드/PageUp·PageDown 보정을 유지했습니다.
 
-- `linux/amd64` 이미지 시작 및 `/api/health=Ok`
-- `linux/arm64` 이미지 Windows Docker Desktop/WSL qemu smoke 및 `/api/health=Ok`
-- `linux/arm/v7` 이미지 CT101 qemu smoke 및 `/api/health=Ok`
-- Docker health `healthy`
-- 기존 reader/cache 회귀 검증 baseline 유지
-- GHCR `0.9.0.12-6`와 `latest`가 같은 multi-arch 이미지로 발행됨
-- GHCR manifest digest: `sha256:37393d6f42e9f09a6a5b2f0f49e07f92a706aec86dd0a87b2f09d8c1007091cf`
-- 이전 운영 릴리즈 `0.9.0.12-5`에서 대형 GDS no-change scan은 `4668` series parse, 처리 대상 `0`건, 약 `148`초 완료, 완료 후 container memory 약 `350 MiB`를 확인함
-- 운영 컨테이너 교체는 기존 운영 스캔 완료 후 진행 예정입니다.
-
-상세 변경 내역과 digest는 [RELEASE_NOTES.md](RELEASE_NOTES.md), [docs/CHANGELOG_KO.md](docs/CHANGELOG_KO.md)를 참고하세요.
+서비스 테스트 2,614개, DB 테스트 75개, 서버 테스트 85개, 설명 표시 브라우저 테스트와 리더 API 회귀 검증을 통과했습니다. 플랫폼별 실행 결과와 digest는 [RELEASE_NOTES.md](RELEASE_NOTES.md)를 참고하세요.
 
 ## 태그와 플랫폼
 
 운영에서는 고정 버전 태그를 권장합니다.
 
 ```text
-ghcr.io/suikano1304/kavita-gds:0.9.0.12-6
+ghcr.io/suikano1304/kavita-gds:0.9.1.4-1
 ```
 
 지원 플랫폼: `linux/amd64`, `linux/arm64`, `linux/arm/v7`

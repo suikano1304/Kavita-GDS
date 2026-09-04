@@ -1,8 +1,8 @@
 # 다음 릴리즈 체크리스트
 
-작성일: 2026-06-02
+갱신일: 2026-09-05
 
-현재 공개 릴리즈는 `9.0.7-6`입니다. 다음 릴리즈는 official Kavita 기준 버전, source patch, GHCR image, Release asset, 운영 compose tag가 서로 어긋나지 않는지 먼저 확인합니다.
+현재 공개 릴리즈는 `0.9.1.4-1`입니다. 다음 릴리즈는 official Kavita 기준 버전, source patch, GHCR image, Release asset, 운영 compose tag가 서로 어긋나지 않는지 먼저 확인합니다.
 
 ## 기본 원칙
 
@@ -56,7 +56,7 @@ git -C /path/to/Kavita-GDS status --short
 12. 운영 반영 후 startup health 통과
 13. 운영 반영 후 대표 문제 series API 확인
 14. rclone log/RC에서 write/delete/rename activity가 없는지 확인
-15. GitHub Release asset과 `SHA256SUMS` 확인
+15. GitHub Release asset을 제공하는 경우 `SHA256SUMS` 확인
 16. README/사용 문서/compose 예시의 현재 릴리스 태그와 digest가 GHCR manifest와 일치하는지 확인
 17. GitHub Release tag가 최종 문서 갱신 커밋을 가리키는지 확인
 
@@ -100,7 +100,7 @@ scripts/collect_gds_preflight.sh \
 - 문제 샘플의 reader API가 정상 page count와 page response를 반환해야 한다.
 - Web UI가 production bundle로 동작하고 `localhost:5000/api` 요청이 없어야 한다.
 - 운영 compose image tag와 GHCR digest가 문서에 기록된 값과 일치해야 한다.
-- release asset checksum이 `SHA256SUMS`와 일치해야 한다.
+- release asset을 제공하는 경우 checksum이 `SHA256SUMS`와 일치해야 한다.
 - `README.md`, `docs/USAGE_KO.md`, `docs/BUILD_NOTES_KO.md`, `docs/NEXT_RELEASE_CHECKLIST_KO.md`, `compose/docker-compose.production.yml`에 이전 버전 태그나 이전 digest가 남아 있지 않아야 한다.
 - GitHub Release tag와 `targetCommitish`가 최종 릴리스 문서 커밋을 가리켜야 한다.
 
