@@ -770,6 +770,10 @@ public class LibraryController(
 
     private static void ValidateMetadataProvider(LibraryType type, MetadataProvider provider)
     {
+        // GDS sidecars and Book libraries intentionally do not use Kavita+ metadata.
+        // A hidden/stored provider must not prevent creating or editing those libraries.
+        if (type is LibraryType.GDS or LibraryType.Book) return;
+
         if (!KavitaPlusConfiguration.IsValidMetadataProviderForLibraryType(type, provider))
         {
             throw new KavitaException("invalid-metadata-provider");
