@@ -139,6 +139,11 @@ h2 {
   overflow: hidden;
 }
 
+.flip-button.compact-label {
+  width: 3rem;
+  height: 1.375rem;
+}
+
 .flip-button-inner {
   position: absolute;
   width: 100%;
@@ -166,6 +171,13 @@ h2 {
   font-size: 1.125rem;
   border-radius: 0.25rem;
   transform-style: preserve-3d;
+}
+
+.flip-button.compact-label .flip-button-front,
+.flip-button.compact-label .flip-button-back {
+  font-size: 0.6875rem;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .flip-button-back {

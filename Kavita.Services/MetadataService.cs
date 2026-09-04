@@ -11,6 +11,7 @@ using Kavita.API.Repositories;
 using Kavita.API.Services;
 using Kavita.API.Services.Helpers;
 using Kavita.API.Services.SignalR;
+using Kavita.Common;
 using Kavita.Common.Extensions;
 using Kavita.Common.Helpers;
 using Kavita.Database.Extensions;
@@ -22,6 +23,7 @@ using Kavita.Models.DTOs.SignalR;
 using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
 using Kavita.Models.Entities.Interfaces;
+using Kavita.Models.Extensions;
 using Kavita.Services.Comparators;
 using Kavita.Services.Extensions;
 using Kavita.Services.Helpers;
@@ -44,7 +46,8 @@ public class MetadataService(
     ICacheHelper cacheHelper,
     IReadingItemService readingItemService,
     IDirectoryService directoryService,
-    IImageService imageService)
+    IImageService imageService,
+    IGdsCoverService gdsCoverService)
     : IMetadataService
 {
     public const string Name = "MetadataService";
@@ -79,7 +82,6 @@ public class MetadataService(
             return false;
         }
 
-
         logger.LogDebug("[MetadataService] Generating cover image for {File}", firstFile.FilePath);
 
         chapter.CoverImage = readingItemService.GetCoverImage(firstFile.FilePath,
@@ -89,6 +91,7 @@ public class MetadataService(
             chapter.CoverFileWriteTimeUtc = sourceFile.LastWriteTimeUtc;
         }
 
+        chapter.CoverImage = coverImage;
         imageService.UpdateColorScape(chapter);
 
         unitOfWork.ChapterRepository.Update(chapter);
@@ -149,6 +152,7 @@ public class MetadataService(
             volume.CoverImage = coverChapter.CoverImage;
         }
         imageService.UpdateColorScape(volume);
+        unitOfWork.VolumeRepository.Update(volume);
 
         _updateEvents.Add(MessageFactory.CoverUpdateEvent(volume.Id, MessageFactoryEntityTypes.Volume));
 
@@ -194,6 +198,7 @@ public class MetadataService(
         }
 
         imageService.UpdateColorScape(series);
+        unitOfWork.SeriesRepository.Update(series);
 
         _updateEvents.Add(MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series));
     }
@@ -210,6 +215,21 @@ public class MetadataService(
         logger.LogDebug("[MetadataService] Processing cover image generation for series: {SeriesName}", series.OriginalName);
         try
         {
+            if (series.Library?.Type == LibraryType.GDS)
+            {
+                var result = await gdsCoverService.ProcessSeriesCoverGen(series, forceUpdate, encodeFormat,
+                    coverImageSize, forceColorScape);
+                if (result.Handled)
+                {
+                    foreach (var updateEvent in result.UpdateEvents)
+                    {
+                        _updateEvents.Add(updateEvent);
+                    }
+
+                    return;
+                }
+            }
+
             var totalVolumes = series.Volumes.Count;
             var volumeIndex = 0;
             // Any, not the first in list order: the list is not sorted the way cover selection is
@@ -546,6 +566,44 @@ public class MetadataService(
         var coverImageSize = serverSetting.CoverImageSize;
 
         await GenerateCoversForSeries(series, encodeFormat, coverImageSize, forceUpdate, forceColorScape, ct);
+    }
+
+    public async Task GenerateRepresentativeCoverForSeries(ServerSettingDto serverSetting, int libraryId, int seriesId,
+        bool forceUpdate = false, bool forceColorScape = false, CancellationToken ct = default)
+    {
+        var series = await unitOfWork.SeriesRepository.GetFullSeriesForSeriesIdAsync(seriesId, ct);
+        if (series == null)
+        {
+            logger.LogError("[MetadataService] Series {SeriesId} was not found on Library {LibraryId}", seriesId, libraryId);
+            return;
+        }
+
+        var sw = Stopwatch.StartNew();
+        if (series.Library?.Type == LibraryType.GDS)
+        {
+            var result = await gdsCoverService.ProcessSeriesRepresentativeCoverGen(series, forceUpdate,
+                serverSetting.EncodeMediaAs, serverSetting.CoverImageSize, forceColorScape);
+            foreach (var updateEvent in result.UpdateEvents)
+            {
+                _updateEvents.Add(updateEvent);
+            }
+        }
+        else
+        {
+            await ProcessSeriesCoverGen(series, forceUpdate, serverSetting.EncodeMediaAs,
+                serverSetting.CoverImageSize, forceColorScape);
+        }
+
+        if (unitOfWork.HasChanges())
+        {
+            await unitOfWork.CommitAsync(ct);
+            logger.LogInformation("[MetadataService] Updated representative cover for {SeriesName} in {ElapsedMilliseconds} milliseconds",
+                series.Name, sw.ElapsedMilliseconds);
+        }
+
+        await eventHub.SendMessageAsync(MessageFactory.CoverUpdate,
+            MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series), false, ct);
+        await FlushEvents();
     }
 
     /// <summary>

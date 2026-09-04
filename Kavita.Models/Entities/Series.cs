@@ -52,6 +52,11 @@ public class Series : IEntityDate, IHasReadTimeEstimate, IHasCoverImage, IHasMet
 
     public DateTime CreatedUtc { get; set; }
     public DateTime LastModifiedUtc { get; set; }
+    /// <summary>
+    /// Latest creation/write time among the content files in the series. This is stable across scan-only DB updates.
+    /// </summary>
+    public DateTime ContentLastModified { get; set; }
+    public DateTime ContentLastModifiedUtc { get; set; }
 
     /// <summary>
     /// Absolute path to the (managed) image file
@@ -84,6 +89,11 @@ public class Series : IEntityDate, IHasReadTimeEstimate, IHasCoverImage, IHasMet
     /// Last time the folder was scanned in Utc
     /// </summary>
     public DateTime LastFolderScannedUtc { get; set; }
+    /// <summary>
+    /// GDS-only filesystem fingerprint used to skip DB-heavy processing when enumerated content and sidecars are unchanged.
+    /// </summary>
+    public string? GdsScanFingerprint { get; set; }
+    public int GdsScanFingerprintVersion { get; set; }
     /// <summary>
     /// The type of all the files attached to this series
     /// </summary>

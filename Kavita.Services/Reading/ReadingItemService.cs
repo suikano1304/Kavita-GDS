@@ -4,6 +4,7 @@ using Kavita.API.Services;
 using Kavita.Models.Entities.Enums;
 using Kavita.Models.Metadata;
 using Kavita.Models.Parser;
+using Kavita.Services.Helpers;
 using Kavita.Services.Scanner;
 using Microsoft.Extensions.Logging;
 
@@ -36,6 +37,7 @@ public class ReadingItemService : IReadingItemService
         _bookParser = new BookParser(directoryService, bookService, _basicParser);
         _comicVineParser = new ComicVineParser(directoryService);
         _pdfParser = new PdfParser(directoryService);
+        _gdsParser = new GdsParser(directoryService, _imageParser);
 
     }
 
@@ -74,7 +76,7 @@ public class ReadingItemService : IReadingItemService
             issue = new ParseIssue(MediaErrorReason.MetadataUnreadable, ParseIssues.Describe(ex));
         }
 
-        return null;
+        return type == LibraryType.GDS ? GdsMetadataParser.GetComicInfo(filePath, info) : info;
     }
 
     /// <summary>
@@ -134,6 +136,10 @@ public class ReadingItemService : IReadingItemService
             case MangaFormat.Epub:
             {
                 return _bookService.GetNumberOfPages(filePath);
+            }
+            case MangaFormat.Text:
+            {
+                return _bookService.GetNumberOfPagesText(filePath);
             }
             case MangaFormat.Image:
             {

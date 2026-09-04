@@ -171,7 +171,7 @@ export class WantToReadComponent implements OnInit, AfterContentChecked {
     this.seriesService.getWantToRead(undefined, undefined, this.filter).subscribe(paginatedList => {
       this.series = paginatedList.result;
       this.pagination = paginatedList.pagination;
-      this.jumpbarKeys = this.jumpbarService.getJumpKeys(this.series, (series: Series) => series.name);
+      this.jumpbarKeys = this.jumpbarService.getSeriesJumpKeys(this.series, this.filter?.sortOptions);
       this.isLoading = false;
       this.cdRef.markForCheck();
     });
@@ -191,5 +191,4 @@ export class WantToReadComponent implements OnInit, AfterContentChecked {
     });
   }
 }
-
 

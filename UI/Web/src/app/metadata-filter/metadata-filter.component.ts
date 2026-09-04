@@ -216,6 +216,10 @@ export class MetadataFilterComponent<TFilter extends number = number, TSort exte
     this.updateApplied++;
   }
 
+  isSaveDisabled() {
+    return this.filterSettings().saveDisabled;
+  }
+
   save() {
     const filter = this.filterV2();
     if (!filter) return;

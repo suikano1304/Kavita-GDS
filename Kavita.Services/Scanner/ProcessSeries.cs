@@ -6,6 +6,7 @@ using System.IO;
 using System.IO.Abstractions;
 using System.Linq;
 using System.Net;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Hangfire;
 using Kavita.API.Database;
@@ -102,6 +103,14 @@ public class ProcessSeries(
     IExternalMetadataService externalMetadataService)
     : IProcessSeries
 {
+    private static readonly Regex GdsFilenamePageHintRegex = new(
+        @"#(?<Pages>\d{1,5})$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        Parser.RegexTimeout);
+    private static readonly Regex GdsFilenameNumberingMarkerRegex = new(
+        @"\d+(?:\.\d+)?\s*(?:권|화|장|회|부)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        Parser.RegexTimeout);
 
     public async Task<ProcessSeriesResult> ProcessSeriesAsync(MetadataSettingsDto settings, IList<ParserInfo> parsedInfos, ProcessSeriesArgs args)
     {
@@ -398,6 +407,15 @@ public class ProcessSeries(
             }
         }
 
+        if (library.Type == LibraryType.GDS && fileDirectories.Count > 1)
+        {
+            series.LowestFolderPath = ResolveGdsMixedRootLowestFolder(series.LowestFolderPath, fileDirectories);
+            logger.LogInformation(
+                "[ScannerService] {SeriesName} spans {RootCount} GDS file directories. Preserving concrete LowestFolderPath as {LowestFolderPath}",
+                series.Name, fileDirectories.Count, series.LowestFolderPath);
+            return;
+        }
+
         var lowestFolder = directoryService.FindLowestDirectoriesFromFiles(libraryFolders, seriesFiles);
         if (lowestFolder == series.LowestFolderPath) return;
 
@@ -412,6 +430,24 @@ public class ProcessSeries(
         }
 
         series.LowestFolderPath = lowestFolder;
+    }
+
+    internal static string ResolveGdsMixedRootLowestFolder(string? existingLowestFolderPath, IList<string> fileDirectories)
+    {
+        var normalizedDirectories = fileDirectories
+            .Select(Parser.NormalizePath)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var normalizedExisting = Parser.NormalizePath(existingLowestFolderPath ?? string.Empty);
+        if (!string.IsNullOrEmpty(normalizedExisting) &&
+            normalizedDirectories.Contains(normalizedExisting, StringComparer.OrdinalIgnoreCase))
+        {
+            return normalizedExisting;
+        }
+
+        return normalizedDirectories.FirstOrDefault() ?? normalizedExisting;
     }
 
 
@@ -1071,6 +1107,8 @@ public class ProcessSeries(
         if (existingFile != null)
         {
             existingFile.Format = info.Format;
+            existingFile.FileCreated = fileInfo.CreationTime;
+            existingFile.FileCreatedUtc = fileInfo.CreationTimeUtc;
 
             var changedOnDisk = HasFileChanged(existingFile, fileInfo);
             if (!forceUpdate && existingFile.Pages != 0 && !changedOnDisk)
@@ -1078,7 +1116,9 @@ public class ProcessSeries(
                 return new UpdateChapterResult(existingFile, false, false);
             }
 
-            existingFile.Pages = readingItemService.GetNumberOfPages(info.FullFilePath, info.Format);
+            existingFile.Pages = skipExpensiveFileStats
+                ? GetGdsPageCount(info.FullFilePath, info.Format, existingFile.Pages)
+                : readingItemService.GetNumberOfPages(info.FullFilePath, info.Format);
             existingFile.Extension = fileInfo.Extension.ToLowerInvariant();
             existingFile.FileName = Parser.RemoveExtensionIfSupported(existingFile.FilePath);
             existingFile.FilePath = Parser.NormalizePath(existingFile.FilePath);
@@ -1110,6 +1150,80 @@ public class ProcessSeries(
         return !FolderChangeCheck.IsSameWriteTime(file.FileLastWriteTimeUtc.Value, fileInfo.LastWriteTimeUtc);
     }
 
+    private int GetGdsPageCount(string filePath, MangaFormat format, int existingPages)
+    {
+        var isGdsMountPath = IsGdsMountPath(filePath);
+        if (isGdsMountPath)
+        {
+            if (GdsMetadataParser.TryGetPageCount(filePath, out var yamlPages))
+            {
+                return yamlPages;
+            }
+
+            if (format is MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text)
+            {
+                if (existingPages > 1) return existingPages;
+            }
+            else if (existingPages > 0)
+            {
+                return existingPages;
+            }
+
+            if (format == MangaFormat.Archive && TryGetGdsFilenamePageHint(filePath, out var pageHint))
+            {
+                return pageHint;
+            }
+        }
+
+        if (format is MangaFormat.Archive or MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text)
+        {
+            var pages = readingItemService.GetNumberOfPages(filePath, format);
+            if (pages > 0) return pages;
+
+            if (existingPages > 0)
+            {
+                logger.LogWarning(
+                    "[ScannerService] Unable to refresh page count for {FilePath}. Preserving existing page count {PageCount}",
+                    filePath, existingPages);
+                return existingPages;
+            }
+
+            logger.LogWarning("[ScannerService] Unable to determine page count for {FilePath}. Defaulting to 0", filePath);
+            return 0;
+        }
+
+        if (format == MangaFormat.Image)
+        {
+            return 1;
+        }
+
+        return existingPages > 0 ? existingPages : 0;
+    }
+
+    internal static bool TryGetGdsFilenamePageHint(string filePath, out int pages)
+    {
+        pages = 0;
+
+        var fileName = Path.GetFileNameWithoutExtension(filePath);
+        if (string.IsNullOrWhiteSpace(fileName)) return false;
+
+        var match = GdsFilenamePageHintRegex.Match(fileName);
+        if (!match.Success) return false;
+
+        var prefix = fileName[..match.Index];
+        if (!GdsFilenameNumberingMarkerRegex.IsMatch(prefix)) return false;
+
+        return int.TryParse(match.Groups["Pages"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out pages)
+               && pages > 0;
+    }
+
+    private static bool IsGdsMountPath(string filePath)
+    {
+        var normalizedPath = Parser.NormalizePath(filePath);
+        return normalizedPath.StartsWith("/mnt/gds/", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(normalizedPath, "/mnt/gds", StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task UpdateChapterFromComicInfo(UpdateChapterComicInfoArgs args)
     {
         var comicInfo = args.ComicInfo;
@@ -1122,6 +1236,7 @@ public class ProcessSeries(
         if (!chapter.TitleNameLocked)
         {
             chapter.TitleName = comicInfo.Title.Trim();
+            chapter.NormalizedTitleName = chapter.TitleName.ToNormalized();
         }
 
         if (!chapter.SummaryLocked)
@@ -1165,9 +1280,10 @@ public class ProcessSeries(
 
         if (!chapter.ReleaseDateLocked && comicInfo.Year > 0)
         {
-            var day = Math.Max(comicInfo.Day, 1);
-            var month = Math.Max(comicInfo.Month, 1);
-            chapter.ReleaseDate = new DateTime(comicInfo.Year, month, day);
+            if (TryCreateComicInfoReleaseDate(comicInfo, out var releaseDate))
+            {
+                chapter.ReleaseDate = releaseDate;
+            }
         }
 
         foreach (var personRole in Enum.GetValues<PersonRole>())
@@ -1238,6 +1354,29 @@ public class ProcessSeries(
         {
             logger.LogError(ex, "There was an error updating the chapter tags");
         }
+    }
+
+    private static DateTime GetSeriesContentActivityUtc(Series series, DateTime fileSystemContentLastModifiedUtc)
+    {
+        var latest = fileSystemContentLastModifiedUtc;
+
+        foreach (var chapter in series.Volumes.SelectMany(volume => volume.Chapters))
+        {
+            latest = MaxDate(latest, chapter.CreatedUtc);
+
+            foreach (var file in chapter.Files)
+            {
+                latest = MaxDate(latest, file.FileCreatedUtc);
+                latest = MaxDate(latest, file.CreatedUtc);
+            }
+        }
+
+        return latest;
+    }
+
+    private static DateTime MaxDate(DateTime left, DateTime right)
+    {
+        return left >= right ? left : right;
     }
 
     private async Task<Dictionary<string, Person>> LoadAndCreateMissingChapterPeople(Series series, IList<ParserInfo> parserInfos)

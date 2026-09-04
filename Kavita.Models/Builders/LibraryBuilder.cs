@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
+using Kavita.Common.Extensions;
 using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
 using Kavita.Models.Entities.User;
@@ -16,6 +17,7 @@ public class LibraryBuilder : IEntityBuilder<Library>
         _library =  new Library()
         {
             Name = name,
+            NormalizedName = name.ToNormalized(),
             Type = type,
             Series = new List<Series>(),
             Folders = new List<FolderPath>(),

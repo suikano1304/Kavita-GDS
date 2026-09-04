@@ -290,6 +290,7 @@ export class VolumeDetailComponent implements OnInit {
         break;
       case LibraryType.Manga:
       case LibraryType.Images:
+      case LibraryType.GDS:
         chapterLocaleKey = 'common.chapter-num-shorthand';
         break;
     }

@@ -17,6 +17,8 @@ public static class FileTypeGroupExtensions
                 return Scanner.Parser.PdfFileExtension;
             case FileTypeGroup.Images:
                 return Scanner.Parser.ImageFileExtensions;
+            case FileTypeGroup.Text:
+                return Scanner.Parser.TextFileExtension;
             default:
                 throw new ArgumentOutOfRangeException(nameof(fileTypeGroup), fileTypeGroup, null);
         }

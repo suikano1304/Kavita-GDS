@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Kavita.Common.Extensions;
@@ -53,10 +54,18 @@ public static partial class StringExtensions
         /// <summary>
         /// Apply normalization on the String
         /// </summary>
+        /// <remarks>
+        /// Applies Unicode NFC (Form C) normalization before stripping so that decomposed
+        /// combining characters (e.g. Hangul jamo produced by certain input methods/OSes)
+        /// are folded to their precomposed form and compare equal to precomposed data.
+        /// </remarks>
         /// <returns></returns>
         public string ToNormalized()
         {
-            return string.IsNullOrEmpty(value) ? string.Empty : NormalizeRegex.Replace(value, string.Empty).Trim().ToLower();
+            if (string.IsNullOrEmpty(value)) return string.Empty;
+
+            var composed = value.Normalize(NormalizationForm.FormC);
+            return NormalizeRegex.Replace(composed, string.Empty).Trim().ToLower();
         }
 
         /// <summary>

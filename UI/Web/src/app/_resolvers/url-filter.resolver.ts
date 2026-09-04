@@ -1,6 +1,6 @@
 import { Injectable, inject } from "@angular/core";
 import {ActivatedRouteSnapshot, Resolve, RouterStateSnapshot} from "@angular/router";
-import {Observable, of} from "rxjs";
+import {Observable} from "rxjs";
 import {FilterV2} from "../_models/metadata/v2/filter-v2";
 import {FilterUtilitiesService} from "../shared/_services/filter-utilities.service";
 
@@ -16,7 +16,7 @@ export class UrlFilterResolver implements Resolve<any> {
 
 
   resolve(route: ActivatedRouteSnapshot, state: RouterStateSnapshot): Observable<FilterV2 | null> {
-    if (!state.url.includes('?')) return of(null);
+    if (!state.url.includes('?')) return this.filterUtilitiesService.getDefaultFilterForRoute(state.url);
     return this.filterUtilitiesService.decodeFilter(state.url.split('?')[1]);
   }
 }

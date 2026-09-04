@@ -13,6 +13,7 @@ namespace Kavita.API.Services;
 public interface IBookService
 {
     int GetNumberOfPages(string filePath);
+    int GetNumberOfPagesText(string filePath);
     string GetCoverImage(string fileFilePath, string fileName, string outputDirectory, EncodeFormat encodeFormat, CoverImageSize size = CoverImageSize.Default);
     /// <param name="strictOpenError">Set when an epub only opened with lenient parsing, why the strict open failed</param>
     /// <exception cref="System.Exception">The file or its metadata cannot be read</exception>

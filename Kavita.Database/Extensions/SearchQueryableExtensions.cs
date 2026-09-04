@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Kavita.API.Repositories;
+using Kavita.Common.Extensions;
 using Kavita.Models.Entities;
 using Kavita.Models.Entities.Metadata;
 using Kavita.Models.Entities.Person;
@@ -15,10 +16,11 @@ public static class SearchQueryableExtensions
     public static IQueryable<AppUserCollection> Search(this IQueryable<AppUserCollection> queryable,
         string searchQuery, int userId, AgeRestriction userRating)
     {
+        var searchQueryNormalized = searchQuery.ToNormalized();
         return queryable
             .Where(uc => uc.Promoted || uc.AppUserId == userId)
             .Where(s => EF.Functions.Like(s.Title!, $"%{searchQuery}%")
-                        || EF.Functions.Like(s.NormalizedTitle!, $"%{searchQuery}%"))
+                        || EF.Functions.Like(s.NormalizedTitle!, $"%{searchQueryNormalized}%"))
             .RestrictAgainstAgeRestriction(userRating)
             .OrderBy(s => s.NormalizedTitle.Length)
             .ThenBy(s => s.NormalizedTitle);
@@ -27,9 +29,11 @@ public static class SearchQueryableExtensions
     public static IQueryable<ReadingList> Search(this IQueryable<ReadingList> queryable,
         string searchQuery, int userId, AgeRestriction userRating)
     {
+        var searchQueryNormalized = searchQuery.ToNormalized();
         return queryable
             .Where(rl => rl.AppUserId == userId || rl.Promoted)
-            .Where(rl => EF.Functions.Like(rl.Title, $"%{searchQuery}%"))
+            .Where(rl => EF.Functions.Like(rl.Title, $"%{searchQuery}%")
+                         || EF.Functions.Like(rl.NormalizedTitle, $"%{searchQueryNormalized}%"))
             .RestrictAgainstAgeRestriction(userRating)
             .OrderBy(s => s.NormalizedTitle.Length)
             .ThenBy(s => s.NormalizedTitle);
@@ -38,9 +42,11 @@ public static class SearchQueryableExtensions
     public static IQueryable<Library> Search(this IQueryable<Library> queryable,
         string searchQuery, int userId, IEnumerable<int> libraryIds)
     {
+        var searchQueryNormalized = searchQuery.ToNormalized();
         return queryable
             .Where(l => libraryIds.Contains(l.Id))
-            .Where(l => EF.Functions.Like(l.Name, $"%{searchQuery}%"))
+            .Where(l => EF.Functions.Like(l.Name, $"%{searchQuery}%")
+                        || EF.Functions.Like(l.NormalizedName, $"%{searchQueryNormalized}%"))
             .IsRestricted(QueryContext.Search)
             .AsSplitQuery()
             .OrderBy(l => l.Name.ToLower());

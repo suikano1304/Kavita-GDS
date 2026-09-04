@@ -45,7 +45,7 @@ export class ReadMoreComponent {
   });
 
   private readonly normalizedText = computed(() =>
-    this.text()?.replace(/\n/g, '<br>') ?? ''
+    this.text()?.replace(/\\r\\n|\\n|\r\n|\r|\n/g, '<br>') ?? ''
   );
 
   private readonly exceedsMaxLength = computed(() =>

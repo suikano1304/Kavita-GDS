@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Kavita.Models.DTOs.Filtering;
 using Kavita.Models.DTOs.Filtering.v2.SortFields;
@@ -18,18 +19,18 @@ public static class BookmarkSortExtensions
     /// <returns></returns>
     public static IQueryable<BookmarkSeriesPair> Sort(this IQueryable<BookmarkSeriesPair> query, SeriesSortOptionDto? sortOptions)
     {
-        // If no sort options, default to using SortName
+        // If no sort options, default to most recently modified series first.
         sortOptions ??= new SeriesSortOptionDto()
         {
-            IsAscending = true,
-            SortField = SeriesSortField.SortName
+            IsAscending = false,
+            SortField = SeriesSortField.LastModifiedDate
         };
 
         query = sortOptions.SortField switch
         {
             SeriesSortField.SortName => query.DoOrderBy(s => s.Series.SortName.ToLower(), sortOptions),
             SeriesSortField.CreatedDate => query.DoOrderBy(s => s.Series.Created, sortOptions),
-            SeriesSortField.LastModifiedDate => query.DoOrderBy(s => s.Series.LastModified, sortOptions),
+            SeriesSortField.LastModifiedDate => query.DoOrderBy(s => s.Series.ContentLastModified == DateTime.MinValue ? s.Series.LastModified : s.Series.ContentLastModified, sortOptions),
             SeriesSortField.LastChapterAdded => query.DoOrderBy(s => s.Series.LastChapterAdded, sortOptions),
             SeriesSortField.TimeToRead => query.DoOrderBy(s => s.Series.AvgHoursToRead, sortOptions),
             SeriesSortField.ReleaseYear => query.DoOrderBy(s => s.Series.Metadata.ReleaseYear, sortOptions),

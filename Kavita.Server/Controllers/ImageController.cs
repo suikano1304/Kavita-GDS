@@ -87,6 +87,13 @@ public class ImageController(IUnitOfWork unitOfWork, IDirectoryService directory
         return PhysicalFile(path);
     }
 
+    private void DisableCoverImageCaching()
+    {
+        Response.Headers.CacheControl = "no-store, no-cache, max-age=0, must-revalidate";
+        Response.Headers.Pragma = "no-cache";
+        Response.Headers.Expires = "0";
+    }
+
     /// <summary>
     /// Returns cover image for Collection
     /// </summary>

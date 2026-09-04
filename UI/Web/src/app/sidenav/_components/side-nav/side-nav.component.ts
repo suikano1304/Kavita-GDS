@@ -185,6 +185,7 @@ export class SideNavComponent {
       case LibraryType.Comic:
       case LibraryType.ComicVine:
       case LibraryType.Manga:
+      case LibraryType.GDS:
         return 'fa-book-open';
       case LibraryType.Images:
         return 'fa-images';

@@ -273,6 +273,9 @@ namespace Kavita.Database.Migrations
                     b.Property<float>("MinNumber")
                         .HasColumnType("REAL");
 
+                    b.Property<string>("NormalizedTitleName")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Number")
                         .HasColumnType("TEXT");
 
@@ -786,6 +789,9 @@ namespace Kavita.Database.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Name")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedName")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("PrimaryColor")
@@ -2289,6 +2295,12 @@ namespace Kavita.Database.Migrations
                     b.Property<bool>("CoverImageLocked")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime>("ContentLastModified")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ContentLastModifiedUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("Created")
                         .HasColumnType("TEXT");
 
@@ -2302,6 +2314,12 @@ namespace Kavita.Database.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Format")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("GdsScanFingerprint")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("GdsScanFingerprintVersion")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("HardcoverId")

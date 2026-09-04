@@ -89,6 +89,20 @@ public class ScannedSeriesResult
     public bool HasMissingFiles { get; set; }
 }
 
+public sealed class GdsScannedFileRef
+{
+    public required string FilePath { get; init; }
+    public required string Folder { get; init; }
+    public required string LibraryRoot { get; init; }
+}
+
+public sealed class GdsScannedSeriesResult
+{
+    public bool HasChanged { get; set; }
+    public required ParsedSeries ParsedSeries { get; init; }
+    public IList<GdsScannedFileRef> Files { get; set; } = [];
+}
+
 public class SeriesModified
 {
     public required string? FolderPath { get; set; }

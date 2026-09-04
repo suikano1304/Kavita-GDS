@@ -8,6 +8,7 @@ using Kavita.API.Services.SignalR;
 using Kavita.Common.Extensions;
 using Kavita.Database.Tests;
 using Kavita.Models.Builders;
+using Kavita.Models.DTOs.SignalR;
 using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
 using Kavita.Services.Builders;

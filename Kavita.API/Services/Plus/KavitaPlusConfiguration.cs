@@ -25,11 +25,6 @@ public static class KavitaPlusConfiguration
                     MetadataProvider.ComicBookRoundup,
                     MetadataProvider.Hardcover
                 },
-                [LibraryType.Book] = new HashSet<MetadataProvider>
-                {
-                    MetadataProvider.Hardcover,
-                    MetadataProvider.Mangabaka
-                },
                 [LibraryType.Image] = new HashSet<MetadataProvider>
                 {
                     MetadataProvider.Mangabaka,

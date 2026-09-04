@@ -18,6 +18,8 @@ public class ChapterBuilder : IEntityBuilder<Chapter>
 
     public ChapterBuilder(string number, string? range=null)
     {
+        var now = DateTime.Now;
+        var utcNow = DateTime.UtcNow;
         _chapter = new Chapter()
         {
             Range = string.IsNullOrEmpty(range) ? number : Parser.RemoveExtensionIfSupported(range),
@@ -28,7 +30,8 @@ public class ChapterBuilder : IEntityBuilder<Chapter>
             SortOrder = Parser.MinNumberFromRange(number),
             Files = [],
             Pages = 1,
-            CreatedUtc = DateTime.UtcNow
+            Created = now,
+            CreatedUtc = utcNow
         };
     }
 

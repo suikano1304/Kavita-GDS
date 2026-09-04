@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Hangfire;
@@ -36,6 +38,7 @@ using Kavita.Server.ManualMigrations.v0._8._7;
 using Kavita.Server.ManualMigrations.v0._8._8;
 using Kavita.Server.ManualMigrations.v0._8._9;
 using Kavita.Server.ManualMigrations.v0._9._0;
+using Kavita.Server.ManualMigrations.v0._9._0._12_2;
 using Kavita.Server.ManualMigrations.v0._9._1;
 using Kavita.Server.ManualMigrations.v0._9._1.x;
 using Kavita.Server.ManualMigrations.v0._9._2;
@@ -55,6 +58,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Net.Http.Headers;
 using Microsoft.OpenApi;
 using Serilog;
@@ -253,7 +257,7 @@ public class Startup
         var logger = serviceProvider.GetRequiredService<ILogger<Program>>();
 
 
-        ExecuteMigrations(serviceProvider, directoryService, unitOfWork, versionService, logger);
+        ExecuteMigrations(serviceProvider, directoryService, logger);
 
         app.UseMiddleware<ExceptionMiddleware>();
         app.UseMiddleware<SecurityEventMiddleware>();
@@ -286,14 +290,7 @@ public class Startup
             UpdateBaseUrlInIndex(basePath);
 
             // Update DB with what's in config
-            var dataContext = serviceProvider.GetRequiredService<DataContext>();
-            var setting = dataContext.ServerSetting.SingleOrDefault(x => x.Key == ServerSettingKey.BaseUrl);
-            if (setting != null)
-            {
-                setting.Value = basePath;
-            }
-
-            dataContext.SaveChanges();
+            UpdateBaseUrlSetting(serviceProvider, basePath, logger);
         }
 
         app.UseRouting();
@@ -429,14 +426,18 @@ public class Startup
     }
 
     private static void ExecuteMigrations(IServiceProvider serviceProvider, IDirectoryService directoryService,
-        IUnitOfWork unitOfWork, IVersionUpdaterService versionService, ILogger<Program> logger)
+        ILogger<Program> logger)
     {
         try
         {
             Task.Run(async () =>
                 {
+                    using var scope = serviceProvider.CreateScope();
+                    var scopedProvider = scope.ServiceProvider;
                     // Apply all migrations on startup
-                    var dataContext = serviceProvider.GetRequiredService<DataContext>();
+                    var dataContext = scopedProvider.GetRequiredService<DataContext>();
+                    var unitOfWork = scopedProvider.GetRequiredService<IUnitOfWork>();
+                    var versionService = scopedProvider.GetRequiredService<IVersionUpdaterService>();
 
                     logger.LogInformation("Running Migrations");
 
@@ -581,6 +582,68 @@ public class Startup
         catch (Exception ex)
         {
             logger.LogCritical(ex, "An error occurred during migration");
+            throw;
+        }
+    }
+
+    private static void UpdateBaseUrlSetting(IServiceProvider serviceProvider, string basePath, ILogger<Program> logger)
+    {
+        try
+        {
+            using var scope = serviceProvider.CreateScope();
+            var dataContext = scope.ServiceProvider.GetRequiredService<DataContext>();
+            var setting = dataContext.ServerSetting.SingleOrDefault(x => x.Key == ServerSettingKey.BaseUrl);
+            if (setting == null) return;
+
+            setting.Value = basePath;
+            dataContext.SaveChanges();
+        }
+        catch (DbUpdateException ex)
+        {
+            logger.LogCritical(ex,
+                "Failed to persist BaseUrl setting after startup migrations. This usually means an earlier migration left invalid tracked changes or the database contains foreign-key violations.");
+            LogForeignKeyCheck(serviceProvider, logger);
+            throw;
+        }
+    }
+
+    private static void LogForeignKeyCheck(IServiceProvider serviceProvider, ILogger<Program> logger)
+    {
+        try
+        {
+            using var scope = serviceProvider.CreateScope();
+            var dataContext = scope.ServiceProvider.GetRequiredService<DataContext>();
+            var connection = dataContext.Database.GetDbConnection();
+            if (connection.State != System.Data.ConnectionState.Open)
+            {
+                connection.Open();
+            }
+
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA foreign_key_check;";
+            using var reader = command.ExecuteReader();
+
+            var rows = new StringBuilder();
+            var count = 0;
+            while (reader.Read() && count < 20)
+            {
+                rows.AppendFormat(CultureInfo.InvariantCulture,
+                    "table={0}, rowid={1}, parent={2}, fkid={3}; ",
+                    reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetInt64(3));
+                count++;
+            }
+
+            if (count == 0)
+            {
+                logger.LogCritical("SQLite foreign_key_check returned no persisted violations.");
+                return;
+            }
+
+            logger.LogCritical("SQLite foreign_key_check first {Count} violation(s): {Rows}", count, rows.ToString());
+        }
+        catch (Exception checkEx)
+        {
+            logger.LogCritical(checkEx, "Could not run SQLite foreign_key_check after DbUpdateException");
         }
     }
 
