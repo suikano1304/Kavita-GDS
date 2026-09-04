@@ -597,7 +597,7 @@ public class MangaParsingTests
     [Theory]
     [InlineData("image.png", MangaFormat.Image)]
     [InlineData("image.cbz", MangaFormat.Archive)]
-    [InlineData("image.txt", MangaFormat.Unknown)]
+    [InlineData("image.txt", MangaFormat.Text)]
     public void ParseFormatTest(string inputFile, MangaFormat expected)
     {
         Assert.Equal(expected, Parser.ParseFormat(inputFile));

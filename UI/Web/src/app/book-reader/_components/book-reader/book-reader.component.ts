@@ -116,6 +116,8 @@ const SCROLL_DELAY = 10;
 const KEYBIND_TARGETS = [
   {keyBindTarget: KeyBindTarget.PageLeft, description: 'prev-page'},
   {keyBindTarget: KeyBindTarget.PageRight, description: 'next-page'},
+  {keyBindTarget: KeyBindTarget.PageUp, description: 'prev-page'},
+  {keyBindTarget: KeyBindTarget.PageDown, description: 'next-page'},
   {keyBindTarget: KeyBindTarget.GoTo, description: 'go-to'},
   {keyBindTarget: KeyBindTarget.ToggleFullScreen},
   {keyBindTarget: KeyBindTarget.ToggleMenu},
@@ -685,6 +687,12 @@ export class BookReaderComponent implements OnInit, AfterViewInit, OnDestroy {
           case KeyBindTarget.PageRight:
             this.movePage(this.readingDirection() === ReadingDirection.LeftToRight ? PAGING_DIRECTION.FORWARD : PAGING_DIRECTION.BACKWARDS);
             break;
+          case KeyBindTarget.PageUp:
+            this.scrollReaderByViewport(PAGING_DIRECTION.BACKWARDS);
+            break;
+          case KeyBindTarget.PageDown:
+            this.scrollReaderByViewport(PAGING_DIRECTION.FORWARD);
+            break;
           case KeyBindTarget.Escape:
             const isHighlighting = window.getSelection()?.toString() != '';
             if (isHighlighting && this.isLineOverlayOpen()) return;
@@ -727,6 +735,18 @@ export class BookReaderComponent implements OnInit, AfterViewInit, OnDestroy {
       },
       [KeyBindTarget.NavigateToSettings]
     );
+  }
+
+  private scrollReaderByViewport(direction: PAGING_DIRECTION) {
+    const reader = this.reader().nativeElement;
+    const distance = direction === PAGING_DIRECTION.FORWARD ? 0.9 : -0.9;
+
+    if (this.writingStyle() === WritingStyle.Vertical) {
+      this.scrollService.scrollToX(reader.scrollLeft + reader.clientWidth * distance, reader);
+      return;
+    }
+
+    this.scrollService.scrollTo(reader.scrollTop + reader.clientHeight * distance, reader);
   }
 
   /**

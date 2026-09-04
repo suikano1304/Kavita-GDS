@@ -67,6 +67,7 @@ public class ChapterRepository(DataContext context, IMapper mapper) : IChapterRe
                 chapter.IsSpecial,
                 chapter.TitleName,
                 volume.SeriesId,
+                ChapterId = chapter.Id,
                 chapter.Pages,
             })
             .Join(context.Series, data => data.SeriesId, series => series.Id, (data, series) => new
@@ -76,12 +77,22 @@ public class ChapterRepository(DataContext context, IMapper mapper) : IChapterRe
                 data.VolumeId,
                 data.IsSpecial,
                 data.SeriesId,
+                data.ChapterId,
                 data.Pages,
                 data.TitleName,
                 SeriesFormat = series.Format,
+                ChapterFormat = context.MangaFile
+                    .Where(mf => mf.ChapterId == data.ChapterId)
+                    .OrderBy(mf => mf.Id)
+                    .Select(mf => mf.Format)
+                    .FirstOrDefault(),
                 SeriesName = series.Name,
                 series.LibraryId,
-                LibraryType = series.Library.Type
+                LibraryType = context.Library
+                    .Where(l => l.Id == series.LibraryId)
+                    .OrderBy(l => l.Id)
+                    .Select(l => l.Type)
+                    .FirstOrDefault()
             })
             .AsNoTracking()
             .AsSplitQuery()
@@ -97,7 +108,8 @@ public class ChapterRepository(DataContext context, IMapper mapper) : IChapterRe
             VolumeId = data.VolumeId,
             IsSpecial = data.IsSpecial,
             SeriesId = data.SeriesId,
-            SeriesFormat = data.SeriesFormat,
+            SeriesFormat = data.LibraryType == LibraryType.GDS && data.ChapterFormat != MangaFormat.Unknown
+                ? data.ChapterFormat : data.SeriesFormat,
             SeriesName = data.SeriesName,
             LibraryId = data.LibraryId,
             Pages = data.Pages,

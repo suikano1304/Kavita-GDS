@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Hangfire;
@@ -19,9 +20,11 @@ using Kavita.Models.DTOs.KavitaPlus.Metadata;
 using Kavita.Models.DTOs.Settings;
 using Kavita.Models.DTOs.SignalR;
 using Kavita.Models.Entities;
+using Kavita.Models.Entities.Enums;
 using Kavita.Models.Parser;
 using Kavita.Services.Helpers;
 using Kavita.Services.Plus;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -203,37 +206,20 @@ public class ScannerService(
         if (await ShouldScanSeries(seriesId, library, libraryPaths, series, true) != ScanCancelReason.NoCancel)
         {
             BackgroundJob.Enqueue(() => metadataService.GenerateCoversForSeries(serverSettings, series.LibraryId, seriesId, false, false));
-            BackgroundJob.Enqueue(() => wordCountAnalyzerService.ScanSeries(library.Id, seriesId, bypassFolderOptimizationChecks));
+            if (ShouldRunWordCountAnalysisAfterScan(library.Type))
+            {
+                BackgroundJob.Enqueue(() => wordCountAnalyzerService.ScanSeries(library.Id, seriesId, bypassFolderOptimizationChecks));
+            }
+            else
+            {
+                logger.LogInformation("[ScannerService] Skipping word-count analysis for GDS ScanSeries shortcut on {SeriesName} ({SeriesId})",
+                    series.Name, seriesId);
+            }
             return;
         }
 
-        // TODO: We need to refactor this to handle the path changes better
-        var folderPath = series.LowestFolderPath ?? series.FolderPath;
-        if (string.IsNullOrEmpty(folderPath) || !directoryService.Exists(folderPath))
-        {
-            // We don't care if it's multiple due to new scan loop enforcing all in one root directory
-            var files = await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(seriesId);
-            var seriesDirs = directoryService.FindHighestDirectoriesFromFiles(libraryPaths,
-                files.Select(f => f.FilePath).ToList());
-            if (seriesDirs.Keys.Count == 0)
-            {
-                logger.LogCritical("Scan Series has files spread outside a main series folder. Defaulting to library folder (this is expensive)");
-                await eventHub.SendMessageAsync(MessageFactory.Info, MessageFactory.InfoEvent($"{series.Name} is not organized well and scan series will be expensive!", "Scan Series has files spread outside a main series folder. Defaulting to library folder (this is expensive)"));
-                seriesDirs = directoryService.FindHighestDirectoriesFromFiles(libraryPaths, files.Select(f => f.FilePath).ToList());
-            }
-
-            folderPath = seriesDirs.Keys.FirstOrDefault();
-
-            // We should check if folderPath is a library folder path and if so, return early and tell user to correct their setup.
-            if (!string.IsNullOrEmpty(folderPath) && libraryPaths.Contains(folderPath))
-            {
-                logger.LogCritical("[ScannerSeries] {SeriesName} scan aborted. Files for series are not in a nested folder under library path. Correct this and rescan", series.Name);
-                await eventHub.SendMessageAsync(MessageFactory.Error, MessageFactory.ErrorEvent($"{series.Name} scan aborted", "Files for series are not in a nested folder under library path. Correct this and rescan."));
-                return;
-            }
-        }
-
-        if (string.IsNullOrEmpty(folderPath))
+        var scanFolders = await ResolveSeriesScanFolders(series, libraryPaths);
+        if (scanFolders.Count == 0)
         {
             logger.LogCritical("[ScannerSeries] Scan Series could not find a single, valid folder root for files");
             await eventHub.SendMessageAsync(MessageFactory.Error, MessageFactory.ErrorEvent($"{series.Name} scan aborted", "Scan Series could not find a single, valid folder root for files"));
@@ -243,14 +229,21 @@ public class ScannerService(
         await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
             MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Started, series.Name, 1));
 
-        logger.LogInformation("Beginning file scan on {SeriesName}", series.Name);
-        var (scanElapsedTime, parsedSeries) = await ScanFiles(library, [folderPath],
+        logger.LogInformation("[ScannerService] Beginning series file scan on {SeriesName}. Roots: {RootCount}; {Roots}",
+            series.Name, scanFolders.Count, string.Join(", ", scanFolders));
+        var (scanElapsedTime, parsedSeries) = await ScanFiles(library, scanFolders,
             false, true);
 
-        logger.LogInformation("ScanFiles for {Series} took {Time} milliseconds", series.Name, scanElapsedTime);
+        logger.LogInformation("[ScannerService] Series file scan for {Series} finished in {Time} milliseconds. Parsed series: {ParsedSeriesCount}",
+            series.Name, scanElapsedTime, parsedSeries.Count);
 
-        // Remove any parsedSeries keys that don't belong to our series. This can occur when users store 2 series in the same folder
-        RemoveParsedInfosNotForSeries(parsedSeries, series);
+        var existingSeriesFormats = (await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(series.Id))
+            .Select(f => f.Format)
+            .ToHashSet();
+
+        // Remove any parsedSeries keys that don't belong to our series. This can occur when users store 2 series in the same folder.
+        // GDS can intentionally merge TXT/EPUB/PDF variants into one logical series, so keep matching existing file formats for later batching.
+        RemoveParsedInfosNotForSeries(parsedSeries, series, library.Type, existingSeriesFormats);
 
         // If nothing was found, first validate any of the files still exist. If they don't then we have a deletion and can skip the rest of the logic flow
         if (parsedSeries.Count == 0)
@@ -285,13 +278,8 @@ public class ScannerService(
         }
 
         // At this point, parsedSeries will have at least one key then we can perform the update. If it still doesn't, just return and don't do anything
-        // Don't allow any processing on files that aren't part of this series
-        var toProcess = parsedSeries.Keys.Where(key =>
-            key.NormalizedName.Equals(series.NormalizedName) ||
-            key.NormalizedName.Equals(series.NormalizedOriginalName))
-            .ToList();
-
-        var toProcessList = toProcess.Select(k => parsedSeries[k]).ToList();
+        // Don't allow any processing on files that aren't part of this series.
+        var toProcessList = BuildSeriesProcessBatches(parsedSeries, series, library.Type, existingSeriesFormats);
         var totalCount = toProcessList.Count;
         var current = 0;
 
@@ -316,21 +304,160 @@ public class ScannerService(
             if (processedSeriesId != null)
             {
                 var metadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
-                var wordCountAnalyzerService = scope.ServiceProvider.GetRequiredService<IWordCountAnalyzerService>();
 
                 await metadataService.GenerateCoversForSeries(serverSettings, scopedLibrary.Id, processedSeriesId.Value, bypassFolderOptimizationChecks, false);
-                await wordCountAnalyzerService.ScanSeries(scopedLibrary.Id, processedSeriesId.Value, bypassFolderOptimizationChecks);
+                if (ShouldRunWordCountAnalysisAfterScan(scopedLibrary.Type))
+                {
+                    var wordCountAnalyzerService = scope.ServiceProvider.GetRequiredService<IWordCountAnalyzerService>();
+                    await wordCountAnalyzerService.ScanSeries(scopedLibrary.Id, processedSeriesId.Value, bypassFolderOptimizationChecks);
+                }
+                else
+                {
+                    logger.LogInformation("[ScannerService] Skipping word-count analysis for GDS ScanSeries on {SeriesName} ({SeriesId})",
+                        pSeries.FirstOrDefault()?.Series ?? series.Name, processedSeriesId.Value);
+                }
             }
         }
+
+        logger.LogInformation(
+            "[ScannerService] Scan series work completed for {SeriesName} in {ElapsedScanTime} milliseconds. Processed groups: {ProcessedCount}",
+            series.Name, sw.ElapsedMilliseconds, totalCount);
 
         // Tell UI that this series is done
         await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
             MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Ended, series.Name));
 
-        await metadataService.RemoveAbandonedMetadataKeys();
-
         BackgroundJob.Enqueue(() => cacheService.CleanupChapters(existingChapterIdsToClean));
-        BackgroundJob.Enqueue(() => directoryService.ClearDirectory(directoryService.CacheDirectory));
+        if (ShouldRunGlobalPostScanCleanup(library.Type))
+        {
+            logger.LogInformation("[ScannerService] Starting post-scan cleanup for {SeriesName}", series.Name);
+            BackgroundJob.Enqueue<IMetadataService>(service => service.RemoveAbandonedMetadataKeys(CancellationToken.None));
+            BackgroundJob.Enqueue(() => directoryService.ClearDirectory(directoryService.CacheDirectory));
+        }
+        else
+        {
+            logger.LogInformation("[ScannerService] Skipping global post-scan cleanup for GDS ScanSeries on {SeriesName} ({SeriesId})",
+                series.Name, seriesId);
+        }
+
+        logger.LogInformation("[ScannerService] Post-scan cleanup enqueued for {SeriesName}. Scan series job completed in {ElapsedScanTime} milliseconds",
+            series.Name, sw.ElapsedMilliseconds);
+    }
+
+    public static bool ShouldRunWordCountAnalysisAfterScan(LibraryType libraryType)
+    {
+        return libraryType != LibraryType.GDS;
+    }
+
+    public static bool ShouldRunGlobalPostScanCleanup(LibraryType libraryType)
+    {
+        return libraryType != LibraryType.GDS;
+    }
+
+    private async Task<IList<string>> ResolveSeriesScanFolders(Series series, IList<string> libraryPaths)
+    {
+        var files = await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(series.Id);
+        var fileDirectories = files
+            .Select(f => directoryService.FileSystem.FileInfo.New(f.FilePath).Directory?.FullName ?? string.Empty)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Select(Parser.NormalizePath)
+            .Distinct()
+            .Where(directoryService.Exists)
+            .ToList();
+
+        var normalizedLibraryPaths = libraryPaths
+            .Select(Parser.NormalizePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var resolvedFolders = ResolveSeriesScanFoldersFromFileDirectories(series.LowestFolderPath ?? series.FolderPath,
+            fileDirectories, normalizedLibraryPaths);
+
+        if (fileDirectories.Any(normalizedLibraryPaths.Contains))
+        {
+            logger.LogCritical(
+                "[ScannerSeries] {SeriesName} scan aborted. One or more files are directly under a library root, which would require an expensive broad scan",
+                series.Name);
+            await eventHub.SendMessageAsync(MessageFactory.Error,
+                MessageFactory.ErrorEvent($"{series.Name} scan aborted",
+                    "One or more files are directly under a library root. Put files in a dedicated series folder or run a library scan."));
+            return [];
+        }
+
+        if (resolvedFolders.Count > 0)
+        {
+            var storedFolder = Parser.NormalizePath(series.LowestFolderPath ?? series.FolderPath ?? string.Empty);
+            if (!string.IsNullOrEmpty(storedFolder) && !resolvedFolders.Contains(storedFolder, StringComparer.OrdinalIgnoreCase))
+            {
+                logger.LogWarning(
+                    "[ScannerSeries] {SeriesName} stored folder path '{StoredFolder}' does not match actual file directories. Scanning {RootCount} file directory roots instead: {Roots}",
+                    series.Name, storedFolder, resolvedFolders.Count, string.Join(", ", resolvedFolders));
+            }
+
+            if (resolvedFolders.Count > 1)
+            {
+                logger.LogInformation(
+                    "[ScannerSeries] {SeriesName} spans {RootCount} file directory roots. ScanSeries will scan only those exact roots, not the stored common/category folder",
+                    series.Name, resolvedFolders.Count);
+            }
+
+            return resolvedFolders;
+        }
+
+        var fallbackFolder = Parser.NormalizePath(series.LowestFolderPath ?? series.FolderPath ?? string.Empty);
+        if (string.IsNullOrEmpty(fallbackFolder) || !directoryService.Exists(fallbackFolder))
+        {
+            return [];
+        }
+
+        if (normalizedLibraryPaths.Contains(fallbackFolder))
+        {
+            logger.LogCritical(
+                "[ScannerSeries] {SeriesName} scan aborted. Stored folder path is a library root and would require an expensive broad scan",
+                series.Name);
+            await eventHub.SendMessageAsync(MessageFactory.Error,
+                MessageFactory.ErrorEvent($"{series.Name} scan aborted",
+                    "Stored folder path is a library root. Put files in a dedicated series folder or run a library scan."));
+            return [];
+        }
+
+        logger.LogWarning(
+            "[ScannerSeries] {SeriesName} has no existing MangaFile directories. Falling back to stored folder path: {FolderPath}",
+            series.Name, fallbackFolder);
+        return [fallbackFolder];
+    }
+
+    internal static IList<string> ResolveSeriesScanFoldersFromFileDirectories(string? storedFolderPath,
+        IList<string> fileDirectories, ISet<string> normalizedLibraryPaths)
+    {
+        var normalizedStoredFolder = Parser.NormalizePath(storedFolderPath ?? string.Empty);
+        var normalizedFileDirectories = fileDirectories
+            .Select(Parser.NormalizePath)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (normalizedFileDirectories.Count == 0 || normalizedFileDirectories.Any(normalizedLibraryPaths.Contains))
+        {
+            return [];
+        }
+
+        if (string.IsNullOrEmpty(normalizedStoredFolder))
+        {
+            return normalizedFileDirectories;
+        }
+
+        if (normalizedLibraryPaths.Contains(normalizedStoredFolder))
+        {
+            return normalizedFileDirectories;
+        }
+
+        if (normalizedFileDirectories.Count == 1 &&
+            normalizedFileDirectories.Contains(normalizedStoredFolder, StringComparer.OrdinalIgnoreCase))
+        {
+            return [normalizedStoredFolder];
+        }
+
+        return normalizedFileDirectories;
     }
 
     private static Dictionary<ParsedSeries, IList<ParserInfo>> TrackFoundSeriesAndFiles(IList<ScannedSeriesResult> seenSeries)
@@ -413,10 +540,50 @@ public class ScannerService(
         return ScanCancelReason.NoCancel;
     }
 
-    private static void RemoveParsedInfosNotForSeries(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, Series series)
+    internal static IList<IList<ParserInfo>> BuildSeriesProcessBatches(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries,
+        Series series, LibraryType libraryType, ISet<MangaFormat> existingSeriesFormats)
     {
-        var keys = parsedSeries.Keys;
-        foreach (var key in keys.Where(key => !SeriesHelper.FindSeries(series, key)))
+        var matchingSeries = parsedSeries
+            .Where(kvp => IsParsedSeriesMatchForScanSeries(series, kvp.Key, libraryType, existingSeriesFormats))
+            .ToList();
+
+        if (libraryType != LibraryType.GDS)
+        {
+            return matchingSeries.Select(kvp => kvp.Value).ToList();
+        }
+
+        var mergedFiles = matchingSeries
+            .SelectMany(kvp => kvp.Value)
+            .GroupBy(info => Parser.NormalizePath(info.FullFilePath))
+            .Select(group => group.First())
+            .ToList();
+
+        return mergedFiles.Count == 0 ? [] : [mergedFiles];
+    }
+
+    private static bool IsParsedSeriesMatchForScanSeries(Series series, ParsedSeries parsedSeries,
+        LibraryType libraryType, ISet<MangaFormat> existingSeriesFormats)
+    {
+        if (libraryType != LibraryType.GDS)
+            return parsedSeries.NormalizedName.Equals(series.NormalizedName) ||
+                   parsedSeries.NormalizedName.Equals(series.NormalizedOriginalName);
+
+        if (SeriesHelper.FindSeries(series, parsedSeries)) return true;
+
+        if (libraryType != LibraryType.GDS || !existingSeriesFormats.Contains(parsedSeries.Format)) return false;
+
+        return parsedSeries.NormalizedName.Equals(series.NormalizedName) ||
+               (!string.IsNullOrEmpty(series.LocalizedName) &&
+                parsedSeries.NormalizedName.Equals(series.LocalizedName.ToNormalized())) ||
+               (!string.IsNullOrEmpty(series.OriginalName) &&
+                parsedSeries.NormalizedName.Equals(series.OriginalName.ToNormalized()));
+    }
+
+    private static void RemoveParsedInfosNotForSeries(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries,
+        Series series, LibraryType libraryType, ISet<MangaFormat> existingSeriesFormats)
+    {
+        var keys = parsedSeries.Keys.ToList();
+        foreach (var key in keys.Where(key => !IsParsedSeriesMatchForScanSeries(series, key, libraryType, existingSeriesFormats)))
         {
             parsedSeries.Remove(key);
         }
@@ -535,8 +702,16 @@ public class ScannerService(
 
 
         logger.LogDebug("[ScannerService] Library {LibraryName} Step 1: Scan & Parse Files", library.Name);
+        var forceFileSystemScan = forceUpdate;
+        if (library.Type == LibraryType.GDS)
+        {
+            await ScanGdsLibraryLowMemory(library, libraryFolderPaths, shouldUseLibraryScan, forceFileSystemScan, sw);
+            return;
+        }
+
         var (scanElapsedTime, parsedSeries) = await ScanFiles(library, libraryFolderPaths,
-            shouldUseLibraryScan, forceUpdate);
+            shouldUseLibraryScan, forceFileSystemScan);
+        var foundSeries = parsedSeries.Keys.ToList();
 
         // We need to remove any keys where there is no actual parser info
         logger.LogDebug("[ScannerService] Library {LibraryName} Step 2: Process and Update Database", library.Name);
@@ -561,8 +736,11 @@ public class ScannerService(
                     totalFiles, parsedSeries.Count, sw.ElapsedMilliseconds, library.Name);
             }
 
-            logger.LogDebug("[ScannerService] Library {LibraryName} Step 5: Remove Deleted Series", library.Name);
-            await RemoveSeriesNotFound(parsedSeries, library);
+            logger.LogInformation("[ScannerService] Post-scan delete reconciliation starting for {LibraryName}",
+                library.Name);
+            await RemoveSeriesNotFound(foundSeries, library);
+            logger.LogInformation("[ScannerService] Post-scan delete reconciliation finished for {LibraryName}",
+                library.Name);
         }
         else
         {
@@ -575,15 +753,110 @@ public class ScannerService(
         await metadataService.RemoveAbandonedMetadataKeys();
 
         BackgroundJob.Enqueue(() => directoryService.ClearDirectory(directoryService.CacheDirectory));
+        logger.LogInformation("[ScannerService] Scan library job completed for {LibraryName} in {ElapsedScanTime} milliseconds",
+            library.Name, sw.ElapsedMilliseconds);
     }
 
-    private async Task RemoveSeriesNotFound(Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, Library library)
+    private async Task ScanGdsLibraryLowMemory(Library library, IList<string> libraryFolderPaths,
+        bool shouldUseLibraryScan, bool forceFileSystemScan, Stopwatch sw)
+    {
+        try
+        {
+            var (scanElapsedTime, scannedSeries) = await ScanGdsFiles(library, libraryFolderPaths,
+                shouldUseLibraryScan, forceFileSystemScan);
+            var foundSeriesCount = scannedSeries.Count;
+            var foundSeriesNames = scannedSeries
+                .Select(series => series.ParsedSeries.NormalizedName)
+                .Where(name => !string.IsNullOrEmpty(name))
+                .ToHashSet(StringComparer.Ordinal);
+
+            logger.LogDebug("[ScannerService] Library {LibraryName} Step 2: Process and Update Database", library.Name);
+            var totalFiles = await ProcessGdsSeriesPlan(forceFileSystemScan, scannedSeries, library, scanElapsedTime);
+
+            UpdateLastScanned(library);
+            unitOfWork.LibraryRepository.Update(library);
+
+            logger.LogDebug("[ScannerService] Library {LibraryName} Step 3: Save Library", library.Name);
+            if (await unitOfWork.CommitAsync())
+            {
+                if (totalFiles == 0)
+                {
+                    logger.LogInformation(
+                        "[ScannerService] Finished library scan of {ParsedSeriesCount} series in {ElapsedScanTime} milliseconds for {LibraryName}. There were no changes",
+                        foundSeriesCount, sw.ElapsedMilliseconds, library.Name);
+                }
+                else
+                {
+                    logger.LogInformation(
+                        "[ScannerService] Finished library scan of {TotalFiles} files and {ParsedSeriesCount} series in {ElapsedScanTime} milliseconds for {LibraryName}",
+                        totalFiles, foundSeriesCount, sw.ElapsedMilliseconds, library.Name);
+                }
+
+                logger.LogInformation("[ScannerService] GDS post-scan delete reconciliation starting for {LibraryName}",
+                    library.Name);
+                await RemoveGdsSeriesNotFound(foundSeriesNames, library);
+                logger.LogInformation("[ScannerService] GDS post-scan delete reconciliation finished for {LibraryName}",
+                    library.Name);
+            }
+            else
+            {
+                logger.LogCritical(
+                    "[ScannerService] There was a critical error that resulted in a failed scan. Please check logs and rescan");
+            }
+
+            await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+                MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Ended, string.Empty));
+            logger.LogInformation(
+                "[ScannerService] Skipping synchronous abandoned metadata cleanup after GDS scan for {LibraryName}; scheduled cleanup can handle orphaned metadata",
+                library.Name);
+
+            BackgroundJob.Enqueue(() => directoryService.ClearDirectory(directoryService.CacheDirectory));
+            logger.LogInformation("[ScannerService] Scan library job completed for {LibraryName} in {ElapsedScanTime} milliseconds",
+                library.Name, sw.ElapsedMilliseconds);
+        }
+        finally
+        {
+            GdsMetadataParser.ClearCache();
+        }
+    }
+
+    private async Task RemoveGdsSeriesNotFound(ISet<string> seenNormalizedNames, Library library)
+    {
+        try
+        {
+            logger.LogDebug("[ScannerService] Removing GDS series that were not found during the scan");
+
+            var removedSeries = await unitOfWork.SeriesRepository.RemoveGdsSeriesNotInNormalizedNamesAsync(
+                seenNormalizedNames, library.Id);
+            logger.LogDebug("[ScannerService] Found {Count} GDS series to remove: {SeriesList}",
+                removedSeries.Count, string.Join(", ", removedSeries.Select(s => s.Name)));
+
+            await unitOfWork.CommitAsync();
+
+            foreach (var series in removedSeries)
+            {
+                await eventHub.SendMessageAsync(
+                    MessageFactory.SeriesRemoved,
+                    MessageFactory.SeriesRemovedEvent(series.Id, series.Name, series.LibraryId),
+                    false
+                );
+            }
+
+            logger.LogDebug("[ScannerService] GDS series removal process completed");
+        }
+        catch (Exception ex)
+        {
+            logger.LogCritical(ex, "[ScannerService] Error during GDS series cleanup. Please check logs and rescan");
+        }
+    }
+
+    private async Task RemoveSeriesNotFound(IList<ParsedSeries> parsedSeries, Library library)
     {
         try
         {
             logger.LogDebug("[ScannerService] Removing series that were not found during the scan");
 
-            var removedSeries = await unitOfWork.SeriesRepository.RemoveSeriesNotInListAsync(parsedSeries.Keys.ToList(), library.Id);
+            var removedSeries = await unitOfWork.SeriesRepository.RemoveSeriesNotInListAsync(parsedSeries, library.Id);
             logger.LogDebug("[ScannerService] Found {Count} series to remove: {SeriesList}",
                 removedSeries.Count, string.Join(", ", removedSeries.Select(s => s.Name)));
 
@@ -610,6 +883,11 @@ public class ScannerService(
 
     private async Task<int> ProcessParsedSeries(bool forceUpdate, Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, Library library, long scanElapsedTime)
     {
+        if (library.Type == LibraryType.GDS)
+        {
+            return await ProcessParsedGdsSeries(forceUpdate, parsedSeries, library, scanElapsedTime);
+        }
+
         // Iterate over the dictionary and remove only the ParserInfos that don't need processing
         var toProcess = new Dictionary<ParsedSeries, IList<ParserInfo>>();
         var scanSw = Stopwatch.StartNew();
@@ -669,6 +947,405 @@ public class ScannerService(
         return totalFiles;
     }
 
+    private async Task<int> ProcessParsedGdsSeries(bool forceUpdate, Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries,
+        Library library, long scanElapsedTime)
+    {
+        var scanSw = Stopwatch.StartNew();
+        var settings = await unitOfWork.SettingsRepository.GetMetadataSettingDto();
+        var seriesKeys = parsedSeries.Keys.ToList();
+        var keysToProcess = new List<ParsedSeries>();
+        Dictionary<string, SeriesScanFingerprintInfo> gdsFingerprintInfo = [];
+
+        if (!forceUpdate)
+        {
+            gdsFingerprintInfo = (await unitOfWork.SeriesRepository.GetGdsScanFingerprintInfoAsync(library.Id))
+                .GroupBy(info => GdsScanFingerprintHelper.BuildKey(info.NormalizedName, info.Format))
+                .Where(group => group.Count() == 1)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Single());
+        }
+
+        foreach (var seriesKey in seriesKeys)
+        {
+            if (!parsedSeries.TryGetValue(seriesKey, out var parserInfos))
+            {
+                continue;
+            }
+
+            if (!seriesKey.HasChanged)
+            {
+                logger.LogDebug("{Series} hasn't changed", seriesKey.Name);
+                parsedSeries[seriesKey] = [];
+                continue;
+            }
+
+            var validInfos = parserInfos.Where(info => !string.IsNullOrEmpty(info.Filename)).ToList();
+            if (validInfos.Count == 0)
+            {
+                parsedSeries[seriesKey] = [];
+                continue;
+            }
+
+            if (!forceUpdate &&
+                gdsFingerprintInfo.TryGetValue(
+                    GdsScanFingerprintHelper.BuildKey(seriesKey.NormalizedName, seriesKey.Format),
+                    out var existingFingerprint))
+            {
+                var currentFingerprint = GdsScanFingerprintHelper.Calculate(validInfos);
+                if (existingFingerprint.GdsScanFingerprintVersion == GdsScanFingerprintHelper.FingerprintVersion &&
+                    string.Equals(existingFingerprint.GdsScanFingerprint, currentFingerprint.Fingerprint,
+                        StringComparison.Ordinal))
+                {
+                    logger.LogDebug("[ScannerService] Skipping unchanged GDS series {SeriesName} by scan fingerprint", seriesKey.Name);
+                    parsedSeries[seriesKey] = [];
+                    continue;
+                }
+            }
+
+            parsedSeries[seriesKey] = validInfos;
+            keysToProcess.Add(seriesKey);
+        }
+
+        logger.LogInformation("[ScannerService] Found {SeriesCount} Series that need processing in {Time} ms",
+            keysToProcess.Count, scanSw.ElapsedMilliseconds + scanElapsedTime);
+
+        seriesKeys.Clear();
+        gdsFingerprintInfo.Clear();
+
+        var totalFiles = await ProcessGdsParserInfoByKey(settings, parsedSeries, keysToProcess, library, forceUpdate);
+
+        logger.LogInformation("[ScannerService] Finished scan in {ScanAndUpdateTime} milliseconds.",
+            scanSw.ElapsedMilliseconds + scanElapsedTime);
+
+        return totalFiles;
+    }
+
+    private async Task<int> ProcessGdsSeriesPlan(bool forceUpdate, IList<GdsScannedSeriesResult> scannedSeries,
+        Library library, long scanElapsedTime)
+    {
+        var scanSw = Stopwatch.StartNew();
+        var settings = await unitOfWork.SettingsRepository.GetMetadataSettingDto();
+        var seriesIndexesToProcess = new List<int>();
+        var representativeCoverSeriesIds = new List<int>();
+        var fullCoverSeriesIds = new List<int>();
+        var forceCoverGenerationBySeriesKey = new Dictionary<string, bool>(StringComparer.Ordinal);
+        Dictionary<string, SeriesScanFingerprintInfo> gdsFingerprintInfo = [];
+
+        if (!forceUpdate)
+        {
+            gdsFingerprintInfo = (await unitOfWork.SeriesRepository.GetGdsScanFingerprintInfoAsync(library.Id))
+                .GroupBy(info => GdsScanFingerprintHelper.BuildKey(info.NormalizedName, info.Format))
+                .Where(group => group.Count() == 1)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Single());
+        }
+
+        for (var seriesIndex = 0; seriesIndex < scannedSeries.Count; seriesIndex++)
+        {
+            var series = scannedSeries[seriesIndex];
+            if (!series.HasChanged || series.Files.Count == 0)
+            {
+                series.Files = [];
+                continue;
+            }
+
+            if (!forceUpdate &&
+                gdsFingerprintInfo.TryGetValue(
+                    GdsScanFingerprintHelper.BuildKey(series.ParsedSeries.NormalizedName, series.ParsedSeries.Format),
+                    out var existingFingerprint))
+            {
+                var seriesKey = GdsScanFingerprintHelper.BuildKey(series.ParsedSeries.NormalizedName,
+                    series.ParsedSeries.Format);
+                var fingerprintInfos = BuildGdsFingerprintParserInfos(series);
+                var currentFingerprint = GdsScanFingerprintHelper.Calculate(fingerprintInfos);
+                var hasSidecars = GdsScanFingerprintHelper.HasAnySidecars(fingerprintInfos);
+
+                if (existingFingerprint.GdsScanFingerprintVersion == GdsScanFingerprintHelper.FingerprintVersion &&
+                    string.Equals(existingFingerprint.GdsScanFingerprint, currentFingerprint.Fingerprint,
+                        StringComparison.Ordinal))
+                {
+                    if (existingFingerprint.HasMissingNestedCoverImages)
+                    {
+                        fullCoverSeriesIds.Add(existingFingerprint.SeriesId);
+                        logger.LogInformation(
+                            "[ScannerService] GDS series {SeriesName} matched scan fingerprint but has missing volume/chapter covers; scheduling cover completion without DB/scan processing",
+                            series.ParsedSeries.Name);
+                    }
+                    else if (existingFingerprint.NeedsSeriesCoverImage)
+                    {
+                        representativeCoverSeriesIds.Add(existingFingerprint.SeriesId);
+                        logger.LogInformation(
+                            "[ScannerService] GDS series {SeriesName} matched scan fingerprint but has no series cover; scheduling representative cover generation without DB/scan processing",
+                            series.ParsedSeries.Name);
+                    }
+                    else
+                    {
+                        logger.LogDebug("[ScannerService] Skipping unchanged GDS series {SeriesName} by scan fingerprint",
+                            series.ParsedSeries.Name);
+                        series.Files = [];
+                        continue;
+                    }
+
+                    series.Files = [];
+                    continue;
+                }
+
+                if (await TryBackfillUnchangedGdsFingerprint(library, existingFingerprint, fingerprintInfos,
+                        currentFingerprint))
+                {
+                    if (existingFingerprint.HasMissingNestedCoverImages)
+                    {
+                        fullCoverSeriesIds.Add(existingFingerprint.SeriesId);
+                    }
+                    else if (existingFingerprint.NeedsSeriesCoverImage)
+                    {
+                        representativeCoverSeriesIds.Add(existingFingerprint.SeriesId);
+                    }
+
+                    logger.LogInformation(
+                        "[ScannerService] Backfilled GDS scan fingerprint for unchanged existing series {SeriesName}; skipping DB/cover processing",
+                        series.ParsedSeries.Name);
+                    series.Files = [];
+                    continue;
+                }
+
+                forceCoverGenerationBySeriesKey[seriesKey] = hasSidecars;
+            }
+
+            seriesIndexesToProcess.Add(seriesIndex);
+        }
+
+        logger.LogInformation("[ScannerService] Found {SeriesCount} Series that need processing in {Time} ms",
+            seriesIndexesToProcess.Count, scanSw.ElapsedMilliseconds + scanElapsedTime);
+
+        gdsFingerprintInfo.Clear();
+
+        var serverSettings = await unitOfWork.SettingsRepository.GetSettingsDtoAsync();
+
+        foreach (var seriesId in representativeCoverSeriesIds.Distinct())
+        {
+            using var scope = scopeFactory.CreateScope();
+            var scopedMetadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
+
+            await scopedMetadataService.GenerateRepresentativeCoverForSeries(serverSettings, library.Id,
+                seriesId, false, false);
+        }
+
+        foreach (var seriesId in fullCoverSeriesIds.Distinct())
+        {
+            using var scope = scopeFactory.CreateScope();
+            var scopedMetadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
+
+            await scopedMetadataService.GenerateCoversForSeries(serverSettings, library.Id,
+                seriesId, false, false);
+        }
+
+        var seriesPaths = await unitOfWork.SeriesRepository.GetFolderPathMapAsync(library.Id);
+        var parser = new ParseScannedFiles(logger, directoryService, readingItemService, eventHub, mediaErrorService);
+        var totalFiles = 0;
+        var processedSeriesCount = 0;
+        var totalSeriesToProcess = seriesIndexesToProcess.Count;
+
+        logger.LogInformation(
+            "[ScannerService] Using low-memory reparsing GDS scan path for {LibraryName}. Series to process: {SeriesCount}",
+            library.Name, totalSeriesToProcess);
+        LogGdsMemoryCheckpoint(library.Name, processedSeriesCount, totalSeriesToProcess);
+
+        foreach (var seriesIndex in seriesIndexesToProcess)
+        {
+            var series = scannedSeries[seriesIndex];
+            IList<ParserInfo> parsedInfos = [];
+            try
+            {
+                parsedInfos = await parser.ParseGdsSeriesFiles(library, series.Files, seriesPaths);
+                if (parsedInfos.Count == 0)
+                {
+                    continue;
+                }
+
+                totalFiles += parsedInfos.Count;
+                var forceCoverGeneration = forceUpdate;
+                var seriesKey = GdsScanFingerprintHelper.BuildKey(series.ParsedSeries.NormalizedName,
+                    series.ParsedSeries.Format);
+                if (forceCoverGenerationBySeriesKey.TryGetValue(seriesKey, out var forceCoversForSeries))
+                {
+                    forceCoverGeneration = forceCoverGeneration || forceCoversForSeries;
+                }
+
+                int? seriesId;
+                using (var scope = scopeFactory.CreateScope())
+                {
+                    var scopedUnitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                    var processSeries = scope.ServiceProvider.GetRequiredService<IProcessSeries>();
+
+                    var scopedLibrary = (await scopedUnitOfWork.LibraryRepository.GetLibraryForIdAsync(library.Id,
+                        LibraryIncludes.Folders | LibraryIncludes.FileTypes | LibraryIncludes.ExcludePatterns))!;
+
+                    seriesId = await processSeries.ProcessSeriesAsync(settings, parsedInfos, new ProcessSeriesArgs
+                    {
+                        Library = scopedLibrary,
+                        LeftToProcess = totalSeriesToProcess - processedSeriesCount,
+                        TotalToProcess = totalSeriesToProcess,
+                        ForceUpdate = forceUpdate,
+                    });
+                }
+
+                if (seriesId != null)
+                {
+                    using var scope = scopeFactory.CreateScope();
+                    var scopedMetadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
+
+                    await scopedMetadataService.GenerateCoversForSeries(serverSettings, library.Id,
+                        seriesId.Value, forceCoverGeneration, false);
+                }
+            }
+            finally
+            {
+                series.Files = [];
+                parsedInfos = [];
+            }
+
+            processedSeriesCount++;
+            if (processedSeriesCount % 25 == 0)
+            {
+                LogGdsMemoryCheckpoint(library.Name, processedSeriesCount, totalSeriesToProcess);
+            }
+        }
+
+        LogGdsMemoryCheckpoint(library.Name, processedSeriesCount, totalSeriesToProcess);
+
+        logger.LogInformation("[ScannerService] Finished scan in {ScanAndUpdateTime} milliseconds.",
+            scanSw.ElapsedMilliseconds + scanElapsedTime);
+
+        return totalFiles;
+    }
+
+    private static IList<ParserInfo> BuildGdsFingerprintParserInfos(GdsScannedSeriesResult series)
+    {
+        return series.Files.Select(file => new ParserInfo
+        {
+            Series = series.ParsedSeries.Name,
+            Format = Parser.ParseFormat(file.FilePath),
+            FullFilePath = file.FilePath
+        }).ToList();
+    }
+
+    private async Task<bool> TryBackfillUnchangedGdsFingerprint(Library library,
+        SeriesScanFingerprintInfo existingFingerprint, IList<ParserInfo> parserInfos,
+        GdsScanFingerprintState currentFingerprint)
+    {
+        if (existingFingerprint.SeriesId <= 0) return false;
+        if (existingFingerprint.GdsScanFingerprintVersion == GdsScanFingerprintHelper.FingerprintVersion &&
+            !string.IsNullOrWhiteSpace(existingFingerprint.GdsScanFingerprint))
+        {
+            return false;
+        }
+
+        if (GdsScanFingerprintHelper.HasAnySidecars(parserInfos)) return false;
+
+        var dbFiles = await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(existingFingerprint.SeriesId);
+        if (!MangaFilesMatchCurrentFileSystem(dbFiles, parserInfos)) return false;
+
+        var series = await unitOfWork.DataContext.Series
+            .FirstOrDefaultAsync(s => s.Id == existingFingerprint.SeriesId && s.LibraryId == library.Id);
+        if (series == null) return false;
+
+        series.GdsScanFingerprint = currentFingerprint.Fingerprint;
+        series.GdsScanFingerprintVersion = GdsScanFingerprintHelper.FingerprintVersion;
+        series.UpdateLastFolderScanned();
+
+        await unitOfWork.CommitAsync();
+        return true;
+    }
+
+    private async Task<bool> GdsSeriesHasNewOrChangedFilePathsOrSizes(int seriesId, IList<ParserInfo> parserInfos)
+    {
+        if (seriesId <= 0) return true;
+
+        var dbFiles = await unitOfWork.SeriesRepository.GetFilesForSeriesAsync(seriesId);
+        if (dbFiles.Count != parserInfos.Count) return true;
+
+        var dbFileMap = dbFiles
+            .GroupBy(file => Parser.NormalizePath(file.FilePath))
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
+
+        if (dbFileMap.Count != dbFiles.Count) return true;
+
+        foreach (var info in parserInfos)
+        {
+            var normalizedPath = Parser.NormalizePath(info.FullFilePath);
+            if (!dbFileMap.TryGetValue(normalizedPath, out var dbFile)) return true;
+            if (dbFile.Format != info.Format) return true;
+
+            try
+            {
+                var fileInfo = new FileInfo(normalizedPath);
+                if (!fileInfo.Exists || dbFile.Bytes != fileInfo.Length) return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<bool> GdsSeriesHasExistingCover(int seriesId)
+    {
+        if (seriesId <= 0) return false;
+
+        return await unitOfWork.DataContext.Series
+            .AsNoTracking()
+            .Where(series => series.Id == seriesId)
+            .AnyAsync(series => !string.IsNullOrWhiteSpace(series.CoverImage));
+    }
+
+    private static bool MangaFilesMatchCurrentFileSystem(IList<MangaFile> dbFiles, IList<ParserInfo> parserInfos)
+    {
+        if (dbFiles.Count != parserInfos.Count) return false;
+
+        var dbFileMap = dbFiles
+            .GroupBy(file => Parser.NormalizePath(file.FilePath))
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
+
+        if (dbFileMap.Count != dbFiles.Count) return false;
+
+        foreach (var info in parserInfos)
+        {
+            var normalizedPath = Parser.NormalizePath(info.FullFilePath);
+            if (!dbFileMap.TryGetValue(normalizedPath, out var dbFile)) return false;
+            if (dbFile.Format != info.Format) return false;
+
+            FileInfo fileInfo;
+            try
+            {
+                fileInfo = new FileInfo(normalizedPath);
+                if (!fileInfo.Exists) return false;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return false;
+            }
+
+            if (dbFile.Bytes != fileInfo.Length) return false;
+            if (!IsSameFileTime(dbFile.LastModifiedUtc, fileInfo.LastWriteTimeUtc)) return false;
+            if (!IsSameFileTime(dbFile.FileCreatedUtc, fileInfo.CreationTimeUtc)) return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsSameFileTime(DateTime left, DateTime right)
+    {
+        if (left == DateTime.MinValue || right == DateTime.MinValue) return false;
+        return Math.Abs((left.ToUniversalTime() - right.ToUniversalTime()).TotalSeconds) <= 2;
+    }
+
     /// <summary>
     /// Runs metadata updates (database heavy) and extra tasks (I/O heavy) in parallel
     /// </summary>
@@ -679,6 +1356,11 @@ public class ScannerService(
     /// <returns>Total amount of processed files</returns>
     private async Task<int> ProcessParserInfo(MetadataSettingsDto settings, IList<IList<ParserInfo>> toProcess, Library library, bool forceUpdate)
     {
+        if (library.Type == LibraryType.GDS)
+        {
+            return await ProcessParserInfoSequential(settings, toProcess, library, forceUpdate);
+        }
+
         var channel = Channel.CreateUnbounded<int>();
 
         var serverSettings = await unitOfWork.SettingsRepository.GetSettingsDtoAsync();
@@ -706,6 +1388,191 @@ public class ScannerService(
             totalIoTime, avgTimePerThread);
 
         return (int) dbTask.Result;
+    }
+
+    /// <summary>
+    /// GDS libraries can contain very large remote/rclone-backed sets. Processing DB updates,
+    /// and cover extraction in parallel can push RSS high enough for OOM. Keep GDS scans
+    /// sequential so each series releases archive/EPUB/image resources before the next series
+    /// starts. Word-count analysis is intentionally skipped here; it can re-read large remote
+    /// EPUBs for minutes per series and is not required for scan/import/cover regeneration.
+    /// </summary>
+    private async Task<int> ProcessParserInfoSequential(MetadataSettingsDto settings, IList<IList<ParserInfo>> toProcess,
+        Library library, bool forceUpdate)
+    {
+        var sw = Stopwatch.StartNew();
+        var serverSettings = await unitOfWork.SettingsRepository.GetSettingsDtoAsync();
+        var totalFiles = 0;
+        var seriesLeftToProcess = toProcess.Count;
+        var totalSeriesToProcess = toProcess.Count;
+        var processedSeriesCount = 0;
+
+        logger.LogInformation(
+            "[ScannerService] Using low-memory sequential GDS scan path for {LibraryName}. Series to process: {SeriesCount}",
+            library.Name, totalSeriesToProcess);
+
+        foreach (var pSeries in toProcess)
+        {
+            totalFiles += pSeries.Count;
+
+            int? seriesId;
+            using (var scope = scopeFactory.CreateScope())
+            {
+                var scopedUnitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                var processSeries = scope.ServiceProvider.GetRequiredService<IProcessSeries>();
+
+                var scopedLibrary = (await scopedUnitOfWork.LibraryRepository.GetLibraryForIdAsync(library.Id,
+                    LibraryIncludes.Folders | LibraryIncludes.FileTypes | LibraryIncludes.ExcludePatterns))!;
+
+                seriesId = await processSeries.ProcessSeriesAsync(settings, pSeries, new ProcessSeriesArgs
+                {
+                    Library = scopedLibrary,
+                    LeftToProcess = seriesLeftToProcess,
+                    TotalToProcess = totalSeriesToProcess,
+                    ForceUpdate = forceUpdate,
+                });
+            }
+
+            if (seriesId != null)
+            {
+                using var scope = scopeFactory.CreateScope();
+                var scopedMetadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
+
+                await scopedMetadataService.GenerateCoversForSeries(serverSettings, library.Id, seriesId.Value, false, false);
+            }
+
+            processedSeriesCount++;
+            seriesLeftToProcess--;
+
+            if (processedSeriesCount % 25 == 0)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                logger.LogDebug("[ScannerService] Low-memory GDS scan processed {Processed}/{Total} series for {LibraryName}",
+                    processedSeriesCount, totalSeriesToProcess, library.Name);
+            }
+        }
+
+        await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+            MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Ended));
+
+        logger.LogDebug("[ScannerService] Finished low-memory GDS scan path for {Count} series in {Elapsed}ms",
+            toProcess.Count, sw.ElapsedMilliseconds);
+
+        return totalFiles;
+    }
+
+    private async Task<int> ProcessGdsParserInfoByKey(MetadataSettingsDto settings,
+        Dictionary<ParsedSeries, IList<ParserInfo>> parsedSeries, IList<ParsedSeries> keysToProcess,
+        Library library, bool forceUpdate)
+    {
+        var sw = Stopwatch.StartNew();
+        var serverSettings = await unitOfWork.SettingsRepository.GetSettingsDtoAsync();
+        var totalFiles = 0;
+        var seriesLeftToProcess = keysToProcess.Count;
+        var totalSeriesToProcess = keysToProcess.Count;
+        var processedSeriesCount = 0;
+
+        logger.LogInformation(
+            "[ScannerService] Using low-memory sequential GDS scan path for {LibraryName}. Series to process: {SeriesCount}",
+            library.Name, totalSeriesToProcess);
+        LogGdsMemoryCheckpoint(library.Name, processedSeriesCount, totalSeriesToProcess);
+
+        foreach (var seriesKey in keysToProcess)
+        {
+            IList<ParserInfo> pSeries = [];
+            try
+            {
+                if (!parsedSeries.TryGetValue(seriesKey, out var parserInfos))
+                {
+                    continue;
+                }
+
+                pSeries = parserInfos.Any(info => string.IsNullOrEmpty(info.Filename))
+                    ? parserInfos.Where(info => !string.IsNullOrEmpty(info.Filename)).ToList()
+                    : parserInfos;
+                if (pSeries.Count == 0)
+                {
+                    continue;
+                }
+
+                totalFiles += pSeries.Count;
+
+                int? seriesId;
+                using (var scope = scopeFactory.CreateScope())
+                {
+                    var scopedUnitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                    var processSeries = scope.ServiceProvider.GetRequiredService<IProcessSeries>();
+
+                    var scopedLibrary = (await scopedUnitOfWork.LibraryRepository.GetLibraryForIdAsync(library.Id,
+                        LibraryIncludes.Folders | LibraryIncludes.FileTypes | LibraryIncludes.ExcludePatterns))!;
+
+                    seriesId = await processSeries.ProcessSeriesAsync(settings, pSeries, new ProcessSeriesArgs
+                    {
+                        Library = scopedLibrary,
+                        LeftToProcess = seriesLeftToProcess,
+                        TotalToProcess = totalSeriesToProcess,
+                        ForceUpdate = forceUpdate,
+                    });
+                }
+
+                if (seriesId != null)
+                {
+                    using var scope = scopeFactory.CreateScope();
+                    var scopedMetadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
+
+                    await scopedMetadataService.GenerateCoversForSeries(serverSettings, library.Id, seriesId.Value, false, false);
+                }
+            }
+            finally
+            {
+                parsedSeries[seriesKey] = [];
+                pSeries = [];
+            }
+
+            processedSeriesCount++;
+            seriesLeftToProcess--;
+
+            if (processedSeriesCount % 25 == 0)
+            {
+                LogGdsMemoryCheckpoint(library.Name, processedSeriesCount, totalSeriesToProcess);
+            }
+        }
+
+        LogGdsMemoryCheckpoint(library.Name, processedSeriesCount, totalSeriesToProcess);
+
+        await eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
+            MessageFactory.LibraryScanProgressEvent(library.Name, ProgressEventType.Ended));
+
+        logger.LogDebug("[ScannerService] Finished low-memory GDS scan path for {Count} series in {Elapsed}ms",
+            keysToProcess.Count, sw.ElapsedMilliseconds);
+
+        return totalFiles;
+    }
+
+    private void LogGdsMemoryCheckpoint(string libraryName, int processedSeriesCount, int totalSeriesToProcess)
+    {
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+
+        var managedBytes = GC.GetTotalMemory(forceFullCollection: false);
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+
+        logger.LogInformation(
+            "[ScannerService] Low-memory GDS checkpoint {Processed}/{Total} series for {LibraryName}: managed={ManagedMemoryMb}MB, workingSet={WorkingSetMb}MB, private={PrivateMemoryMb}MB",
+            processedSeriesCount,
+            totalSeriesToProcess,
+            libraryName,
+            ToMegabytes(managedBytes),
+            ToMegabytes(process.WorkingSet64),
+            ToMegabytes(process.PrivateMemorySize64));
+    }
+
+    private static long ToMegabytes(long bytes)
+    {
+        return bytes / 1024 / 1024;
     }
 
     /// <summary>
@@ -811,14 +1678,36 @@ public class ScannerService(
         var scanner = new ParseScannedFiles(logger, directoryService, readingItemService, eventHub, mediaErrorService);
         var scanWatch = Stopwatch.StartNew();
 
+        logger.LogInformation("[ScannerService] ScanFiles starting for {LibraryName}. Roots: {RootCount}; LibraryScan: {IsLibraryScan}; Force: {ForceChecks}",
+            library.Name, dirs.Count, isLibraryScan, forceChecks);
         var processedSeries = await scanner.ScanLibrariesForSeries(library, dirs,
             isLibraryScan, await unitOfWork.SeriesRepository.GetFolderPathMapAsync(library.Id), forceChecks);
 
         var scanElapsedTime = scanWatch.ElapsedMilliseconds;
 
         var parsedSeries = TrackFoundSeriesAndFiles(processedSeries);
+        logger.LogInformation("[ScannerService] ScanFiles finished for {LibraryName}. Roots: {RootCount}; Parsed series: {ParsedSeriesCount}; Elapsed: {Elapsed} ms",
+            library.Name, dirs.Count, parsedSeries.Count, scanElapsedTime);
 
         return Tuple.Create(scanElapsedTime, parsedSeries);
+    }
+
+    private async Task<Tuple<long, IList<GdsScannedSeriesResult>>> ScanGdsFiles(Library library, IList<string> dirs,
+        bool isLibraryScan, bool forceChecks = false)
+    {
+        var scanner = new ParseScannedFiles(logger, directoryService, readingItemService, eventHub, mediaErrorService);
+        var scanWatch = Stopwatch.StartNew();
+
+        logger.LogInformation("[ScannerService] Lightweight GDS ScanFiles starting for {LibraryName}. Roots: {RootCount}; LibraryScan: {IsLibraryScan}; Force: {ForceChecks}",
+            library.Name, dirs.Count, isLibraryScan, forceChecks);
+        var processedSeries = await scanner.ScanGdsLibrariesForSeriesPlan(library, dirs,
+            isLibraryScan, await unitOfWork.SeriesRepository.GetFolderPathMapAsync(library.Id), forceChecks);
+
+        var scanElapsedTime = scanWatch.ElapsedMilliseconds;
+        logger.LogInformation("[ScannerService] Lightweight GDS ScanFiles finished for {LibraryName}. Roots: {RootCount}; Parsed series: {ParsedSeriesCount}; Elapsed: {Elapsed} ms",
+            library.Name, dirs.Count, processedSeries.Count, scanElapsedTime);
+
+        return Tuple.Create<long, IList<GdsScannedSeriesResult>>(scanElapsedTime, processedSeries);
     }
 
     /// <summary>

@@ -3,9 +3,11 @@ using Kavita.API.Repositories;
 using Kavita.Common.Extensions;
 using Kavita.Database;
 using Kavita.Database.Tests;
+using Kavita.Models.Builders;
 using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
 using Kavita.Models.Metadata;
+using Kavita.Models.Parser;
 using Kavita.Services.Scanner;
 using Kavita.Services.Tests.Helpers;
 using Xunit.Abstractions;
@@ -23,6 +25,191 @@ public class ScannerServiceTests: AbstractDbTest
 
         // Set up Hangfire to use in-memory storage for testing
         GlobalConfiguration.Configuration.UseInMemoryStorage();
+    }
+
+    [Fact]
+    public void ResolveSeriesScanFoldersFromFileDirectories_UsesActualFileDirectoriesWhenStoredFolderIsBroad()
+    {
+        const string storedFolder = "/fixtures/gds/books/subscription/fiction/category";
+        var fileDirectories = new List<string>
+        {
+            "/fixtures/gds/books/subscription/fiction/category/series-a",
+            "/fixtures/gds/text/novels/fantasy/series-a"
+        };
+        var libraryRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "/fixtures/gds/books/subscription/fiction",
+            "/fixtures/gds/text/novels"
+        };
+
+        var resolved = ScannerService.ResolveSeriesScanFoldersFromFileDirectories(storedFolder, fileDirectories, libraryRoots);
+
+        Assert.Equal(fileDirectories, resolved);
+    }
+
+    [Fact]
+    public void ResolveSeriesScanFoldersFromFileDirectories_UsesAllActualFileDirectoriesWhenStoredFolderMatchesOnlyOne()
+    {
+        const string storedFolder = "/fixtures/gds/text/novels/fantasy/series-a";
+        var fileDirectories = new List<string>
+        {
+            "/fixtures/gds/books/subscription/fiction/category/series-a",
+            "/fixtures/gds/text/novels/fantasy/series-a"
+        };
+        var libraryRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "/fixtures/gds/books/subscription/fiction",
+            "/fixtures/gds/text/novels"
+        };
+
+        var resolved = ScannerService.ResolveSeriesScanFoldersFromFileDirectories(storedFolder, fileDirectories, libraryRoots);
+
+        Assert.Equal(fileDirectories, resolved);
+    }
+
+    [Fact]
+    public void ResolveSeriesScanFoldersFromFileDirectories_DoesNotReturnLibraryRoot()
+    {
+        const string storedFolder = "/fixtures/gds/books";
+        var fileDirectories = new List<string>
+        {
+            "/fixtures/gds/books",
+            "/fixtures/gds/books/series-a"
+        };
+        var libraryRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "/fixtures/gds/books"
+        };
+
+        var resolved = ScannerService.ResolveSeriesScanFoldersFromFileDirectories(storedFolder, fileDirectories, libraryRoots);
+
+        Assert.Empty(resolved);
+    }
+
+    [Fact]
+    public void BuildSeriesProcessBatches_MergesGdsMixedFormatGroupsForExistingSeries()
+    {
+        var series = new SeriesBuilder("Series A")
+            .WithFormat(MangaFormat.Text)
+            .Build();
+
+        var parsedSeries = new Dictionary<ParsedSeries, IList<ParserInfo>>
+        {
+            [Parsed("Series A", MangaFormat.Text)] =
+            [
+                ParsedInfo("Series A", MangaFormat.Text, "/fixtures/gds/text/Series A/Series A.txt")
+            ],
+            [Parsed("Series A", MangaFormat.Epub)] =
+            [
+                ParsedInfo("Series A", MangaFormat.Epub, "/fixtures/gds/books/Series A/Series A.epub")
+            ],
+            [Parsed("Other Series", MangaFormat.Text)] =
+            [
+                ParsedInfo("Other Series", MangaFormat.Text, "/fixtures/gds/text/Other Series/Other Series.txt")
+            ],
+        };
+
+        var batches = ScannerService.BuildSeriesProcessBatches(parsedSeries, series, LibraryType.GDS,
+            new HashSet<MangaFormat> {MangaFormat.Text, MangaFormat.Epub});
+
+        Assert.Single(batches);
+        Assert.Equal(2, batches[0].Count);
+        Assert.Contains(batches[0], info => info.Format == MangaFormat.Text);
+        Assert.Contains(batches[0], info => info.Format == MangaFormat.Epub);
+    }
+
+    [Fact]
+    public void BuildSeriesProcessBatches_PreservesUpstreamNameMatchingForNonGds()
+    {
+        var series = new SeriesBuilder("Series A")
+            .WithFormat(MangaFormat.Text)
+            .Build();
+
+        var parsedSeries = new Dictionary<ParsedSeries, IList<ParserInfo>>
+        {
+            [Parsed("Series A", MangaFormat.Text)] =
+            [
+                ParsedInfo("Series A", MangaFormat.Text, "/fixtures/gds/text/Series A/Series A.txt")
+            ],
+            [Parsed("Series A", MangaFormat.Epub)] =
+            [
+                ParsedInfo("Series A", MangaFormat.Epub, "/fixtures/gds/books/Series A/Series A.epub")
+            ],
+        };
+
+        var batches = ScannerService.BuildSeriesProcessBatches(parsedSeries, series, LibraryType.Book,
+            new HashSet<MangaFormat> {MangaFormat.Text, MangaFormat.Epub});
+
+        Assert.Equal(2, batches.Count);
+        Assert.Single(batches[0]);
+        Assert.Contains(batches, batch => batch.Single().Format == MangaFormat.Text);
+        Assert.Contains(batches, batch => batch.Single().Format == MangaFormat.Epub);
+    }
+
+    [Fact]
+    public void ShouldRunWordCountAnalysisAfterScan_SkipsGdsLibraries()
+    {
+        Assert.False(ScannerService.ShouldRunWordCountAnalysisAfterScan(LibraryType.GDS));
+        Assert.True(ScannerService.ShouldRunWordCountAnalysisAfterScan(LibraryType.Book));
+        Assert.True(ScannerService.ShouldRunWordCountAnalysisAfterScan(LibraryType.Manga));
+    }
+
+    [Fact]
+    public void ShouldRunGlobalPostScanCleanup_SkipsGdsLibraries()
+    {
+        Assert.False(ScannerService.ShouldRunGlobalPostScanCleanup(LibraryType.GDS));
+        Assert.True(ScannerService.ShouldRunGlobalPostScanCleanup(LibraryType.Book));
+        Assert.True(ScannerService.ShouldRunGlobalPostScanCleanup(LibraryType.Manga));
+    }
+
+    [Fact]
+    public void ResolveGdsMixedRootLowestFolder_PreservesExistingConcreteDirectory()
+    {
+        const string existingLowest = "/fixtures/gds/text/Series A";
+        var directories = new List<string>
+        {
+            "/fixtures/gds/text/Series A",
+            "/fixtures/gds/books/Series A"
+        };
+
+        var resolved = ProcessSeries.ResolveGdsMixedRootLowestFolder(existingLowest, directories);
+
+        Assert.Equal(existingLowest, resolved);
+    }
+
+    [Fact]
+    public void ResolveGdsMixedRootLowestFolder_UsesConcreteDirectoryWhenExistingIsBroad()
+    {
+        var directories = new List<string>
+        {
+            "/fixtures/gds/text/Series A",
+            "/fixtures/gds/books/Series A"
+        };
+
+        var resolved = ProcessSeries.ResolveGdsMixedRootLowestFolder("/fixtures/gds", directories);
+
+        Assert.Equal("/fixtures/gds/text/Series A", resolved);
+    }
+
+    private static ParsedSeries Parsed(string name, MangaFormat format)
+    {
+        return new ParsedSeries
+        {
+            Name = name,
+            NormalizedName = name.ToNormalized(),
+            Format = format
+        };
+    }
+
+    private static ParserInfo ParsedInfo(string series, MangaFormat format, string fullFilePath)
+    {
+        return new ParserInfo
+        {
+            Series = series,
+            Format = format,
+            FullFilePath = fullFilePath,
+            Filename = Path.GetFileName(fullFilePath)
+        };
     }
 
 

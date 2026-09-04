@@ -40,6 +40,14 @@ export interface Series extends IHasCover, IHasReadingTime, IHasProgress, IHasMe
    */
   created: string;
   /**
+   * DateTime the entity was last modified
+   */
+  lastModified: string;
+  /**
+   * DateTime the underlying content files in the series were last created or modified
+   */
+  contentLastModified: string;
+  /**
    * Format of the Series
    */
   format: MangaFormat;
@@ -66,6 +74,7 @@ export interface Series extends IHasCover, IHasReadingTime, IHasProgress, IHasMe
   minHoursToRead: number;
   maxHoursToRead: number;
   avgHoursToRead: number;
+  releaseYear: number;
   /**
    * Highest level folder containing this series
    */

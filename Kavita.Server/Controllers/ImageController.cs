@@ -40,6 +40,7 @@ public class ImageController(IUnitOfWork unitOfWork, IDirectoryService directory
     [HttpGet("chapter-cover")]
     public async Task<ActionResult> GetChapterCoverImage(int chapterId)
     {
+        DisableCoverImageCaching();
         var path = Path.Join(directoryService.CoverImageDirectory, await unitOfWork.ChapterRepository.GetChapterCoverImageAsync(chapterId));
         return PhysicalFile(path);
     }
@@ -53,6 +54,7 @@ public class ImageController(IUnitOfWork unitOfWork, IDirectoryService directory
     [HttpGet("library-cover")]
     public async Task<ActionResult> GetLibraryCoverImage(int libraryId)
     {
+        DisableCoverImageCaching();
         var path = Path.Join(directoryService.CoverImageDirectory, await unitOfWork.LibraryRepository.GetLibraryCoverImageAsync(libraryId));
         return PhysicalFile(path);
     }
@@ -66,6 +68,7 @@ public class ImageController(IUnitOfWork unitOfWork, IDirectoryService directory
     [HttpGet("volume-cover")]
     public async Task<ActionResult> GetVolumeCoverImage(int volumeId)
     {
+        DisableCoverImageCaching();
         var path = Path.Join(directoryService.CoverImageDirectory, await unitOfWork.VolumeRepository.GetVolumeCoverImageAsync(volumeId));
         return PhysicalFile(path);
     }
@@ -79,8 +82,16 @@ public class ImageController(IUnitOfWork unitOfWork, IDirectoryService directory
     [HttpGet("series-cover")]
     public async Task<ActionResult> GetSeriesCoverImage(int seriesId)
     {
+        DisableCoverImageCaching();
         var path = Path.Join(directoryService.CoverImageDirectory, await unitOfWork.SeriesRepository.GetSeriesCoverImageAsync(seriesId));
         return PhysicalFile(path);
+    }
+
+    private void DisableCoverImageCaching()
+    {
+        Response.Headers.CacheControl = "no-store, no-cache, max-age=0, must-revalidate";
+        Response.Headers.Pragma = "no-cache";
+        Response.Headers.Expires = "0";
     }
 
     /// <summary>
@@ -91,6 +102,7 @@ public class ImageController(IUnitOfWork unitOfWork, IDirectoryService directory
     [HttpGet("collection-cover")]
     public async Task<ActionResult> GetCollectionCoverImage(int collectionTagId)
     {
+        DisableCoverImageCaching();
         var collectionTag = await unitOfWork.CollectionTagRepository.GetCollectionAsync(collectionTagId, ct: HttpContext.RequestAborted);
         if (collectionTag == null || (collectionTag.AppUserId != UserId && !collectionTag.Promoted)) return NotFound();
 
@@ -111,6 +123,7 @@ public class ImageController(IUnitOfWork unitOfWork, IDirectoryService directory
     [HttpGet("readinglist-cover")]
     public async Task<ActionResult> GetReadingListCoverImage(int readingListId)
     {
+        DisableCoverImageCaching();
         var readingList = await unitOfWork.ReadingListRepository.GetReadingListByIdAsync(readingListId, ct: HttpContext.RequestAborted);
         if (readingList == null || (readingList.AppUserId != UserId && !readingList.Promoted)) return NotFound();
 
@@ -230,6 +243,7 @@ public class ImageController(IUnitOfWork unitOfWork, IDirectoryService directory
     [HttpGet("person-cover")]
     public async Task<ActionResult> GetPersonCoverImage(int personId)
     {
+        DisableCoverImageCaching();
         var path = Path.Join(directoryService.CoverImageDirectory, await unitOfWork.UserRepository.GetPersonCoverImageAsync(personId));
         return PhysicalFile(path);
     }
@@ -242,6 +256,7 @@ public class ImageController(IUnitOfWork unitOfWork, IDirectoryService directory
     [HttpGet("user-cover")]
     public async Task<ActionResult> GetUserCoverImage(int userId)
     {
+        DisableCoverImageCaching();
         var filename = await unitOfWork.UserRepository.GetCoverImageAsync(userId);
         if (filename == null) return NotFound();
 

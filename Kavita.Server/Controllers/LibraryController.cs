@@ -664,6 +664,7 @@ public class LibraryController(
         var originalFoldersCount = library.Folders.Count;
 
         library.Name = newName;
+        library.NormalizedName = newName.ToNormalized();
         library.Folders = dto.Folders.Select(s => new FolderPath() {Path = s}).Distinct().ToList();
 
         var typeUpdate = library.Type != dto.Type;

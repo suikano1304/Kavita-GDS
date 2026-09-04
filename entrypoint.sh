@@ -35,6 +35,13 @@ if [ ! -f "/kavita/config/appsettings.json" ]; then
     fi
 fi
 
+case "$(uname -m)" in
+    armv6l|armv7l|armhf)
+        export COMPlus_ReadyToRun=0
+        export COMPlus_TieredCompilation=0
+        ;;
+esac
+
 echo "Starting Kavita"
 echo ls -l "/kavita/config/appsettings.json"
 

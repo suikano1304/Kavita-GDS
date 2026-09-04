@@ -19,6 +19,8 @@ RUN chmod +x /Kavita/Kavita
 FROM ubuntu:noble
 
 COPY --from=copytask /Kavita /kavita
+RUN mkdir -p /kavita/config
+RUN rm -rf /kavita/wwwroot/*
 COPY --from=copytask /files/wwwroot /kavita/wwwroot
 COPY Kavita.Server/config/appsettings.json /tmp/config/appsettings.json
 
@@ -26,8 +28,14 @@ COPY Kavita.Server/config/appsettings.json /tmp/config/appsettings.json
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-  && apt-get install -y libicu-dev libgdiplus curl tzdata libjemalloc2 \
+  && apt-get install -y libicu-dev libgdiplus curl tzdata libjemalloc2 fontconfig sqlite3 \
   && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /usr/share/fonts/truetype/nanum
+COPY ["UI/Web/src/assets/fonts/Nanum Gothic/NanumGothic-Regular.ttf", "/usr/share/fonts/truetype/nanum/NanumGothic-Regular.ttf"]
+COPY ["UI/Web/src/assets/fonts/Nanum Gothic/NanumGothic-Bold.ttf", "/usr/share/fonts/truetype/nanum/NanumGothic-Bold.ttf"]
+COPY ["UI/Web/src/assets/fonts/Nanum Gothic/NanumGothic-ExtraBold.ttf", "/usr/share/fonts/truetype/nanum/NanumGothic-ExtraBold.ttf"]
+RUN fc-cache -f || true
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -36,10 +44,13 @@ EXPOSE 5000
 
 WORKDIR /kavita
 
-HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=3 CMD curl -fsS http://localhost:5000/api/health || exit 1
+HEALTHCHECK --interval=30s --timeout=15s --start-period=300s --retries=3 CMD curl -fsS http://localhost:5000/api/health || exit 1
 
 # Enable detection of running in a container
 ENV DOTNET_RUNNING_IN_CONTAINER=true
+# Keep qemu ARM32 CoreCLR startup stable for linux/arm/v7 smoke tests.
+ENV DOTNET_EnableWriteXorExecute=0
+ENV COMPlus_EnableWriteXorExecute=0
 # Set the time zone
 ENV TZ=UTC
 

@@ -215,6 +215,7 @@ public class ReaderController(ICacheService cacheService,
             SeriesFormat = dto.SeriesFormat,
             SeriesId = dto.SeriesId,
             LibraryId = dto.LibraryId,
+            LibraryType = dto.LibraryType,
             IsSpecial = dto.IsSpecial,
             Pages = dto.Pages,
             SeriesTotalPages = series.Pages,
@@ -884,9 +885,12 @@ public class ReaderController(ICacheService cacheService,
     [SeriesAccess]
     [HttpGet("next-chapter")]
     [ResponseCache(CacheProfileName = ResponseCacheProfiles.Hour, VaryByQueryKeys = ["seriesId", "volumeId", "currentChapterId"])]
-    public async Task<ActionResult<int>> GetNextChapter(int seriesId, int volumeId, int currentChapterId)
+    public async Task<ActionResult<int>> GetNextChapter(int seriesId, string? volumeId, int currentChapterId)
     {
-        return Ok(await readerService.GetNextChapterIdAsync(seriesId, volumeId, currentChapterId, UserId));
+        var resolvedVolumeId = await ResolveReaderVolumeId(volumeId, currentChapterId);
+        if (resolvedVolumeId <= 0) return Ok(-1);
+
+        return Ok(await readerService.GetNextChapterIdAsync(seriesId, resolvedVolumeId, currentChapterId, UserId));
     }
 
 
@@ -903,9 +907,23 @@ public class ReaderController(ICacheService cacheService,
     [SeriesAccess]
     [HttpGet("prev-chapter")]
     [ResponseCache(CacheProfileName = ResponseCacheProfiles.Hour, VaryByQueryKeys = ["seriesId", "volumeId", "currentChapterId"])]
-    public async Task<ActionResult<int>> GetPreviousChapter(int seriesId, int volumeId, int currentChapterId)
+    public async Task<ActionResult<int>> GetPreviousChapter(int seriesId, string? volumeId, int currentChapterId)
     {
-        return Ok(await readerService.GetPrevChapterIdAsync(seriesId, volumeId, currentChapterId, UserId));
+        var resolvedVolumeId = await ResolveReaderVolumeId(volumeId, currentChapterId);
+        if (resolvedVolumeId <= 0) return Ok(-1);
+
+        return Ok(await readerService.GetPrevChapterIdAsync(seriesId, resolvedVolumeId, currentChapterId, UserId));
+    }
+
+    private async Task<int> ResolveReaderVolumeId(string? volumeId, int currentChapterId)
+    {
+        if (int.TryParse(volumeId, out var parsedVolumeId) && parsedVolumeId > 0)
+        {
+            return parsedVolumeId;
+        }
+
+        var chapter = await unitOfWork.ChapterRepository.GetChapterAsync(currentChapterId);
+        return chapter?.VolumeId ?? 0;
     }
 
     /// <summary>

@@ -96,9 +96,15 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
     public async Task<bool> DoesSeriesNameExistInLibraryAsync(string name, int libraryId, MangaFormat format,
         CancellationToken ct = default)
     {
+        var isGdsLibrary = await context.Library
+            .Where(l => l.Id == libraryId)
+            .Select(l => l.Type == LibraryType.GDS)
+            .FirstOrDefaultAsync(ct);
+
         return await context.Series
             .AsNoTracking()
-            .Where(s => s.LibraryId == libraryId && s.Name.Equals(name) && s.Format == format)
+            .Where(s => s.LibraryId == libraryId && s.Name.Equals(name))
+            .Where(s => isGdsLibrary || s.Format == format)
             .AnyAsync(ct);
     }
 
@@ -258,7 +264,8 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
                 (EF.Functions.Like(s.Name, $"%{searchQuery}%")
                  || (s.OriginalName != null && EF.Functions.Like(s.OriginalName, $"%{searchQuery}%"))
                  || (s.LocalizedName != null && EF.Functions.Like(s.LocalizedName, $"%{searchQuery}%"))
-                 || EF.Functions.Like(s.NormalizedName, $"%{searchQueryNormalized}%")))
+                 || EF.Functions.Like(s.NormalizedName, $"%{searchQueryNormalized}%")
+                 || EF.Functions.Like(s.NormalizedLocalizedName, $"%{searchQueryNormalized}%")))
             .WhereIf(dto.HasShortcode, s =>
                 (aniListId > 0 && s.AniListId == aniListId)
                 || (mangaBakaId > 0 && s.MangaBakaId == mangaBakaId)
@@ -390,6 +397,7 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
                 .Where(c => c.Volume.Series.LibraryId > 0 && // Ensure navigation works
                             libraryIds.Contains(c.Volume.Series.LibraryId))
                 .WhereIf(hasQuery, c => EF.Functions.Like(c.TitleName, $"%{searchQuery}%")
+                            || EF.Functions.Like(c.NormalizedTitleName, $"%{searchQueryNormalized}%")
                             || EF.Functions.Like(c.ISBN, $"%{searchQuery}%")
                             || EF.Functions.Like(c.Range, $"%{searchQuery}%"))
                 .WhereIf(hardcoverId > 0, c => c.HardcoverId == hardcoverId);
@@ -1331,11 +1339,14 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
     {
         var query = context.Series
             .Where(s => s.LibraryId == libraryId)
-            .Where(s => s.Format == format && format != MangaFormat.Unknown)
+            .Where(s => s.Library.Type == LibraryType.GDS || (s.Format == format && format != MangaFormat.Unknown))
             .WhereSeriesNameMatches(seriesName, localizedName);
         if (!withFullIncludes)
         {
-            return query.SingleOrDefaultAsync(ct);
+            return query
+                .OrderByDescending(s => s.Library.Type == LibraryType.GDS && s.Format == MangaFormat.Text)
+                .ThenByDescending(s => s.Id)
+                .FirstOrDefaultAsync(ct);
         }
 
 #nullable disable
@@ -1369,7 +1380,10 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
             .ThenInclude(c => c.Files)
 
             .AsSplitQuery();
-        return query.SingleOrDefaultAsync(ct);
+        return query
+            .OrderByDescending(s => s.Library.Type == LibraryType.GDS && s.Format == MangaFormat.Text)
+            .ThenByDescending(s => s.Id)
+            .FirstOrDefaultAsync(ct);
 
 #nullable enable
     }
@@ -1469,7 +1483,7 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
     {
         return await context.Series
             .Where(s => s.LibraryId == libraryId)
-            .Where(s => s.Format == format && format != MangaFormat.Unknown)
+            .Where(s => s.Library.Type == LibraryType.GDS || (s.Format == format && format != MangaFormat.Unknown))
             .WhereSeriesNameMatches(seriesName, localizedName)
             .AsSplitQuery()
             .ToListAsync(ct);
@@ -1497,6 +1511,8 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
             .ToListAsync(ct);
         if (candidates.Count == 0) return Array.Empty<Series>();
 
+        var isGdsLibrary = await context.Library.Where(l => l.Id == libraryId)
+            .Select(l => l.Type == LibraryType.GDS).FirstOrDefaultAsync(ct);
         var byName = new Dictionary<string, List<SeriesNameMatch>>(StringComparer.Ordinal);
 
         foreach (var s in candidates)
@@ -1516,9 +1532,10 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
             if (!byName.TryGetValue(key.NormalizedName, out var matches)) continue;
 
             var best = matches
-                .Where(m => m.Format == key.Format || m.Format == MangaFormat.Unknown)
-                .OrderBy(m => m.Id)
-                .LastOrDefault();
+                .Where(m => isGdsLibrary || m.Format == key.Format || m.Format == MangaFormat.Unknown)
+                .OrderBy(m => isGdsLibrary && m.Format == MangaFormat.Text ? 0 : 1)
+                .ThenBy(m => isGdsLibrary ? m.Id : -m.Id)
+                .FirstOrDefault();
             if (best != null) keepIds.Add(best.Id);
         }
 
@@ -1547,6 +1564,19 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
             }
             list.Add(s);
         }
+    }
+
+    public Task<IList<Series>> RemoveGdsSeriesNotInNormalizedNamesAsync(ISet<string> seenNormalizedNames,
+        int libraryId, CancellationToken ct = default)
+    {
+        // Reuse the upstream rename-safe identity matching, with GDS format-independent
+        // selection. Loading only candidate identities also bounds cleanup memory.
+        return RemoveSeriesNotInListAsync(seenNormalizedNames.Select(name => new ParsedSeries
+        {
+            Name = name,
+            NormalizedName = name,
+            Format = MangaFormat.Unknown
+        }).ToList(), libraryId, ct);
     }
 
     public async Task<RelatedSeriesDto> GetRelatedSeriesAsync(int userId, int seriesId, CancellationToken ct = default)
@@ -1835,7 +1865,8 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
                 FolderPath = s.FolderPath,
                 LowestFolderPath = s.LowestFolderPath,
                 Format = s.Format,
-                LibraryRoots = s.Library.Folders.Select(f => f.Path)
+                LibraryRoots = s.Library.Folders.Select(f => f.Path),
+                HasZeroPageFiles = s.Volumes.SelectMany(v => v.Chapters).SelectMany(c => c.Files).Any(f => f.Pages == 0)
             })
             .ToListAsync(ct);
 
@@ -1871,6 +1902,27 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
         }
 
         return map;
+    }
+
+    public async Task<IList<SeriesScanFingerprintInfo>> GetGdsScanFingerprintInfoAsync(int libraryId,
+        CancellationToken ct = default)
+    {
+        return await context.Series
+            .Where(s => s.LibraryId == libraryId)
+            .AsNoTracking()
+            .Select(s => new SeriesScanFingerprintInfo
+            {
+                SeriesId = s.Id,
+                NormalizedName = s.NormalizedName,
+                Format = s.Format,
+                GdsScanFingerprint = s.GdsScanFingerprint,
+                GdsScanFingerprintVersion = s.GdsScanFingerprintVersion,
+                NeedsSeriesCoverImage = string.IsNullOrEmpty(s.CoverImage) && !s.CoverImageLocked,
+                HasMissingNestedCoverImages = s.Volumes.Any(v =>
+                    (string.IsNullOrEmpty(v.CoverImage) && !v.CoverImageLocked) ||
+                    v.Chapters.Any(c => string.IsNullOrEmpty(c.CoverImage) && !c.CoverImageLocked))
+            })
+            .ToListAsync(ct);
     }
 
     /// <summary>

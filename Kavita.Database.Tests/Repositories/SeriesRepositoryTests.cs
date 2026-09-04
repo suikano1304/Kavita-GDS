@@ -215,5 +215,31 @@ public class SeriesRepositoryTests(ITestOutputHelper testOutputHelper) : Abstrac
         Assert.Equal("Batman", removed.First().Name);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoveGdsSeriesNotInNormalizedNamesAsync_RetainsRenamedMixedFormatSeries(bool useLocalizedName)
+    {
+        var (unitOfWork, _, _) = await CreateDatabase();
+        var series = new SeriesBuilder("Original Folder").WithFormat(MangaFormat.Text).Build();
+        if (useLocalizedName) series.LocalizedName = "Localized Folder";
+        var missing = new SeriesBuilder("Removed Folder").WithFormat(MangaFormat.Epub).Build();
+        var library = new LibraryBuilder("GDS Rename", LibraryType.GDS)
+            .WithFolderPath(new FolderPathBuilder("C:/data/gds/").Build())
+            .WithSeries(series).WithSeries(missing).Build();
+        unitOfWork.LibraryRepository.Add(library);
+        await unitOfWork.CommitAsync();
+        series.Name = "User Renamed Title";
+        series.NormalizedName = series.Name.ToNormalized();
+        if (useLocalizedName) series.NormalizedLocalizedName = series.LocalizedName.ToNormalized();
+        unitOfWork.SeriesRepository.Update(series);
+        await unitOfWork.CommitAsync();
+
+        var removed = await unitOfWork.SeriesRepository.RemoveGdsSeriesNotInNormalizedNamesAsync(
+            new HashSet<string> { (useLocalizedName ? "Localized Folder" : "Original Folder").ToNormalized() }, library.Id);
+        Assert.Single(removed);
+        Assert.Equal(missing.Id, removed[0].Id);
+    }
+
     #endregion
 }

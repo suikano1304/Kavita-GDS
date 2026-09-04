@@ -168,13 +168,13 @@ export class MetadataFilterComponent<TFilter extends number = number, TSort exte
     const defaultSortField = this.sortFieldOptions()[0].value;
 
     this.sortGroup = new FormGroup({
-      sortField: new FormControl({value: this.filterV2?.sortOptions?.sortField || defaultSortField, disabled: this.filterSettings().sortDisabled}, []),
-      limitTo: new FormControl(this.filterV2?.limitTo || 0, []),
-      name: new FormControl(this.filterV2?.name || '', [])
+      sortField: new FormControl({value: this.filterV2?.sortOptions?.sortField ?? defaultSortField, disabled: this.filterSettings().sortDisabled}, []),
+      limitTo: new FormControl(this.filterV2?.limitTo ?? 0, []),
+      name: new FormControl(this.filterV2?.name ?? '', [])
     });
 
     if (this.filterSettings()?.presetsV2?.sortOptions) {
-      this.isAscendingSort = this.filterSettings()?.presetsV2?.sortOptions!.isAscending || true;
+      this.isAscendingSort = this.filterSettings()?.presetsV2?.sortOptions!.isAscending ?? true;
     }
 
     this.cdRef.markForCheck();
@@ -230,9 +230,21 @@ export class MetadataFilterComponent<TFilter extends number = number, TSort exte
     this.cdRef.markForCheck();
   }
 
+  isSaveDisabled() {
+    return this.filterSettings().saveDisabled;
+  }
+
   save() {
     if (!this.filterV2) return;
-    this.filterV2.name = this.sortGroup.get('name')?.value;
+    this.filterV2.name = this.sortGroup.get('name')?.value?.trim() || '';
+    if (this.filterV2.name === '') {
+      this.filterUtilitiesService.saveDefaultFilterForCurrentRoute(this.filterV2).subscribe(() => {
+        this.toastr.success(translate('toasts.default-filter-updated'));
+        this.apply();
+      });
+      return;
+    }
+
     this.filterService.saveFilter(this.filterV2).subscribe(() => {
       this.toastr.success(translate('toasts.smart-filter-updated'));
       this.apply();

@@ -111,7 +111,7 @@ export class CollectionDetailComponent implements AfterContentChecked {
   filterSettings = signal(new SeriesFilterSettings());
   actionInProgress = signal(false);
   filterActive = signal(false);
-  jumpbarKeys = computed(() => this.jumpbarService.getJumpKeys(this.series(), (s: Series) => s.name));
+  jumpbarKeys = computed(() => this.jumpbarService.getSeriesJumpKeys(this.series(), this.filter()?.sortOptions));
 
   collectionTagActions = computed(() => {
     const user = this.user();

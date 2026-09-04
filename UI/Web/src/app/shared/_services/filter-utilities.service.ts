@@ -41,6 +41,7 @@ export interface FieldOption<T extends number> {
     providedIn: 'root'
 })
 export class FilterUtilitiesService {
+  private static readonly defaultFilterStoragePrefix = 'kavita--metadata-filter-default--';
 
   private readonly router = inject(Router);
   private readonly metadataService = inject(MetadataService);
@@ -77,6 +78,22 @@ export class FilterUtilitiesService {
     return this.encodeFilter(filter).pipe(tap(encodedFilter => {
       window.history.replaceState(window.location.href, '', window.location.href.split('?')[0]+ '?' + encodedFilter);
     }));
+  }
+
+  saveDefaultFilterForCurrentRoute(filter: FilterV2 | undefined) {
+    return this.encodeFilter(filter).pipe(tap(encodedFilter => {
+      localStorage.setItem(this.getDefaultFilterStorageKey(window.location.pathname), encodedFilter);
+    }));
+  }
+
+  getDefaultFilterForRoute(url: string) {
+    const encodedFilter = localStorage.getItem(this.getDefaultFilterStorageKey(url));
+    if (!encodedFilter) return of(null);
+    return this.decodeFilter(encodedFilter);
+  }
+
+  private getDefaultFilterStorageKey(url: string) {
+    return FilterUtilitiesService.defaultFilterStoragePrefix + url.split('?')[0];
   }
 
   /**

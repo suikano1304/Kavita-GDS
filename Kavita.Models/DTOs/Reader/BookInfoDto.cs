@@ -10,6 +10,7 @@ public sealed record BookInfoDto : IChapterInfoDto
     public int VolumeId { get; set; }
     [EnumDataType(typeof(MangaFormat))]
     public MangaFormat SeriesFormat { get; set; }
+    public LibraryType LibraryType { get; set; }
     public string SeriesName { get; set; } = default! ;
     public string ChapterNumber { get; set; } = default! ;
     public string VolumeNumber { get; set; } = default! ;

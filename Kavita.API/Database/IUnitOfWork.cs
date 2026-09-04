@@ -38,11 +38,6 @@ public interface IUnitOfWork
     IReadingListRemapRuleRepository RemapRuleRepository { get; }
     IKavitaPlusAuditRepository KavitaPlusAuditRepository { get; }
 
-    /// <summary>
-    /// Commits pending changes to the database inside an IMMEDIATE transaction so writer
-    /// contention waits on the SQLite writer lock (via busy_timeout) instead of failing with
-    /// SQLITE_BUSY_SNAPSHOT.
-    /// </summary>
     Task<bool> CommitAsync(CancellationToken ct = default);
     bool HasChanges();
     Task<bool> RollbackAsync(CancellationToken ct = default);

@@ -18,6 +18,8 @@ public class AutoMapperSeriesProfile : Profile
         CreateMap<Series, SeriesDto>()
             .ForMember(dest => dest.LibraryName,
                 opt => opt.MapFrom(src => src.Library.Name))
+            .ForMember(dest => dest.ReleaseYear,
+                opt => opt.MapFrom(src => src.Metadata.ReleaseYear))
             .ForMember(dest => dest.PagesRead,
                 opt => opt.MapFrom(src =>
                     src.Progress
@@ -28,6 +30,9 @@ public class AutoMapperSeriesProfile : Profile
                     src.Progress
                         .Where(p => p.AppUserId == userId)
                         .Max(p => (DateTime?)p.LastModified) ?? DateTime.MinValue))
+            .ForMember(dest => dest.ContentLastModified,
+                opt => opt.MapFrom(src =>
+                    src.ContentLastModified == DateTime.MinValue ? src.LastModified : src.ContentLastModified))
             .ForMember(dest => dest.TotalReads,
                 opt => opt.MapFrom(src =>
                     src.Progress

@@ -377,8 +377,19 @@ public class DirectoryService : IDirectoryService
             foreach (var dir in di.EnumerateDirectories())
             {
                 if (!dir.Exists) continue;
-                dir.Delete(true);
+                try
+                {
+                    dir.Delete(true);
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    /* Directory was removed by another cleanup/cache operation. */
+                }
             }
+        }
+        catch (DirectoryNotFoundException)
+        {
+            /* Directory was removed by another cleanup/cache operation. */
         }
         catch (UnauthorizedAccessException ex)
         {

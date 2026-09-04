@@ -24,6 +24,17 @@ public class ParsedSeries
     public bool HasChanged { get; set; }
 }
 
+public sealed record SeriesScanFingerprintInfo
+{
+    public int SeriesId { get; init; }
+    public required string NormalizedName { get; init; }
+    public MangaFormat Format { get; init; }
+    public string? GdsScanFingerprint { get; init; }
+    public int GdsScanFingerprintVersion { get; init; }
+    public bool NeedsSeriesCoverImage { get; init; }
+    public bool HasMissingNestedCoverImages { get; init; }
+}
+
 public class ScanResult
 {
     /// <summary>
@@ -67,6 +78,20 @@ public class ScannedSeriesResult
     public IList<ParserInfo> ParsedInfos { get; set; }
 }
 
+public sealed class GdsScannedFileRef
+{
+    public required string FilePath { get; init; }
+    public required string Folder { get; init; }
+    public required string LibraryRoot { get; init; }
+}
+
+public sealed class GdsScannedSeriesResult
+{
+    public bool HasChanged { get; set; }
+    public required ParsedSeries ParsedSeries { get; init; }
+    public IList<GdsScannedFileRef> Files { get; set; } = [];
+}
+
 public class SeriesModified
 {
     public required string? FolderPath { get; set; }
@@ -75,4 +100,5 @@ public class SeriesModified
     public DateTime LastScanned { get; set; }
     public MangaFormat Format { get; set; }
     public IEnumerable<string> LibraryRoots { get; set; } = ArraySegment<string>.Empty;
+    public bool HasZeroPageFiles { get; set; }
 }

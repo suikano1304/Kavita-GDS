@@ -75,12 +75,12 @@
   <ng-template #buttons>
     <!-- TODO: I might want to put a Clear button which blanks out the whole filter -->
     <div class="col-md-6 col-sm-6 mt-4 pt-2 d-flex justify-content-between">
-      <button class="btn btn-secondary col-6 me-1" (click)="clear()"><i class="fa-solid fa-arrow-rotate-left me-1" aria-hidden="true"></i>{{t('reset')}}</button>
-      <button class="btn btn-primary col-6" (click)="apply()"><i class="fa-solid fa-play me-1" aria-hidden="true"></i>{{t('apply')}}</button>
+      <button type="button" class="btn btn-secondary col-6 me-1" (click)="clear()"><i class="fa-solid fa-arrow-rotate-left me-1" aria-hidden="true"></i>{{t('reset')}}</button>
+      <button type="button" class="btn btn-primary col-6" (click)="apply()"><i class="fa-solid fa-play me-1" aria-hidden="true"></i>{{t('apply')}}</button>
     </div>
     <div class="col-md-2 col-sm-6 mt-4 pt-2">
       <div class="d-flex flex-grow-1"> <!-- TODO: How can we make this wider (col-12, old behv) if no extra buttons are present -->
-        <button class="btn btn-primary" (click)="save()" [disabled]="filterSettings().saveDisabled || !this.sortGroup.get('name')?.value">
+        <button type="button" class="btn btn-primary" (click)="save()" [disabled]="isSaveDisabled()">
           <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>
           {{t('save')}}
         </button>
@@ -89,5 +89,3 @@
     </div>
   </ng-template>
 </ng-container>
-
-

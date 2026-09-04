@@ -2200,6 +2200,7 @@ public class ExternalMetadataService : IExternalMetadataService
 
         var from = chapter.TitleName;
         chapter.TitleName = title;
+        chapter.NormalizedTitleName = title.ToNormalized();
         chapter.AddKPlusOverride(MetadataSettingField.ChapterTitle);
         chapter.TitleNameLocked = true;
 

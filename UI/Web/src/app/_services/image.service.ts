@@ -1,4 +1,4 @@
-import {computed, DestroyRef, inject, Injectable} from '@angular/core';
+import {computed, DestroyRef, inject, Injectable, signal} from '@angular/core';
 import {environment} from '../../environments/environment';
 import {ThemeService} from './theme.service';
 import {AccountService} from './account.service';
@@ -8,6 +8,7 @@ import {HttpClient} from "@angular/common/http";
 import {CoverImageOption} from "./cover-chooser-config-factory.service";
 import {translate} from "@jsverse/transloco";
 import {ExternalCoverImageType, ExternalCoverResponse} from "../_models/kavitaplus/external-cover-response";
+import {EVENTS, MessageHubService} from "./message-hub.service";
 
 @Injectable({
   providedIn: 'root'
@@ -17,10 +18,13 @@ export class ImageService {
   private readonly themeService = inject(ThemeService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly httpClient = inject(HttpClient);
+  private readonly hubService = inject(MessageHubService);
 
   private readonly baseUrl = environment.apiUrl;
+  private readonly coverCacheBuster = signal(Date.now());
   apiKey = this.accountService.currentUserImageAuthKey;
   encodedKey = computed(() => encodeURIComponent(this.apiKey()!));
+  private readonly coverAuthParams = computed(() => `apiKey=${this.encodedKey()}&v=${this.coverCacheBuster()}`);
 
   public placeholderImage = 'assets/images/image-placeholder.dark-min.png';
   public errorImage = 'assets/images/error-placeholder2.dark-min.png';
@@ -41,6 +45,12 @@ export class ImageService {
         this.noPersonImage = 'assets/images/error-person-missing.min.png';
       }
     });
+
+    this.hubService.messages$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(message => {
+      if (message.event === EVENTS.CoverUpdate) {
+        this.coverCacheBuster.set(Date.now());
+      }
+    });
   }
 
   /**
@@ -56,35 +66,35 @@ export class ImageService {
   }
 
   getPersonImage(personId: number) {
-    return `${this.baseUrl}image/person-cover?personId=${personId}&apiKey=${this.encodedKey()}`;
+    return `${this.baseUrl}image/person-cover?personId=${personId}&${this.coverAuthParams()}`;
   }
 
   getUserCoverImage(userId: number) {
-    return `${this.baseUrl}image/user-cover?userId=${userId}&apiKey=${this.encodedKey()}`;
+    return `${this.baseUrl}image/user-cover?userId=${userId}&${this.coverAuthParams()}`;
   }
 
   getLibraryCoverImage(libraryId: number) {
-    return `${this.baseUrl}image/library-cover?libraryId=${libraryId}&apiKey=${this.encodedKey()}`;
+    return `${this.baseUrl}image/library-cover?libraryId=${libraryId}&${this.coverAuthParams()}`;
   }
 
   getVolumeCoverImage(volumeId: number) {
-    return `${this.baseUrl}image/volume-cover?volumeId=${volumeId}&apiKey=${this.encodedKey()}`;
+    return `${this.baseUrl}image/volume-cover?volumeId=${volumeId}&${this.coverAuthParams()}`;
   }
 
   getSeriesCoverImage(seriesId: number) {
-    return `${this.baseUrl}image/series-cover?seriesId=${seriesId}&apiKey=${this.encodedKey()}`;
+    return `${this.baseUrl}image/series-cover?seriesId=${seriesId}&${this.coverAuthParams()}`;
   }
 
   getCollectionCoverImage(collectionTagId: number) {
-    return `${this.baseUrl}image/collection-cover?collectionTagId=${collectionTagId}&apiKey=${this.encodedKey()}`;
+    return `${this.baseUrl}image/collection-cover?collectionTagId=${collectionTagId}&${this.coverAuthParams()}`;
   }
 
   getReadingListCoverImage(readingListId: number) {
-    return `${this.baseUrl}image/readinglist-cover?readingListId=${readingListId}&apiKey=${this.encodedKey()}`;
+    return `${this.baseUrl}image/readinglist-cover?readingListId=${readingListId}&${this.coverAuthParams()}`;
   }
 
   getChapterCoverImage(chapterId: number) {
-    return `${this.baseUrl}image/chapter-cover?chapterId=${chapterId}&apiKey=${this.encodedKey()}`;
+    return `${this.baseUrl}image/chapter-cover?chapterId=${chapterId}&${this.coverAuthParams()}`;
   }
 
   getBookmarkedImage(chapterId: number, pageNum: number, imageOffset: number = 0) {

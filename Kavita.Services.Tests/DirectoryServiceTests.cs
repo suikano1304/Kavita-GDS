@@ -1046,7 +1046,7 @@ public class DirectoryServiceTests: AbstractFsTest
 
         var allFiles = ds.ScanFiles("C:/Data/", Parser.SupportedExtensions);
 
-        Assert.Equal(5, allFiles.Count);
+        Assert.Equal(6, allFiles.Count);
 
         return Task.CompletedTask;
     }

@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Hangfire;
 using Kavita.API.Database;
@@ -46,6 +47,7 @@ internal sealed record UpdateChapterArgs
     public required IList<ParserInfo> ParsedInfos { get; init; }
     public required Dictionary<string, Person> DatabasePeople { get; init; }
     public bool ForceUpdate { get; init; } = false;
+    public bool IsGdsLibrary { get; init; } = false;
 }
 
 internal sealed record UpdateChapterComicInfoArgs
@@ -55,6 +57,7 @@ internal sealed record UpdateChapterComicInfoArgs
     public required ComicInfo? ComicInfo { get; init; }
     public required Dictionary<string, Person> DatabasePeople { get; init; }
     public bool ForceUpdate { get; init; } = false;
+    public bool BypassFileUnmodifiedCheck { get; init; } = false;
 }
 
 internal sealed record TemporaryPerson(string Name, string NormalizedName);
@@ -74,10 +77,25 @@ public class ProcessSeries(
     IExternalMetadataService externalMetadataService)
     : IProcessSeries
 {
+    private static readonly Regex GdsFilenamePageHintRegex = new(
+        @"#(?<Pages>\d{1,5})$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        Parser.RegexTimeout);
+    private static readonly Regex GdsFilenameNumberingMarkerRegex = new(
+        @"\d+(?:\.\d+)?\s*(?:권|화|장|회|부)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        Parser.RegexTimeout);
 
     public async Task<int?> ProcessSeriesAsync(MetadataSettingsDto settings, IList<ParserInfo> parsedInfos, ProcessSeriesArgs args)
     {
         if (!parsedInfos.Any()) return null;
+        if (args.Library.Type == LibraryType.GDS)
+        {
+            parsedInfos = parsedInfos
+                .GroupBy(info => Parser.NormalizePath(info.FullFilePath))
+                .Select(group => group.First())
+                .ToList();
+        }
 
         var library = args.Library;
 
@@ -124,7 +142,8 @@ public class ProcessSeries(
             var firstParsedInfo = parsedInfos.FirstOrDefault(p => p.ComicInfo != null, firstInfo);
             var databasePeople = await LoadAndCreateMissingChapterPeople(series, parsedInfos);
 
-            await UpdateVolumes(databasePeople, settings, series, parsedInfos, args.ForceUpdate);
+            await UpdateVolumes(databasePeople, settings, series, parsedInfos,
+                args.Library.Type == LibraryType.GDS, args.ForceUpdate);
             series.Pages = series.Volumes.Sum(v => v.Pages);
 
             series.NormalizedName = series.Name.ToNormalized();
@@ -172,6 +191,21 @@ public class ProcessSeries(
 
             // Update series FolderPath here
             await UpdateSeriesFolderPath(parsedInfos, library, series);
+
+            var isGdsLibrary = library.Type == LibraryType.GDS;
+            var gdsScanState = GdsScanFingerprintHelper.Calculate(parsedInfos, isGdsLibrary);
+            var contentLastModifiedUtc = GetSeriesContentActivityUtc(series, gdsScanState.ContentLastModifiedUtc);
+            if (contentLastModifiedUtc > DateTime.MinValue)
+            {
+                series.ContentLastModifiedUtc = contentLastModifiedUtc;
+                series.ContentLastModified = contentLastModifiedUtc.ToLocalTime();
+            }
+
+            if (isGdsLibrary)
+            {
+                series.GdsScanFingerprint = gdsScanState.Fingerprint;
+                series.GdsScanFingerprintVersion = GdsScanFingerprintHelper.FingerprintVersion;
+            }
 
             series.UpdateLastFolderScanned();
 
@@ -335,6 +369,12 @@ public class ProcessSeries(
     {
         var libraryFolders = library.Folders.Select(l => Parser.NormalizePath(l.Path)).ToList();
         var seriesFiles = parsedInfos.Select(f => Parser.NormalizePath(f.FullFilePath)).ToList();
+        var fileDirectories = seriesFiles
+            .Select(Path.GetDirectoryName)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Select(Parser.NormalizePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var seriesDirs = directoryService.FindHighestDirectoriesFromFiles(libraryFolders, seriesFiles);
         if (seriesDirs.Keys.Count == 0)
         {
@@ -356,12 +396,39 @@ public class ProcessSeries(
             }
         }
 
+        if (library.Type == LibraryType.GDS && fileDirectories.Count > 1)
+        {
+            series.LowestFolderPath = ResolveGdsMixedRootLowestFolder(series.LowestFolderPath, fileDirectories);
+            logger.LogInformation(
+                "[ScannerService] {SeriesName} spans {RootCount} GDS file directories. Preserving concrete LowestFolderPath as {LowestFolderPath}",
+                series.Name, fileDirectories.Count, series.LowestFolderPath);
+            return;
+        }
+
         var lowestFolder = directoryService.FindLowestDirectoriesFromFiles(libraryFolders, seriesFiles);
         if (!string.IsNullOrEmpty(lowestFolder))
         {
             series.LowestFolderPath = lowestFolder;
             logger.LogDebug("Updating {Series} LowestFolderPath to {FolderPath}", series.Name, series.LowestFolderPath);
         }
+    }
+
+    internal static string ResolveGdsMixedRootLowestFolder(string? existingLowestFolderPath, IList<string> fileDirectories)
+    {
+        var normalizedDirectories = fileDirectories
+            .Select(Parser.NormalizePath)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var normalizedExisting = Parser.NormalizePath(existingLowestFolderPath ?? string.Empty);
+        if (!string.IsNullOrEmpty(normalizedExisting) &&
+            normalizedDirectories.Contains(normalizedExisting, StringComparer.OrdinalIgnoreCase))
+        {
+            return normalizedExisting;
+        }
+
+        return normalizedDirectories.FirstOrDefault() ?? normalizedExisting;
     }
 
 
@@ -671,7 +738,8 @@ public class ProcessSeries(
         }
     }
 
-    private async Task UpdateVolumes(Dictionary<string, Person> databasePeople, MetadataSettingsDto settings, Series series, IList<ParserInfo> parsedInfos, bool forceUpdate = false)
+    private async Task UpdateVolumes(Dictionary<string, Person> databasePeople, MetadataSettingsDto settings, Series series,
+        IList<ParserInfo> parsedInfos, bool isGdsLibrary, bool forceUpdate = false)
     {
         // Add new volumes and update chapters per volume
         var distinctVolumes = parsedInfos.DistinctVolumes();
@@ -716,7 +784,8 @@ public class ProcessSeries(
                 Volume = volume,
                 ParsedInfos = infos,
                 DatabasePeople = databasePeople,
-                ForceUpdate = forceUpdate
+                ForceUpdate = forceUpdate,
+                IsGdsLibrary = isGdsLibrary
             });
             volume.Pages = volume.Chapters.Sum(c => c.Pages);
         }
@@ -746,6 +815,12 @@ public class ProcessSeries(
                 logger.LogInformation(
                     "[ScannerService] Volume cleanup code was trying to remove a volume with a file still existing on disk (usually volume marker removed) File: {File}",
                     file);
+
+                if (series.Library?.Type == LibraryType.GDS)
+                {
+                    nonDeletedVolumes.Add(volume);
+                    continue;
+                }
             }
 
             logger.LogDebug("[ScannerService] Removed {SeriesName} - Volume {Volume}: {File}", series.Name, volume.Name, file);
@@ -756,6 +831,8 @@ public class ProcessSeries(
 
     private async Task UpdateChapters(UpdateChapterArgs args)
     {
+        var preferredChapterByFile = new Dictionary<string, Chapter>();
+
         // Add new chapters
         foreach (var info in args.ParsedInfos)
         {
@@ -774,11 +851,30 @@ public class ProcessSeries(
 
             if (chapter == null)
             {
-                logger.LogDebug(
-                    "[ScannerService] Adding new chapter, {Series} - Vol {Volume} Ch {Chapter}", info.Series, info.Volumes, info.Chapters);
-                chapter = ChapterBuilder.FromParserInfo(info).Build();
-                args.Volume.Chapters.Add(chapter);
-                args.Series.UpdateLastChapterAdded();
+                var normalizedPath = Parser.NormalizePath(info.FullFilePath);
+                chapter = args.Series.Volumes
+                    .SelectMany(volume => volume.Chapters)
+                    .FirstOrDefault(existingChapter =>
+                        existingChapter.Files.Any(file => Parser.NormalizePath(file.FilePath) == normalizedPath));
+
+                if (chapter != null)
+                {
+                    var existingVolume = args.Series.Volumes.FirstOrDefault(volume => volume.Chapters.Contains(chapter));
+                    if (existingVolume != args.Volume)
+                    {
+                        existingVolume?.Chapters.Remove(chapter);
+                        args.Volume.Chapters.Add(chapter);
+                    }
+                    chapter.UpdateFrom(info);
+                }
+                else
+                {
+                    logger.LogDebug(
+                        "[ScannerService] Adding new chapter, {Series} - Vol {Volume} Ch {Chapter}", info.Series, info.Volumes, info.Chapters);
+                    chapter = ChapterBuilder.FromParserInfo(info).Build();
+                    args.Volume.Chapters.Add(chapter);
+                    args.Series.UpdateLastChapterAdded();
+                }
             }
             else
             {
@@ -787,7 +883,8 @@ public class ProcessSeries(
 
 
             // Add files
-            AddOrUpdateFileForChapter(chapter, info, args.ForceUpdate);
+            AddOrUpdateFileForChapter(chapter, info, args.ForceUpdate, args.IsGdsLibrary);
+            preferredChapterByFile[Parser.NormalizePath(info.FullFilePath)] = chapter;
 
             chapter.Number = info.LowestChapter.ToString(CultureInfo.InvariantCulture);
             chapter.MinNumber = info.LowestChapter;
@@ -824,6 +921,7 @@ public class ProcessSeries(
                     ComicInfo = info.ComicInfo,
                     DatabasePeople = args.DatabasePeople,
                     ForceUpdate = args.ForceUpdate,
+                    BypassFileUnmodifiedCheck = args.IsGdsLibrary && info.ComicInfo != null,
                 });
             }
             catch (Exception ex)
@@ -858,10 +956,10 @@ public class ProcessSeries(
             }
         }
 
-        RemoveChapters(args.Volume, args.ParsedInfos);
+        RemoveChapters(args.Volume, args.ParsedInfos, preferredChapterByFile);
     }
 
-    private void RemoveChapters(Volume volume, IList<ParserInfo> parsedInfos)
+    private void RemoveChapters(Volume volume, IList<ParserInfo> parsedInfos, IReadOnlyDictionary<string, Chapter> preferredChapterByFile)
     {
         // Chapters to remove after enumeration
         var chaptersToRemove = new List<Chapter>();
@@ -874,6 +972,10 @@ public class ProcessSeries(
             .Distinct()
             .ToList();
 
+        var parsedFiles = parsedInfos
+            .Select(p => Parser.NormalizePath(p.FullFilePath))
+            .ToHashSet();
+        var seenFilesInVolume = new HashSet<string>();
         foreach (var existingChapter in existingChapters)
         {
             var chapterFileDirectories = existingChapter.Files
@@ -886,7 +988,18 @@ public class ProcessSeries(
             if (hasMatchingDirectory)
             {
                 existingChapter.Files = existingChapter.Files
-                    .Where(f => parsedInfos.Any(p => Parser.NormalizePath(p.FullFilePath) == Parser.NormalizePath(f.FilePath)))
+                    .Where(f =>
+                    {
+                        var normalizedPath = Parser.NormalizePath(f.FilePath);
+                        if (!parsedFiles.Contains(normalizedPath)) return false;
+                        if (preferredChapterByFile.TryGetValue(normalizedPath, out var preferredChapter))
+                        {
+                            return ReferenceEquals(preferredChapter, existingChapter)
+                                   || preferredChapter.Id != 0 && preferredChapter.Id == existingChapter.Id;
+                        }
+
+                        return seenFilesInVolume.Add(normalizedPath);
+                    })
                     .OrderByNatural(f => f.FilePath)
                     .ToList();
 
@@ -916,7 +1029,7 @@ public class ProcessSeries(
         }
     }
 
-    private void AddOrUpdateFileForChapter(Chapter chapter, ParserInfo info, bool forceUpdate = false)
+    private void AddOrUpdateFileForChapter(Chapter chapter, ParserInfo info, bool forceUpdate = false, bool skipExpensiveFileStats = false)
     {
         chapter.Files ??= [];
         var existingFile = chapter.Files.SingleOrDefault(f => f.FilePath == info.FullFilePath);
@@ -925,28 +1038,132 @@ public class ProcessSeries(
         {
             // TODO: I wonder if we can simplify this force check.
             existingFile.Format = info.Format;
+            existingFile.FileCreated = fileInfo.CreationTime;
+            existingFile.FileCreatedUtc = fileInfo.CreationTimeUtc;
 
-            if (!forceUpdate && !fileService.HasFileBeenModifiedSince(existingFile.FilePath, existingFile.LastModified) && existingFile.Pages != 0) return;
+            if (skipExpensiveFileStats && !fileService.HasFileBeenModifiedSince(existingFile.FilePath, existingFile.LastModified))
+            {
+                existingFile.Pages = GetGdsPageCount(info.FullFilePath, info.Format, existingFile.Pages);
+                existingFile.Extension = fileInfo.Extension.ToLowerInvariant();
+                existingFile.FileName = Parser.RemoveExtensionIfSupported(existingFile.FilePath);
+                existingFile.FilePath = Parser.NormalizePath(existingFile.FilePath);
+                existingFile.Bytes = fileInfo.Length;
+                return;
+            }
 
-            existingFile.Pages = readingItemService.GetNumberOfPages(info.FullFilePath, info.Format);
+            if (!forceUpdate &&
+                !fileService.HasFileBeenModifiedSince(existingFile.FilePath, existingFile.LastModified) &&
+                existingFile.Pages != 0)
+            {
+                existingFile.Extension = fileInfo.Extension.ToLowerInvariant();
+                existingFile.FileName = Parser.RemoveExtensionIfSupported(existingFile.FilePath);
+                existingFile.FilePath = Parser.NormalizePath(existingFile.FilePath);
+                existingFile.Bytes = fileInfo.Length;
+                return;
+            }
+
+            existingFile.Pages = skipExpensiveFileStats
+                ? GetGdsPageCount(info.FullFilePath, info.Format, existingFile.Pages)
+                : readingItemService.GetNumberOfPages(info.FullFilePath, info.Format);
             existingFile.Extension = fileInfo.Extension.ToLowerInvariant();
             existingFile.FileName = Parser.RemoveExtensionIfSupported(existingFile.FilePath);
             existingFile.FilePath = Parser.NormalizePath(existingFile.FilePath);
             existingFile.Bytes = fileInfo.Length;
-            existingFile.KoreaderHash = KoreaderHelper.HashContents(existingFile.FilePath);
+            if (!skipExpensiveFileStats)
+            {
+                existingFile.KoreaderHash = KoreaderHelper.HashContents(existingFile.FilePath);
+            }
 
             // We skip updating DB here with last modified time so that metadata refresh can do it
         }
         else
         {
 
-            var file = new MangaFileBuilder(info.FullFilePath, info.Format, readingItemService.GetNumberOfPages(info.FullFilePath, info.Format))
+            var fileBuilder = new MangaFileBuilder(info.FullFilePath, info.Format,
+                    skipExpensiveFileStats ? GetGdsPageCount(info.FullFilePath, info.Format, 0) : readingItemService.GetNumberOfPages(info.FullFilePath, info.Format))
                 .WithExtension(fileInfo.Extension)
-                .WithBytes(fileInfo.Length)
-                .WithHash()
-                .Build();
+                .WithBytes(fileInfo.Length);
+            if (!skipExpensiveFileStats)
+            {
+                fileBuilder.WithHash();
+            }
+            var file = fileBuilder.Build();
             chapter.Files.Add(file);
         }
+    }
+
+    private int GetGdsPageCount(string filePath, MangaFormat format, int existingPages)
+    {
+        var isGdsMountPath = IsGdsMountPath(filePath);
+        if (isGdsMountPath)
+        {
+            if (GdsMetadataParser.TryGetPageCount(filePath, out var yamlPages))
+            {
+                return yamlPages;
+            }
+
+            if (format is MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text)
+            {
+                if (existingPages > 1) return existingPages;
+            }
+            else if (existingPages > 0)
+            {
+                return existingPages;
+            }
+
+            if (format == MangaFormat.Archive && TryGetGdsFilenamePageHint(filePath, out var pageHint))
+            {
+                return pageHint;
+            }
+        }
+
+        if (format is MangaFormat.Archive or MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text)
+        {
+            var pages = readingItemService.GetNumberOfPages(filePath, format);
+            if (pages > 0) return pages;
+
+            if (existingPages > 0)
+            {
+                logger.LogWarning(
+                    "[ScannerService] Unable to refresh page count for {FilePath}. Preserving existing page count {PageCount}",
+                    filePath, existingPages);
+                return existingPages;
+            }
+
+            logger.LogWarning("[ScannerService] Unable to determine page count for {FilePath}. Defaulting to 0", filePath);
+            return 0;
+        }
+
+        if (format == MangaFormat.Image)
+        {
+            return 1;
+        }
+
+        return existingPages > 0 ? existingPages : 0;
+    }
+
+    internal static bool TryGetGdsFilenamePageHint(string filePath, out int pages)
+    {
+        pages = 0;
+
+        var fileName = Path.GetFileNameWithoutExtension(filePath);
+        if (string.IsNullOrWhiteSpace(fileName)) return false;
+
+        var match = GdsFilenamePageHintRegex.Match(fileName);
+        if (!match.Success) return false;
+
+        var prefix = fileName[..match.Index];
+        if (!GdsFilenameNumberingMarkerRegex.IsMatch(prefix)) return false;
+
+        return int.TryParse(match.Groups["Pages"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out pages)
+               && pages > 0;
+    }
+
+    private static bool IsGdsMountPath(string filePath)
+    {
+        var normalizedPath = Parser.NormalizePath(filePath);
+        return normalizedPath.StartsWith("/mnt/gds/", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(normalizedPath, "/mnt/gds", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task UpdateChapterFromComicInfo(UpdateChapterComicInfoArgs args)
@@ -957,6 +1174,7 @@ public class ProcessSeries(
         if (comicInfo == null) return;
         var firstFile = chapter.Files.MinBy(x => x.Chapter);
         if (firstFile == null ||
+            !args.BypassFileUnmodifiedCheck &&
             cacheHelper.IsFileUnmodifiedSinceCreationOrLastScan(chapter, args.ForceUpdate, firstFile)) return;
 
         var sw = Stopwatch.StartNew();
@@ -964,6 +1182,7 @@ public class ProcessSeries(
         if (!chapter.TitleNameLocked)
         {
             chapter.TitleName = comicInfo.Title.Trim();
+            chapter.NormalizedTitleName = chapter.TitleName.ToNormalized();
         }
 
         if (!chapter.SummaryLocked)
@@ -1007,9 +1226,10 @@ public class ProcessSeries(
 
         if (!chapter.ReleaseDateLocked && comicInfo.Year > 0)
         {
-            var day = Math.Max(comicInfo.Day, 1);
-            var month = Math.Max(comicInfo.Month, 1);
-            chapter.ReleaseDate = new DateTime(comicInfo.Year, month, day);
+            if (TryCreateComicInfoReleaseDate(comicInfo, out var releaseDate))
+            {
+                chapter.ReleaseDate = releaseDate;
+            }
         }
 
         foreach (var personRole in Enum.GetValues<PersonRole>())
@@ -1058,6 +1278,22 @@ public class ProcessSeries(
         logger.LogTrace("[TIME] Kavita took {Time} ms to create/update Chapter: {File}", sw.ElapsedMilliseconds, chapter.Files.First().FileName);
     }
 
+    private static bool TryCreateComicInfoReleaseDate(ComicInfo comicInfo, out DateTime releaseDate)
+    {
+        releaseDate = DateTime.MinValue;
+        if (comicInfo.Year is < 1 or > 9999) return false;
+
+        var month = comicInfo.Month <= 0 ? 1 : comicInfo.Month;
+        if (month is < 1 or > 12) return false;
+
+        var day = comicInfo.Day <= 0 ? 1 : comicInfo.Day;
+        var daysInMonth = DateTime.DaysInMonth(comicInfo.Year, month);
+        if (day > daysInMonth) return false;
+
+        releaseDate = new DateTime(comicInfo.Year, month, day);
+        return true;
+    }
+
 
 
     private async Task UpdateChapterGenres(Chapter chapter, IEnumerable<string> genreNames)
@@ -1082,6 +1318,29 @@ public class ProcessSeries(
         {
             logger.LogError(ex, "There was an error updating the chapter tags");
         }
+    }
+
+    private static DateTime GetSeriesContentActivityUtc(Series series, DateTime fileSystemContentLastModifiedUtc)
+    {
+        var latest = fileSystemContentLastModifiedUtc;
+
+        foreach (var chapter in series.Volumes.SelectMany(volume => volume.Chapters))
+        {
+            latest = MaxDate(latest, chapter.CreatedUtc);
+
+            foreach (var file in chapter.Files)
+            {
+                latest = MaxDate(latest, file.FileCreatedUtc);
+                latest = MaxDate(latest, file.CreatedUtc);
+            }
+        }
+
+        return latest;
+    }
+
+    private static DateTime MaxDate(DateTime left, DateTime right)
+    {
+        return left >= right ? left : right;
     }
 
     private async Task<Dictionary<string, Person>> LoadAndCreateMissingChapterPeople(Series series, IList<ParserInfo> parserInfos)

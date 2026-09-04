@@ -91,6 +91,14 @@ export class GamePadService {
       }
     });
 
+    // Some Android WebViews expose a new Gamepad snapshot from getGamepads()
+    // rather than mutating the object received by gamepadconnected.
+    const connected = navigator.getGamepads?.().filter((gamePad): gamePad is Gamepad => gamePad !== null) ?? [];
+    if (connected.length > 0) {
+      this._gamePads.set(new Set(connected));
+      this.poll();
+    }
+
     window.addEventListener('gamepaddisconnected', (e: GamepadEvent) => {
       this._gamePads.update(s => {
         const newSet = new Set(s);
@@ -110,7 +118,9 @@ export class GamePadService {
       return;
     }
 
-    for (const gamePad of this.gamePads()) {
+    for (const connectedGamePad of this.gamePads()) {
+      const gamePad = navigator.getGamepads?.()[connectedGamePad.index] ?? connectedGamePad;
+      if (!gamePad) continue;
       const pressed: GamePadButtonKey[] = [];
 
       for (let idx = 0; idx < gamePad.buttons.length; idx++) {

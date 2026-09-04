@@ -65,8 +65,11 @@ public class ReadingHistoryServiceTests(ITestOutputHelper testOutputHelper) : Ab
     }
 
 
-    [Fact]
-    public async Task CreatesForYesterdaySessions()
+    [Theory]
+    [InlineData(0, 12)]
+    [InlineData(9, 23)]
+    [InlineData(-7, 1)]
+    public async Task CreatesForYesterdaySessions(int offsetHours, int utcHour)
     {
         var (_, dataContext, _) = await CreateDatabase();
         var service = Setup(dataContext);
@@ -82,8 +85,8 @@ public class ReadingHistoryServiceTests(ITestOutputHelper testOutputHelper) : Ab
         await dataContext.SaveChangesAsync();
 
         // Create an active session dated for yesterday
-        var yesterday= DateTime.Now.Date.AddDays(-1);
-        var yesterdayUtc = yesterday.ToUniversalTime();
+        var yesterdayUtc = DateTime.UtcNow.Date.AddDays(-1).AddHours(utcHour);
+        var yesterday = yesterdayUtc.AddHours(offsetHours);
         var activityData = new AppUserReadingSessionActivityData(new ProgressDto()
         {
             ChapterId = 1, VolumeId = 1, LibraryId = 1, PageNum = 1, SeriesId = 1

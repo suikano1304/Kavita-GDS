@@ -71,6 +71,10 @@ public class Chapter : IEntityDate, IHasReadTimeEstimate, IHasCoverImage, IHasKP
     /// <remarks>This should not be confused with Title which is used for special filenames.</remarks>
     public string TitleName { get; set; } = string.Empty;
     /// <summary>
+    /// Used internally for whitespace/case-insensitive title matching. <see cref="Kavita.Common.Extensions.StringExtensions.ToNormalized"/>
+    /// </summary>
+    public string NormalizedTitleName { get; set; } = string.Empty;
+    /// <summary>
     /// Date which chapter was released
     /// </summary>
     public DateTime ReleaseDate { get; set; }

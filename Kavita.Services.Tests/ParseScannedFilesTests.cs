@@ -632,7 +632,7 @@ public class ParseScannedFilesTests: AbstractDbTest
             Substitute.For<IReadingItemService>(), Substitute.For<IEventHub>(),
             Substitute.For<IMediaErrorService>());
 
-        psd.TrackSeriesAcrossScanResults(scanResults, scannedSeries);
+        psd.TrackSeriesAcrossScanResults(scanResults, scannedSeries, LibraryType.Manga);
 
         Assert.Equal(2, scannedSeries.Count);
     }
@@ -664,7 +664,7 @@ public class ParseScannedFilesTests: AbstractDbTest
             Substitute.For<IReadingItemService>(), Substitute.For<IEventHub>(),
             Substitute.For<IMediaErrorService>());
 
-        psd.TrackSeriesAcrossScanResults(scanResults, scannedSeries);
+        psd.TrackSeriesAcrossScanResults(scanResults, scannedSeries, LibraryType.Manga);
 
         Assert.Single(scannedSeries);
         Assert.Single(scannedSeries.Values.First().DistinctBy(x => x.Series));

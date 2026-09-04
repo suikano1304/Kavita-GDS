@@ -20,6 +20,30 @@ your reading collection with your friends and family!
 <img src="https://img.shields.io/endpoint?url=https://stats.kavitareader.com/api/ui/shield-badge"/>
 </div>
 
+## Kavita-GDS Fork Release
+
+This fork publishes GDS-focused Kavita builds through GHCR. The current public release is `0.9.0.12-6`, based on the official Kavita `0.9.0.12` nightly source plus the GDS patch stack.
+
+```bash
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.0.12-6
+```
+
+The `0.9.0.12-6` release includes:
+
+- Streaming GDS scan-phase grouping that avoids retaining every per-directory scan result and parser list until the whole root is parsed.
+- Lower-memory GDS processing that releases parsed series metadata after each skipped or processed series.
+- GDS processing queue compaction that stores only series indexes while processing and clears metadata caches after each scan.
+- Representative-cover generation during scans, with full per-volume/per-chapter cover generation available through metadata refresh paths.
+- "Last Modified" sorting that treats newly added content as content activity, so newly imported files with old filesystem timestamps can still surface correctly.
+- GDS scan fingerprints so unchanged series can skip expensive processing without relying on folder mtime skip behavior.
+- Content-file based "Last Modified" sorting and JumpBar dates, separate from DB entity update time.
+- Streaming `kavita.yaml`/`kavita.yml` metadata reads during scan passes, including large sidecar files, without loading unused cover payloads.
+- GDS page-count hints from sidecar metadata and filename page markers to avoid unnecessary archive opens during broad scans.
+- Stable GDS fingerprint matching for mixed-format series so unchanged mixed PDF/archive/text groups do not reprocess on every scan.
+- Korean part/volume parsing for series that intentionally contain separate part folders under the same normalized title.
+- Multi-arch GHCR images for `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+
+See [RELEASE_NOTES.md](RELEASE_NOTES.md), [docs/BUILD_NOTES_KO.md](docs/BUILD_NOTES_KO.md), and [docs/CHANGELOG_KO.md](docs/CHANGELOG_KO.md) for release details and validation notes.
 
 ## What Kavita Provides
 - Serve up Manga/Webtoons/Comics (cbr, cbz, zip/rar/rar5, 7zip, raw images) and Books (epub, pdf)
