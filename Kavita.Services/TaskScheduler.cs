@@ -423,8 +423,14 @@ public class TaskScheduler : ITaskScheduler
 
     public void ScanFolder(string folderPath, bool abortOnNoSeriesMatch = false)
     {
+        ScanFolder(folderPath, string.Empty, abortOnNoSeriesMatch);
+    }
+
+    public void ScanFolder(string folderPath, string originalPath, bool abortOnNoSeriesMatch)
+    {
         var normalizedFolder = Parser.NormalizePath(folderPath);
-        if (HasAlreadyEnqueuedTask(ScannerService.Name, "ScanFolder", [normalizedFolder, string.Empty]))
+        var normalizedOriginal = Parser.NormalizePath(originalPath);
+        if (HasAlreadyEnqueuedTask(ScannerService.Name, "ScanFolder", [normalizedFolder, normalizedOriginal]))
         {
             _logger.LogTrace("Skipped scheduling ScanFolder for {Folder} as a job already queued",
                 normalizedFolder);
@@ -432,7 +438,7 @@ public class TaskScheduler : ITaskScheduler
         }
 
         _logger.LogInformation("Scheduling ScanFolder for {Folder}", normalizedFolder);
-        _scannerService.ScanFolder(normalizedFolder, string.Empty, abortOnNoSeriesMatch);
+        _scannerService.ScanFolder(normalizedFolder, normalizedOriginal, abortOnNoSeriesMatch);
     }
 
     #endregion

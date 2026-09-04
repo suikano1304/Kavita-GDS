@@ -481,7 +481,8 @@ public class LibraryController(
 
         var seriesFolder = directoryService.FindHighestDirectoriesFromFiles(libraryFolder, [dto.FolderPath]);
 
-        taskScheduler.ScanFolder(seriesFolder.Keys.Count == 1 ? seriesFolder.Keys.First() : dto.FolderPath, dto.AbortOnNoSeriesMatch);
+        // Keep the requested path so shared parent folders can resolve to a single series.
+        taskScheduler.ScanFolder(seriesFolder.Keys.Count == 1 ? seriesFolder.Keys.First() : dto.FolderPath, dto.FolderPath, dto.AbortOnNoSeriesMatch);
 
         return Ok();
     }

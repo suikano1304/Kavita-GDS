@@ -12,6 +12,7 @@ public interface ITaskScheduler
     Task ScheduleKavitaPlusTasks(CancellationToken cancellationToken = default);
     void ScanFolder(string folderPath, string originalPath, TimeSpan delay);
     void ScanFolder(string folderPath, bool abortOnNoSeriesMatch = false);
+    void ScanFolder(string folderPath, string originalPath, bool abortOnNoSeriesMatch);
     Task ScanLibrary(int libraryId, bool force = false);
     Task ScanLibraries(bool force = false);
     void CleanupChapters(int[] chapterIds);
