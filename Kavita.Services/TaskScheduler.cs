@@ -423,10 +423,10 @@ public class TaskScheduler : ITaskScheduler
 
     public void ScanFolder(string folderPath, bool abortOnNoSeriesMatch = false)
     {
-        ScanFolder(folderPath, string.Empty, abortOnNoSeriesMatch);
+        _ = ScanFolder(folderPath, string.Empty, abortOnNoSeriesMatch);
     }
 
-    public void ScanFolder(string folderPath, string originalPath, bool abortOnNoSeriesMatch)
+    public async Task ScanFolder(string folderPath, string originalPath, bool abortOnNoSeriesMatch)
     {
         var normalizedFolder = Parser.NormalizePath(folderPath);
         var normalizedOriginal = Parser.NormalizePath(originalPath);
@@ -438,7 +438,7 @@ public class TaskScheduler : ITaskScheduler
         }
 
         _logger.LogInformation("Scheduling ScanFolder for {Folder}", normalizedFolder);
-        _scannerService.ScanFolder(normalizedFolder, normalizedOriginal, abortOnNoSeriesMatch);
+        await _scannerService.ScanFolder(normalizedFolder, normalizedOriginal, abortOnNoSeriesMatch);
     }
 
     #endregion

@@ -25,6 +25,8 @@ public class ScanFolderTests
     {
         GlobalConfiguration.Configuration.UseInMemoryStorage();
         var scanner = Substitute.For<IScannerService>();
+        var scheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        scanner.ScanFolder(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>()).Returns(scheduled.Task);
         var constructor = typeof(Scheduler).GetConstructors().Single();
         var dependencies = constructor.GetParameters().Select(p =>
             p.ParameterType == typeof(IScannerService) ? scanner : Substitute.For([p.ParameterType], [])).ToArray();
@@ -47,10 +49,13 @@ public class ScanFolderTests
             ControllerContext = new ControllerContext {HttpContext = new DefaultHttpContext()}
         };
 
-        Assert.IsType<OkResult>(await controller.ScanFolder(new ScanFolderDto
+        var response = controller.ScanFolder(new ScanFolderDto
         {
             ApiKey = "fixture-key", FolderPath = "/library/completed/category/series-a", AbortOnNoSeriesMatch = abort
-        }));
+        });
+        Assert.False(response.IsCompleted);
+        scheduled.SetResult();
+        Assert.IsType<OkResult>(await response);
         await scanner.Received(1).ScanFolder("/library/completed/category",
             "/library/completed/category/series-a", abort);
     }
