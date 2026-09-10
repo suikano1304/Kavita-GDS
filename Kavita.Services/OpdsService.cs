@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -1063,14 +1063,10 @@ public class OpdsService(
     private FeedEntry CreateChapterFeedEntry(SeriesDto series, VolumeDto? volume, ChapterDto chapter,
         LocalizedNamingContext namingContext, IOpdsRequest request)
     {
-        var fileSize = GetFileSize(chapter);
-
-        var file = chapter.Files.First();
-        // We know chapters can only contain files from the same format so this is fine
-        var fileType = downloadService.GetContentTypeFromFile(file.FilePath);
-        // This isn't really file, as it is wrong. But the filename isn't truly used by the api, see OpdsController.DownloadFile
-        // So it's good enough
-        var filename = Uri.EscapeDataString(Path.GetFileName(file.FilePath));
+        var download = OpdsDownloadDescriptor.Create(chapter.Id, chapter.Files);
+        var fileSize = download.Bytes is {} bytes ? DirectoryService.GetHumanReadableBytes(bytes) : "Size determined on download";
+        var fileType = download.IsCbz ? OpdsDownloadDescriptor.ComicBookMime : downloadService.GetContentTypeFromFile(download.Filename);
+        var filename = Uri.EscapeDataString(download.UrlFilename);
 
         var title = namingContext.BuildFullTitle(series, volume, chapter);
 
@@ -1078,8 +1074,8 @@ public class OpdsService(
             FeedLinkRelation.Acquisition,
             fileType,
             $"{request.Prefix}{request.ApiKey}/series/{series.Id}/volume/{chapter.VolumeId}/chapter/{chapter.Id}/download/{filename}",
-            filename);
-        accLink.TotalPages = chapter.Pages;
+            download.Filename);
+        accLink.TotalPages = download.Pages;
 
         var entry = new FeedEntry
         {
@@ -1087,14 +1083,14 @@ public class OpdsService(
             Title = title,
             Extent = fileSize,
             Summary = BuildSummary(fileType, fileSize, chapter.Summary),
-            Format = chapter.Format.ToString(),
+            Format = download.IsCbz ? "CBZ" : chapter.Files.OrderBy(f => f.Id).First().Format.ToString(),
             Links =
             [
+                accLink,
                 CreateLink(FeedLinkRelation.Image, FeedLinkType.Image,
                     $"{request.BaseUrl}api/image/chapter-cover?chapterId={chapter.Id}&apiKey={request.ApiKey}"),
                 CreateLink(FeedLinkRelation.Thumbnail, FeedLinkType.Image,
-                    $"{request.BaseUrl}api/image/chapter-cover?chapterId={chapter.Id}&apiKey={request.ApiKey}"),
-                accLink
+                    $"{request.BaseUrl}api/image/chapter-cover?chapterId={chapter.Id}&apiKey={request.ApiKey}")
             ],
             Content = new FeedEntryContent
             {
@@ -1118,21 +1114,6 @@ public class OpdsService(
         return entry;
     }
 
-    private string GetFileSize(ChapterDto chapter)
-    {
-        var totalSizeFilesWithBytes = chapter.Files
-            .Where(f => f.Bytes > 0)
-            .Sum(f => f.Bytes);
-
-        var totalSizeFilesWithOutBytes = directoryService.GetTotalSize(chapter.Files
-            .Where(f => f.Bytes == 0)
-            .Select(f => f.FilePath)
-        );
-
-        return DirectoryService.GetHumanReadableBytes(totalSizeFilesWithBytes + totalSizeFilesWithOutBytes);
-    }
-
-
     private static string BuildSummary(string fileType, string fileSize, string? chapterSummary)
     {
         var extension = fileType.Split('/') is [_, var ext] ? ext : fileType;
@@ -1145,14 +1126,10 @@ public class OpdsService(
 
     private FeedEntry CreateReadingListEntry(ReadingListItemDto item, ChapterDto chapter, IOpdsRequest request)
     {
-        var fileSize = GetFileSize(chapter);
-
-        var file = chapter.Files.First();
-        // We know chapters can only contain files from the same format so this is fine
-        var fileType = downloadService.GetContentTypeFromFile(file.FilePath);
-        // This isn't really file, as it is wrong. But the filename isn't truly used by the api, see OpdsController.DownloadFile
-        // So it's good enough
-        var filename = Uri.EscapeDataString(Path.GetFileName(file.FilePath));
+        var download = OpdsDownloadDescriptor.Create(chapter.Id, chapter.Files);
+        var fileSize = download.Bytes is {} bytes ? DirectoryService.GetHumanReadableBytes(bytes) : "Size determined on download";
+        var fileType = download.IsCbz ? OpdsDownloadDescriptor.ComicBookMime : downloadService.GetContentTypeFromFile(download.Filename);
+        var filename = Uri.EscapeDataString(download.UrlFilename);
 
         var title = namingService.FormatReadingListItemTitle(item);
         var displayTitle = $"{item.Order} - {item.SeriesName}: {title}";
@@ -1161,8 +1138,8 @@ public class OpdsService(
             FeedLinkRelation.Acquisition,
             fileType,
             $"{request.Prefix}{request.ApiKey}/series/{item.SeriesId}/volume/{item.VolumeId}/chapter/{item.ChapterId}/download/{filename}",
-            filename);
-        accLink.TotalPages = chapter.Pages;
+            download.Filename);
+        accLink.TotalPages = download.Pages;
 
         var entry = new FeedEntry
         {
@@ -1170,14 +1147,14 @@ public class OpdsService(
             Title = displayTitle,
             Extent = fileSize,
             Summary = BuildSummary(fileType, fileSize, chapter.Summary),
-            Format = chapter.Format.ToString(),
+            Format = download.IsCbz ? "CBZ" : chapter.Files.OrderBy(f => f.Id).First().Format.ToString(),
             Links =
             [
+                accLink,
                 CreateLink(FeedLinkRelation.Image, FeedLinkType.Image,
                     $"{request.BaseUrl}api/image/chapter-cover?chapterId={item.ChapterId}&apiKey={request.ApiKey}"),
                 CreateLink(FeedLinkRelation.Thumbnail, FeedLinkType.Image,
-                    $"{request.BaseUrl}api/image/chapter-cover?chapterId={item.ChapterId}&apiKey={request.ApiKey}"),
-                accLink
+                    $"{request.BaseUrl}api/image/chapter-cover?chapterId={item.ChapterId}&apiKey={request.ApiKey}")
             ],
             Content = new FeedEntryContent
             {

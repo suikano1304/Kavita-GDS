@@ -1,3 +1,5 @@
+import {AccountService} from './account.service';
+import {takeUntil} from 'rxjs/operators';
 import {computed, DestroyRef, effect, inject, Injectable, signal} from '@angular/core';
 import {firstValueFrom, Observable, Subject} from 'rxjs';
 import {bookColorThemes, PageStyle} from "../book-reader/_components/reader-settings/reader-settings.component";
@@ -41,6 +43,7 @@ export type BookReadingProfileFormGroup = FormGroup<{
 
 @Injectable()
 export class EpubReaderSettingsService {
+  private readonly accountService = inject(AccountService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly fontService = inject(FontService);
   private readonly themeService = inject(ThemeService);
@@ -124,6 +127,16 @@ export class EpubReaderSettingsService {
   }), debounceTime(10));
 
   constructor() {
+    this.accountService.sessionChanged$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => {
+      this._isInitialized.set(false);
+      this.isInitialized = false;
+      this._currentReadingProfile.set(null);
+      this._parentReadingProfile.set(null);
+      this._currentSeriesId.set(null);
+      this._currentLibraryId.set(null);
+      this._pageStyles.set(this.getDefaultPageStyles());
+      this.settingsForm?.disable({emitEvent: false});
+    });
     // Effect to update form when signals change (only when not updating from form)
     effect(() => {
       const profile = this._currentReadingProfile();
@@ -216,7 +229,9 @@ export class EpubReaderSettingsService {
    * Initialize the service with a reading profile and series ID
    */
   async initialize(libraryId: number, seriesId: number, readingProfile: ReadingProfile): Promise<void> {
+    const sessionVersion = this.accountService.sessionVersion;
     const fonts = await firstValueFrom(this.fontService.getFonts());
+    if (sessionVersion !== this.accountService.sessionVersion || this.destroyRef.destroyed) return;
     this._epubFonts.set([...new Map(fonts.map(font => [`${font.family}`, font])).values()]);
 
     this._currentSeriesId.set(seriesId);
@@ -227,6 +242,7 @@ export class EpubReaderSettingsService {
     if (readingProfile.kind === ReadingProfileKind.Implicit) {
       try {
         const parent = await firstValueFrom(this.readingProfileService.getForSeries(libraryId, seriesId, true));
+        if (sessionVersion !== this.accountService.sessionVersion || this.destroyRef.destroyed) return;
         this._parentReadingProfile.set(parent || null);
       } catch (error) {
         console.error('Failed to load parent reading profile:', error);
@@ -234,6 +250,8 @@ export class EpubReaderSettingsService {
     } else {
       this._parentReadingProfile.set(readingProfile);
     }
+
+    if (sessionVersion !== this.accountService.sessionVersion || this.destroyRef.destroyed) return;
 
     // Setup defaults and update signals
     this.setupDefaultsFromProfile(readingProfile);
@@ -412,6 +430,7 @@ export class EpubReaderSettingsService {
     }
 
     this.readingProfileService.updateParentProfile(libraryId, seriesId, this.packReadingProfile())
+      .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(newProfile => {
         this._currentReadingProfile.set(newProfile);
         this.toastr.success(translate('manga-reader.reading-profile-updated'));
@@ -590,6 +609,7 @@ export class EpubReaderSettingsService {
     // Update implicit profile on form changes (debounced) - ONLY source of profile updates
     this.settingsForm.valueChanges.pipe(
       debounceTime(500),
+      takeUntil(this.accountService.sessionChanged$),
       distinctUntilChanged(),
       takeUntilDestroyed(this.destroyRef),
       filter(() => !this.isUpdatingFromForm),
@@ -622,6 +642,7 @@ export class EpubReaderSettingsService {
     if (!this._currentReadingProfile() || !this._currentSeriesId()) return;
 
     this.readingProfileService.updateImplicit(this._currentLibraryId()!, this._currentSeriesId()!, this.packReadingProfile())
+      .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: newProfile => {
           this._currentReadingProfile.set(newProfile);

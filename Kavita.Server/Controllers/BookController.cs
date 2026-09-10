@@ -241,7 +241,10 @@ public class BookController(
     /// <returns></returns>
     [HttpGet("{chapterId}/book-page")]
     [ChapterAccess]
-    public async Task<ActionResult<string>> GetBookPage(int chapterId, [FromQuery] int page)
+    public Task<ActionResult<string>> GetBookPage(int chapterId, [FromQuery] int page)
+        => ReadBookPage(chapterId, page, retryEvictedCache: true);
+
+    private async Task<ActionResult<string>> ReadBookPage(int chapterId, int page, bool retryEvictedCache)
     {
         var chapter = await cacheService.Ensure(chapterId);
         if (chapter == null) return BadRequest(await localizationService.TranslateAsync(UserId, "chapter-doesnt-exist"));
@@ -261,6 +264,15 @@ public class BookController(
             var annotations = await unitOfWork.UserRepository.GetAnnotationsByPage(UserId, chapter.Id, page);
 
             return Ok(await bookService.GetBookPage(UserId, page, chapterId, path, baseUrl, ptocBookmarks, annotations));
+        }
+        catch (IOException ex) when (retryEvictedCache &&
+            ex is FileNotFoundException or DirectoryNotFoundException &&
+            !System.IO.File.Exists(path) &&
+            System.IO.File.Exists(ChapterFileSelector.GetBestReadingFile(chapter.Files)?.FilePath))
+        {
+            // A completed scan can purge the cache between Ensure and opening the EPUB/TXT.
+            // Re-extract once; never retry missing source files or persistent I/O failures.
+            return await ReadBookPage(chapterId, page, retryEvictedCache: false);
         }
         catch (KavitaException ex)
         {

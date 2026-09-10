@@ -97,7 +97,7 @@ const pageLevelStyles = ['margin-left', 'margin-right', 'font-size'];
 /**
  * Styles that should be applied on every element within book-content tag
  */
-const elementLevelStyles = ['line-height', 'font-family'];
+const elementLevelStyles = ['line-height'];
 
 /**
  * Minimum size to be assigned a bookmark
@@ -864,7 +864,11 @@ export class BookReaderComponent implements OnInit, AfterViewInit, OnDestroy {
 
   }
 
+  private readonly readerFontFaces = new Set<FontFace>();
+
   ngOnDestroy(): void {
+    for (const face of this.readerFontFaces) (this.document.fonts as any).delete(face);
+    this.readerFontFaces.clear();
     this.clearTimeout(this.clickToPaginateVisualOverlayTimeout);
     this.clearTimeout(this.clickToPaginateVisualOverlayTimeout2);
     this.clearTimeout(this.delayedScrollEventTimeout);
@@ -886,12 +890,15 @@ export class BookReaderComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   async ngOnInit() {
-    this.fontService.getFonts().subscribe(fonts => {
+    this.fontService.getFonts().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(fonts => {
       fonts.filter(f => f.name !== FontService.DefaultEpubFont).forEach(font => {
-        this.fontService.getFontFace(font, this.fontService.resolveCssFamily(font)).load().then(loadedFace => {
-          (this.document as any).fonts.add(loadedFace);
-        });
+        const face = this.fontService.getFontFace(font, this.fontService.resolveCssFamily(font));
+        this.readerFontFaces.add(face);
+        // Register before loading so applyPageStyles can await the face and preserve the reading anchor.
+        (this.document.fonts as any).add(face);
+        face.load().catch(() => { /* Missing glyphs/load failures use the browser fallback. */ });
       });
+      this.applyPageStyles(this.pageStyles());
     });
 
     const libraryId = this.route.snapshot.paramMap.get('libraryId');
@@ -2009,6 +2016,9 @@ export class BookReaderComponent implements OnInit, AfterViewInit, OnDestroy {
    * Applies styles onto the html of the book page.
    * Note: This has a critical role when margin changes and 2 column layout is in play
    */
+  private readonly originalFontStyles = new WeakMap<HTMLElement, {value: string, priority: string}>();
+  private fontLayoutRevision = 0;
+
   applyPageStyles(pageStyles: PageStyle) {
     const bookContentElemRef = this.bookContentElemRef();
     if (bookContentElemRef === undefined || !bookContentElemRef.nativeElement) return;
@@ -2042,6 +2052,40 @@ export class BookReaderComponent implements OnInit, AfterViewInit, OnDestroy {
     });
 
 
+
+    const fontFamily = pageStyles['font-family'];
+    const explicitFont = !!fontFamily && fontFamily !== 'inherit' && fontFamily.toLowerCase() !== 'default';
+    const content = bookContentElemRef.nativeElement;
+    for (const elem of Array.from(content.querySelectorAll<HTMLElement>('*'))) {
+      if (!(elem instanceof HTMLElement) || ['STYLE', 'SCRIPT', 'LINK'].includes(elem.tagName)) continue;
+      if (explicitFont) {
+        if (!this.originalFontStyles.has(elem)) {
+          this.originalFontStyles.set(elem, {
+            value: elem.style.getPropertyValue('font-family'),
+            priority: elem.style.getPropertyPriority('font-family')
+          });
+        }
+        elem.style.setProperty('font-family', fontFamily, 'important');
+      } else {
+        const original = this.originalFontStyles.get(elem);
+        if (original) {
+          if (original.value) elem.style.setProperty('font-family', original.value, original.priority);
+          else elem.style.removeProperty('font-family');
+          this.originalFontStyles.delete(elem);
+        }
+      }
+    }
+    const revision = ++this.fontLayoutRevision;
+    if (explicitFont && this.document.fonts && !this.document.fonts.check(`16px ${fontFamily}`)) {
+      this.document.fonts.load(`16px ${fontFamily}`).then(() => {
+        if (this.destroyRef.destroyed || revision !== this.fontLayoutRevision ||
+            this.bookContentElemRef()?.nativeElement !== content || !content.isConnected) return;
+        this.updateWidthAndHeightCalcs();
+        this.updateImageSizes();
+        this.addEmptyPageIfRequired();
+        if (resumeElement && !this.hasDelayedScroll) this.scrollTo(resumeElement);
+      }).catch(() => { /* Keep browser fallback if a font cannot load. */ });
+    }
 
     const individualElementStyles = Object.entries(pageStyles).filter(item => elementLevelStyles.includes(item[0]));
     for(let i = 0; i < bookContentElemRef.nativeElement.children.length; i++) {

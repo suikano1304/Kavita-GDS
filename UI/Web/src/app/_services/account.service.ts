@@ -1,6 +1,6 @@
 import {HttpClient, httpResource} from '@angular/common/http';
 import {computed, DestroyRef, inject, Injectable, signal} from '@angular/core';
-import {Observable, of} from 'rxjs';
+import {Observable, of, Subject} from 'rxjs';
 import {filter, map, switchMap, tap} from 'rxjs/operators';
 import {environment} from '../../environments/environment';
 import {Preferences} from '../_models/preferences/preferences';
@@ -57,6 +57,10 @@ export class AccountService {
   public static userKey = 'kavita-user';
   public static lastLoginKey = 'kavita-lastlogin';
   public static localeKey = 'kavita-locale';
+
+  private readonly sessionChanged = new Subject<void>();
+  readonly sessionChanged$ = this.sessionChanged.asObservable();
+  sessionVersion = 0;
 
   private readonly _currentUser = signal<User | undefined>(undefined);
   public readonly currentUser = this._currentUser.asReadonly();
@@ -266,6 +270,10 @@ export class AccountService {
       localStorage.setItem(AccountService.lastLoginKey, user.username);
     }
 
+    if (currentUser?.id !== user?.id) {
+      this.sessionVersion++;
+      this.sessionChanged.next();
+    }
     this._currentUser.set(user);
 
     if (!refreshConnections) return;
@@ -288,6 +296,8 @@ export class AccountService {
     if (!user) return;
 
     localStorage.removeItem(AccountService.userKey);
+    this.sessionVersion++;
+    this.sessionChanged.next();
     this._currentUser.set(undefined);
     this.stopRefreshTokenTimer();
     this.messageHub.stopHubConnection();

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.EntityFrameworkCore;
 using System.Threading.Tasks;
 using Kavita.API.Database;
 using Kavita.API.Services;
@@ -44,6 +45,8 @@ public class ReadingProfileController(ILogger<ReadingProfileController> logger, 
     public async Task<ActionResult<UserReadingProfileDto>> GetProfileForSeries(int libraryId, int seriesId, [FromQuery] bool skipImplicit, [FromQuery] int? deviceId = null)
     {
         deviceId ??= clientInfoAccessor.CurrentDeviceId;
+        if (deviceId != null && !await unitOfWork.DataContext.ClientDevice.AnyAsync(d => d.Id == deviceId && d.AppUserId == UserId))
+            return NotFound();
 
         return Ok(await readingProfileService.GetReadingProfileDtoForSeries(UserId, libraryId, seriesId, deviceId, skipImplicit));
     }
@@ -95,6 +98,8 @@ public class ReadingProfileController(ILogger<ReadingProfileController> logger, 
     public async Task<ActionResult<UserReadingProfileDto>> PromoteImplicitReadingProfile([FromQuery] int profileId, [FromQuery] int? deviceId = null)
     {
         deviceId ??= clientInfoAccessor.CurrentDeviceId;
+        if (deviceId != null && !await unitOfWork.DataContext.ClientDevice.AnyAsync(d => d.Id == deviceId && d.AppUserId == UserId))
+            return NotFound();
 
         return Ok(await readingProfileService.PromoteImplicitProfile(UserId, profileId, deviceId));
     }
@@ -115,6 +120,8 @@ public class ReadingProfileController(ILogger<ReadingProfileController> logger, 
         [FromBody] UserReadingProfileDto dto, [FromQuery] int libraryId, [FromQuery] int seriesId, [FromQuery] int? deviceId = null)
     {
         deviceId ??= clientInfoAccessor.CurrentDeviceId;
+        if (deviceId != null && !await unitOfWork.DataContext.ClientDevice.AnyAsync(d => d.Id == deviceId && d.AppUserId == UserId))
+            return NotFound();
 
         var updatedProfile = await readingProfileService.UpdateImplicitReadingProfile(UserId, libraryId, seriesId, dto, deviceId);
         return Ok(updatedProfile);
@@ -128,12 +135,16 @@ public class ReadingProfileController(ILogger<ReadingProfileController> logger, 
     /// <param name="seriesId"></param>
     /// <param name="deviceId">Defaults to currently active device</param>
     /// <returns></returns>
+    [SeriesAccess]
+    [LibraryAccess]
     [HttpPost("update-parent")]
     [DisallowRole(PolicyConstants.ReadOnlyRole)]
     public async Task<ActionResult<UserReadingProfileDto>> UpdateParentProfileForSeries(
         [FromBody] UserReadingProfileDto dto, [FromQuery] int libraryId, [FromQuery] int seriesId, [FromQuery] int? deviceId = null)
     {
         deviceId ??= clientInfoAccessor.CurrentDeviceId;
+        if (deviceId != null && !await unitOfWork.DataContext.ClientDevice.AnyAsync(d => d.Id == deviceId && d.AppUserId == UserId))
+            return NotFound();
 
         var newParentProfile = await readingProfileService.UpdateParent(UserId, libraryId, seriesId, dto, deviceId);
         return Ok(newParentProfile);
@@ -236,6 +247,10 @@ public class ReadingProfileController(ILogger<ReadingProfileController> logger, 
     [DisallowRole(PolicyConstants.ReadOnlyRole)]
     public async Task<IActionResult> BulkAddReadingProfile(BulkSetSeriesProfiles body)
     {
+        foreach (var seriesId in body.SeriesIds)
+        {
+            if (!await unitOfWork.UserRepository.HasAccessToSeries(UserId, seriesId)) return NotFound();
+        }
         await readingProfileService.BulkSetSeriesProfiles(UserId, body.ProfileIds, body.SeriesIds);
         return Ok();
     }

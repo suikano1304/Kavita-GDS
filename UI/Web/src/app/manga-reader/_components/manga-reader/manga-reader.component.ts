@@ -1,3 +1,4 @@
+import {takeUntil} from 'rxjs/operators';
 import {
   AfterViewInit,
   ChangeDetectionStrategy,
@@ -628,12 +629,13 @@ export class MangaReaderComponent implements OnInit, AfterViewInit, OnDestroy {
     // Update implicit reading profile while changing settings
     this.generalSettingsForm.valueChanges.pipe(
       debounceTime(300),
+      takeUntil(this.accountService.sessionChanged$),
       distinctUntilChanged(),
       takeUntilDestroyed(this.destroyRef),
       map(_ => this.packReadingProfile()),
       distinctUntilChanged(),
       tap(newProfile => {
-        this.readingProfileService.updateImplicit(this.libraryId, this.seriesId, newProfile).subscribe({
+        this.readingProfileService.updateImplicit(this.libraryId, this.seriesId, newProfile).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
           next: updatedProfile => {
             this.readingProfile = updatedProfile;
             this.cdRef.markForCheck();
@@ -798,6 +800,7 @@ export class MangaReaderComponent implements OnInit, AfterViewInit, OnDestroy {
         this.generalSettingsForm.get('pageSplitOption')?.setValue(this.readingProfile!.pageSplitOption);
         this.generalSettingsForm.get('pageSplitOption')?.enable();
         this.generalSettingsForm.get('widthSlider')?.enable();
+        this.generalSettingsForm.get('fittingOption')?.setValue(this.mangaReaderService.translateScalingOption(this.scalingOption), {emitEvent: false});
         this.generalSettingsForm.get('fittingOption')?.enable();
         this.generalSettingsForm.get('emulateBook')?.enable();
         this.generalSettingsForm.get('pageOffset')?.disable();
@@ -1994,10 +1997,19 @@ export class MangaReaderComponent implements OnInit, AfterViewInit, OnDestroy {
     return d;
   }
 
+  saveFittingSelection() {
+    switch (this.generalSettingsForm.get('fittingOption')?.value) {
+      case FITTING_OPTION.WIDTH: this.scalingOption = ScalingOption.FitToWidth; break;
+      case FITTING_OPTION.HEIGHT: this.scalingOption = ScalingOption.FitToHeight; break;
+      case FITTING_OPTION.ORIGINAL: this.scalingOption = ScalingOption.Original; break;
+    }
+  }
+
   private packReadingProfile(): ReadingProfile {
     const modelSettings = this.generalSettingsForm.getRawValue();
     const data = {...this.readingProfile!};
 
+    data.scalingOption = this.scalingOption;
     data.layoutMode = parseInt(modelSettings.layoutMode, 10);
     data.readerMode = this.readerMode;
     data.autoCloseMenu = this.autoCloseMenu();

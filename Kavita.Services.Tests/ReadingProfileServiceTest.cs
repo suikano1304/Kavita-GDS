@@ -31,6 +31,9 @@ public class ReadingProfileServiceTest(ITestOutputHelper outputHelper): Abstract
         context.AppUser.Add(user);
         await unitOfWork.CommitAsync();
 
+        for (var i = 1; i <= 3; i++)
+            context.ClientDevice.Add(new ClientDevice { Id = i, AppUserId = user.Id, DeviceFingerprint = $"fixture-{i}" });
+
         var series = new SeriesBuilder("Spice and Wolf").Build();
 
         var library = new LibraryBuilder("Manga")
@@ -50,6 +53,50 @@ public class ReadingProfileServiceTest(ITestOutputHelper outputHelper): Abstract
         user = await unitOfWork.UserRepository.GetUserByIdAsync(1, AppUserIncludes.UserPreferences);
 
         return (rps, user, library, series);
+    }
+
+    [Fact]
+    public async Task ForeignProfileAndDeviceRequestsDoNotMutateOwners()
+    {
+        var (uow, context, mapper) = await CreateDatabase();
+        var (service, user, library, series) = await Setup(uow, context, mapper);
+        var other = new AppUserBuilder("other", "other@localhost").Build();
+        context.AppUser.Add(other);
+        await uow.CommitAsync();
+        var foreign = new AppUserReadingProfileBuilder(other.Id).WithName("Foreign").Build();
+        context.AppUserReadingProfiles.Add(foreign);
+        context.ClientDevice.Add(new ClientDevice {Id = 42, AppUserId = other.Id, DeviceFingerprint = "foreign"});
+        await uow.CommitAsync();
+        var dto = mapper.Map<UserReadingProfileDto>(foreign);
+        dto.BookReaderFontFamily = "Changed";
+        await Assert.ThrowsAsync<KavitaNotFoundException>(() => service.UpdateReadingProfile(user.Id, dto));
+        await Assert.ThrowsAsync<KavitaNotFoundException>(() => service.UpdateImplicitReadingProfile(user.Id, library.Id, series.Id, dto, null));
+        await Assert.ThrowsAsync<KavitaNotFoundException>(() => service.UpdateParent(user.Id, library.Id, series.Id, dto, null));
+        await Assert.ThrowsAsync<KavitaNotFoundException>(() => service.DeleteReadingProfile(user.Id, foreign.Id));
+        await Assert.ThrowsAsync<KavitaNotFoundException>(() => service.SetSeriesProfiles(user.Id, [foreign.Id], series.Id));
+        await Assert.ThrowsAsync<KavitaNotFoundException>(() => service.SetLibraryProfiles(user.Id, [foreign.Id], library.Id));
+        await Assert.ThrowsAsync<KavitaNotFoundException>(() => service.SetProfileDevices(user.Id, foreign.Id, [1]));
+        var own = new AppUserReadingProfileBuilder(user.Id).WithName("Own").Build();
+        context.AppUserReadingProfiles.Add(own);
+        await uow.CommitAsync();
+        await Assert.ThrowsAsync<KavitaNotFoundException>(() => service.SetProfileDevices(user.Id, own.Id, [42]));
+        Assert.Empty(own.DeviceIds);
+        Assert.NotEqual("Changed", foreign.BookReaderFontFamily);
+        Assert.False(uow.HasChanges());
+    }
+
+    [Fact]
+    public async Task UpdateParentDoesNotDeleteDefaultWhenAlreadyUsingParent()
+    {
+        var (uow, context, mapper) = await CreateDatabase();
+        var (service, user, library, series) = await Setup(uow, context, mapper);
+        var dto = await service.GetReadingProfileDtoForSeries(user.Id, library.Id, series.Id, null);
+        dto.ScalingOption = ScalingOption.Original;
+        await service.UpdateParent(user.Id, library.Id, series.Id, dto, null);
+        context.ChangeTracker.Clear();
+        var saved = await service.GetReadingProfileForSeries(user.Id, library.Id, series.Id, null);
+        Assert.Equal(ReadingProfileKind.Default, saved.Kind);
+        Assert.Equal(ScalingOption.Original, saved.ScalingOption);
     }
 
     #region Pre-Device Tests - Must of course keep passing
@@ -1003,7 +1050,7 @@ public class ReadingProfileServiceTest(ITestOutputHelper outputHelper): Abstract
         await unitOfWork.CommitAsync();
 
         // Should throw when trying to promote another user's profile
-        await Assert.ThrowsAsync<KavitaException>(async () =>
+        await Assert.ThrowsAsync<KavitaNotFoundException>(async () =>
             await rps.PromoteImplicitProfile(user.Id, implicitProfile.Id, null));
     }
 
@@ -1470,7 +1517,7 @@ public class ReadingProfileServiceTest(ITestOutputHelper outputHelper): Abstract
         await unitOfWork.CommitAsync();
 
         // Should throw when trying to add series to another user's profile
-        await Assert.ThrowsAsync<KavitaException>(async () =>
+        await Assert.ThrowsAsync<KavitaNotFoundException>(async () =>
             await rps.SetSeriesProfiles(user.Id, [otherUserProfile.Id], series.Id));
     }
 
@@ -1996,7 +2043,7 @@ public class ReadingProfileServiceTest(ITestOutputHelper outputHelper): Abstract
         await unitOfWork.CommitAsync();
 
         // Should throw when trying to set devices on another user's profile
-        await Assert.ThrowsAsync<KavitaException>(async () =>
+        await Assert.ThrowsAsync<KavitaNotFoundException>(async () =>
             await rps.SetProfileDevices(user.Id, otherUserProfile.Id, [device1]));
     }
 

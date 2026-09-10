@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Threading;
+using Kavita.Models.DTOs;
 using System.IO.Compression;
 using System.Linq;
 using System.Threading.Tasks;
@@ -9,6 +11,8 @@ using Kavita.API.Errors;
 using Kavita.API.Services;
 using Kavita.API.Services.Reading;
 using Kavita.Common;
+using Kavita.Common.Extensions;
+using Kavita.Services.Scanner;
 using Kavita.Models.Constants;
 using Kavita.Models.DTOs.OPDS;
 using Kavita.Models.DTOs.OPDS.Requests;
@@ -34,6 +38,8 @@ public class OpdsController(
     IOpdsService opdsService)
     : BaseApiController
 {
+    private static readonly SemaphoreSlim[] DownloadLocks = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+
     private readonly XmlSerializer _xmlOpenSearchSerializer = new(typeof(OpenSearchDescription));
 
 
@@ -636,34 +642,68 @@ public class OpdsController(
     {
         var files = (await unitOfWork.ChapterRepository.GetFilesForChapterAsync(chapterId)).ToList();
 
-        if (files.Count <= 1)
+        if (files.Count == 0) return NotFound();
+        var download = OpdsDownloadDescriptor.Create(chapterId, files.Select(f => new MangaFileDto
         {
-            var (zipFile, contentType, fileDownloadName) = downloadService.GetFirstFileDownload(files);
-            return PhysicalFile(zipFile, contentType, fileDownloadName, true);
+            Id = f.Id, FilePath = f.FilePath, Format = f.Format, Pages = f.Pages, Bytes = f.Bytes
+        }));
+        if (!download.BuildCbz)
+        {
+            var (path, contentType, _) = downloadService.GetFirstFileDownload(files.OrderBy(f => f.Id));
+            return PhysicalFile(path, download.IsCbz ? OpdsDownloadDescriptor.ComicBookMime : contentType, download.Filename, true);
         }
 
-        // Multi-file chapter: produce a single flat .cbz by reusing the
-        // page-streaming cache, which already extracts and orders pages
-        // across all the chapter's files. Otherwise, OPDS clients only
-        // receive the first file of the chapter.
-        var chapter = await cacheService.Ensure(chapterId);
-        if (chapter == null)
+        // Serialize cache extraction and packaging. Never expose a partially written ZIP to another request.
+        var gate = DownloadLocks[(int)((uint)chapterId % DownloadLocks.Length)];
+        await gate.WaitAsync(HttpContext.RequestAborted);
+        var outputPath = Path.Join(directoryService.TempDirectory, $"kavita_opds_{chapterId}_{Guid.NewGuid():N}.cbz");
+        try
         {
-            return BadRequest(await localizationService.TranslateAsync(UserId, "cache-file-find"));
+            Directory.CreateDirectory(directoryService.TempDirectory);
+            using (var archive = ZipFile.Open(outputPath, ZipArchiveMode.Create))
+            {
+                var pageNumber = 0;
+                foreach (var source in files.OrderByNatural(f => f.FilePath))
+                {
+                    // Extract each source independently so duplicate page basenames cannot overwrite another file.
+                    var extractPath = outputPath + ".pages";
+                    try
+                    {
+                        HttpContext.RequestAborted.ThrowIfCancellationRequested();
+                        await cacheService.ExtractChapterFiles(extractPath, [source]);
+                        var pages = directoryService.GetFilesWithExtension(extractPath, Parser.ImageFileExtensions)
+                            .OrderByNatural(Path.GetFileNameWithoutExtension).ToList();
+                        if (pages.Count == 0) throw new IOException("OPDS source contains no readable images");
+                        foreach (var page in pages)
+                        {
+                            HttpContext.RequestAborted.ThrowIfCancellationRequested();
+                            var entry = archive.CreateEntry($"{++pageNumber:D8}{Path.GetExtension(page)}", CompressionLevel.NoCompression);
+                            entry.LastWriteTime = new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+                            await using var input = System.IO.File.OpenRead(page);
+                            await using var output = entry.Open();
+                            await input.CopyToAsync(output, HttpContext.RequestAborted);
+                        }
+                    }
+                    finally
+                    {
+                        if (Directory.Exists(extractPath)) Directory.Delete(extractPath, true);
+                    }
+                }
+            }
+            // DeleteOnClose ties cleanup to response disposal, including disconnected clients and Range requests.
+            var stream = new FileStream(outputPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
+                65536, FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+            return File(stream, OpdsDownloadDescriptor.ComicBookMime, download.Filename, true);
         }
-
-        var series = await unitOfWork.SeriesRepository.GetSeriesByIdAsync(seriesId);
-        var downloadName = $"{series!.Name} - Chapter {chapter.GetNumberTitle()}.cbz";
-        var dateStr = DateTime.UtcNow.ToShortDateString().Replace("/", "_");
-        var outputPath = Path.Join(directoryService.TempDirectory, $"kavita_opds_merged_c{chapterId}_{dateStr}.cbz");
-
-        if (!System.IO.File.Exists(outputPath))
+        catch
         {
-            var cacheDir = cacheService.GetCachePath(chapterId);
-            await ZipFile.CreateFromDirectoryAsync(cacheDir, outputPath);
+            System.IO.File.Delete(outputPath);
+            throw;
         }
-
-        return PhysicalFile(outputPath, "application/x-cbz", downloadName, true);
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private static ContentResult CreateXmlResult(string xml)
@@ -710,7 +750,7 @@ public class OpdsController(
             // Save progress for the user (except Panels, they will use a direct connection)
             var userAgent = Request.Headers.UserAgent.ToString();
 
-            if (!userAgent.StartsWith("Panels", StringComparison.InvariantCultureIgnoreCase) || !saveProgress)
+            if (!userAgent.StartsWith("Panels", StringComparison.InvariantCultureIgnoreCase) && saveProgress)
             {
                 // Kavita expects 0-N for progress, KOReader doesn't respect the OPDS-PS spec and does some wierd stuff
                 // https://github.com/Kareadita/Kavita/pull/4014#issuecomment-3313677492

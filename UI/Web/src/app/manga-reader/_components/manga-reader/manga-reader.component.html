@@ -202,7 +202,7 @@
 
                 <div class="col-md-6 col-sm-12">
                   <label for="page-fitting" class="form-label">{{t('image-scaling-label')}}</label>&nbsp;<i class="{{FittingOption | fittingIcon}}" aria-hidden="true"></i>
-                  <select class="form-control" id="page-fitting" formControlName="fittingOption">
+                  <select class="form-control" id="page-fitting" formControlName="fittingOption" (change)="saveFittingSelection()">
                     <option value="full-height">{{t('height')}}</option>
                     <option value="full-width">{{t('width')}}</option>
                     <option value="original">{{t('original')}}</option>
