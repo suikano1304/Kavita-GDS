@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using Microsoft.EntityFrameworkCore;
 using System.Threading.Tasks;
 using Kavita.API.Database;
 using Kavita.API.Services;
@@ -46,6 +47,8 @@ public class ReadingProfileController(ILogger<ReadingProfileController> logger, 
     {
         var ct = HttpContext.RequestAborted;
         deviceId ??= clientInfoAccessor.CurrentDeviceId;
+        if (deviceId != null && !await unitOfWork.DataContext.ClientDevice.AnyAsync(d => d.Id == deviceId && d.AppUserId == UserId))
+            return NotFound();
 
         return Ok(await readingProfileService.GetReadingProfileDtoForSeries(UserId, libraryId, seriesId, deviceId, skipImplicit, ct));
     }
@@ -101,6 +104,8 @@ public class ReadingProfileController(ILogger<ReadingProfileController> logger, 
     {
         var ct = HttpContext.RequestAborted;
         deviceId ??= clientInfoAccessor.CurrentDeviceId;
+        if (deviceId != null && !await unitOfWork.DataContext.ClientDevice.AnyAsync(d => d.Id == deviceId && d.AppUserId == UserId))
+            return NotFound();
 
         return Ok(await readingProfileService.PromoteImplicitProfile(UserId, profileId, deviceId, ct));
     }
@@ -122,6 +127,8 @@ public class ReadingProfileController(ILogger<ReadingProfileController> logger, 
     {
         var ct = HttpContext.RequestAborted;
         deviceId ??= clientInfoAccessor.CurrentDeviceId;
+        if (deviceId != null && !await unitOfWork.DataContext.ClientDevice.AnyAsync(d => d.Id == deviceId && d.AppUserId == UserId))
+            return NotFound();
 
         var updatedProfile = await readingProfileService.UpdateImplicitReadingProfile(UserId, libraryId, seriesId, dto, deviceId, ct);
         return Ok(updatedProfile);
@@ -143,6 +150,8 @@ public class ReadingProfileController(ILogger<ReadingProfileController> logger, 
     {
         var ct = HttpContext.RequestAborted;
         deviceId ??= clientInfoAccessor.CurrentDeviceId;
+        if (deviceId != null && !await unitOfWork.DataContext.ClientDevice.AnyAsync(d => d.Id == deviceId && d.AppUserId == UserId))
+            return NotFound();
 
         var newParentProfile = await readingProfileService.UpdateParent(UserId, libraryId, seriesId, dto, deviceId, ct);
         return Ok(newParentProfile);

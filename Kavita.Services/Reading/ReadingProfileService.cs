@@ -43,11 +43,19 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
 
         var parentProfile = await GetReadingProfileForSeries(userId, libraryId, seriesId, activeDeviceId, true, ct);
 
+        // Only remove this series/device's implicit override. Never delete a named/default parent.
+        if (profile.Kind == ReadingProfileKind.Implicit)
+        {
+            if (!profile.SeriesIds.Contains(seriesId) ||
+                (profile.DeviceIds.Count > 0 && (activeDeviceId == null || !profile.DeviceIds.Contains(activeDeviceId.Value))))
+                throw new KavitaNotFoundException("profile-does-not-exist");
+            unitOfWork.AppUserReadingProfileRepository.Remove(profile);
+        }
+
+
         UpdateReaderProfileFields(parentProfile, dto, false);
         unitOfWork.AppUserReadingProfileRepository.Update(parentProfile);
 
-        // Delete profile as we'll be using the parent now
-        unitOfWork.AppUserReadingProfileRepository.Remove(profile);
 
         await unitOfWork.CommitAsync(ct);
         return mapper.Map<UserReadingProfileDto>(parentProfile);
@@ -92,7 +100,7 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
         var allUserProfiles = await unitOfWork.AppUserReadingProfileRepository.GetProfilesForUser(userId, ct: ct);
         var profileToPromote = allUserProfiles.FirstOrDefault(rp => rp.Id == profileId);
 
-        if (profileToPromote == null) throw new KavitaException("profile-does-not-exist");
+        if (profileToPromote == null) throw new KavitaNotFoundException("profile-does-not-exist");
         if (profileToPromote.Kind != ReadingProfileKind.Implicit) throw new KavitaException("profile-not-implicit");
 
         var seriesId = profileToPromote.SeriesIds[0]; // An Implicit series can only be bound to 1 Series
@@ -142,6 +150,9 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
     {
         var user = await unitOfWork.UserRepository.GetUserByIdAsync(userId, AppUserIncludes.UserPreferences, ct);
         if (user == null) throw new UnauthorizedAccessException();
+
+        if (dto.Id > 0 && await unitOfWork.AppUserReadingProfileRepository.GetUserProfile(userId, dto.Id) == null)
+            throw new KavitaNotFoundException("profile-does-not-exist");
 
         var existingProfile = await unitOfWork.AppUserReadingProfileRepository
             .GetProfileForSeries(userId, libraryId, seriesId, activeDeviceId, ct: ct);
@@ -195,7 +206,7 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
         var selectedProfiles = profiles
             .Where(rp => profileIds.Contains(rp.Id))
             .ToList();
-        if (selectedProfiles.Count != profileIds.Count) throw new KavitaException("profile-doesnt-exist");
+        if (selectedProfiles.Count != profileIds.Count) throw new KavitaNotFoundException("profile-doesnt-exist");
 
         if (selectedProfiles.Any(p => p.Kind == ReadingProfileKind.Default))
             throw new KavitaException("cannot-bind-default-profile");
@@ -223,7 +234,7 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
         var selectedProfiles = profiles
             .Where(rp => profileIds.Contains(rp.Id))
             .ToList();
-        if (selectedProfiles.Count != profileIds.Count) throw new KavitaException("profile-doesnt-exist");
+        if (selectedProfiles.Count != profileIds.Count) throw new KavitaNotFoundException("profile-doesnt-exist");
 
         if (selectedProfiles.Any(p => p.Kind == ReadingProfileKind.Default))
             throw new KavitaException("cannot-bind-default-profile");
@@ -259,7 +270,7 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
         var selectedProfiles = profiles
             .Where(rp => profileIds.Contains(rp.Id))
             .ToList();
-        if (selectedProfiles.Count != profileIds.Count) throw new KavitaException("profile-doesnt-exist");
+        if (selectedProfiles.Count != profileIds.Count) throw new KavitaNotFoundException("profile-doesnt-exist");
 
         if (selectedProfiles.Any(p => p.Kind == ReadingProfileKind.Default))
             throw new KavitaException("cannot-bind-default-profile");
@@ -322,8 +333,9 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
 
         if (profile.Kind == ReadingProfileKind.Default) throw new KavitaException("cant-assign-devices-to-default");
 
-        profile.DeviceIds = deviceIds;
-        unitOfWork.AppUserReadingProfileRepository.Update(profile);
+        var requestedDevices = deviceIds.Distinct().ToList();
+        if (await unitOfWork.DataContext.ClientDevice.CountAsync(d => d.AppUserId == userId && requestedDevices.Contains(d.Id)) != requestedDevices.Count)
+            throw new KavitaNotFoundException("profile-doesnt-exist");
 
         await unitOfWork.CommitAsync(ct);
 

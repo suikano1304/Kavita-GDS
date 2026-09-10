@@ -163,7 +163,9 @@ export class EpubReaderSettingsService {
    * Initialize the service with a reading profile and series ID
    */
   async initialize(libraryId: number, seriesId: number, readingProfile: ReadingProfile): Promise<void> {
+    const sessionVersion = this.accountService.sessionVersion;
     const fonts = await firstValueFrom(this.fontService.getFonts());
+    if (sessionVersion !== this.accountService.sessionVersion || this.destroyRef.destroyed) return;
     this._epubFonts.set([...new Map(fonts.map(font => [`${font.family}`, font])).values()]);
 
     this._currentSeriesId.set(seriesId);
@@ -174,6 +176,7 @@ export class EpubReaderSettingsService {
     if (readingProfile.kind === ReadingProfileKind.Implicit) {
       try {
         const parent = await firstValueFrom(this.readingProfileService.getForSeries(libraryId, seriesId, true));
+        if (sessionVersion !== this.accountService.sessionVersion || this.destroyRef.destroyed) return;
         this._parentReadingProfile.set(parent || null);
       } catch (error) {
         console.error('Failed to load parent reading profile:', error);
@@ -181,6 +184,8 @@ export class EpubReaderSettingsService {
     } else {
       this._parentReadingProfile.set(readingProfile);
     }
+
+    if (sessionVersion !== this.accountService.sessionVersion || this.destroyRef.destroyed) return;
 
     // Setup defaults and update signals
     this.correctInvalidReadingProfileOptions(readingProfile);
@@ -336,6 +341,7 @@ export class EpubReaderSettingsService {
     }
 
     this.readingProfileService.updateParentProfile(libraryId, seriesId, this.packReadingProfile())
+      .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(newProfile => {
         this._currentReadingProfile.set(newProfile);
         this.toastr.success(translate('manga-reader.reading-profile-updated'));
@@ -405,6 +411,7 @@ export class EpubReaderSettingsService {
     if (!this._currentReadingProfile() || !this._currentSeriesId()) return;
 
     this.readingProfileService.updateImplicit(this._currentLibraryId()!, this._currentSeriesId()!, this.packReadingProfile())
+      .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: newProfile => {
           this._currentReadingProfile.set(newProfile);
