@@ -2,18 +2,20 @@
 
 Google Drive/rclone 같은 원격 저장소에 큰 만화/책 라이브러리를 두고 쓰는 환경을 위한 Kavita 비공식 Docker 빌드입니다. official Kavita `0.9.1.4`를 기반으로 GDS 스캔, 표지, 페이지 수, reader/cache, 검색, 정렬 문제를 보정했습니다.
 
-현재 릴리즈: `0.9.1.4-2`
+현재 릴리즈: `0.9.1.4-3`
+
+이번 버전은 OPDS 다운로드·진행률, 사용자별 읽기 프로필, EPUB 폰트 적용을 수정합니다. 검증 범위와 외부 앱 회전 제한은 [릴리스 노트](RELEASE_NOTES.md)를 확인하세요.
 
 ## 빠른 시작
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:0.9.1.4-2
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.1.4-3
 ```
 
 ```yaml
 services:
   kavita:
-    image: ghcr.io/suikano1304/kavita-gds:0.9.1.4-2
+    image: ghcr.io/suikano1304/kavita-gds:0.9.1.4-3
     container_name: kavita
     restart: always
     ports:
@@ -73,7 +75,7 @@ OPDS: upstream #4759에서 정식 해결되어(단일엔트리+병합cbz) GDS �
 운영에서는 고정 버전 태그를 권장합니다.
 
 ```text
-ghcr.io/suikano1304/kavita-gds:0.9.1.4-2
+ghcr.io/suikano1304/kavita-gds:0.9.1.4-3
 ```
 
 지원 플랫폼: `linux/amd64`, `linux/arm64`, `linux/arm/v7`
