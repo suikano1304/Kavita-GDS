@@ -1,23 +1,26 @@
-# Kavita-GDS 0.9.1.4-2
+# Kavita-GDS 0.9.1.4-3
 
-`scan-folder` API가 요청한 작품 경로를 잃어 전체 라이브러리를 스캔하던 문제를 수정했습니다.
+OPDS 다운로드, 사용자별 읽기 프로필, EPUB 폰트 적용을 수정했습니다. 공식 Kavita `0.9.1.4` 기반이며 기존 GDS 수정 사항을 포함합니다.
 
-- 상위 폴더를 공유하는 작품도 원래 요청 경로로 찾아 해당 작품만 스캔합니다.
-- API 응답 전에 작품 조회와 스캔 예약을 완료합니다.
-- `AbortOnNoSeriesMatch` 옵션과 기존 폴더 감시 동작을 유지합니다.
-- 공식 Kavita `0.9.1.4` 기반이며, `0.9.1.4-1`의 시리즈 설명 줄바꿈 수정도 포함합니다. 기존 UI 번들을 재사용했습니다.
+- OPDS: 실제 다운로드 형식에 맞는 MIME·파일명·페이지 수를 제공합니다. 본문 acquisition 링크를 먼저 배치하고, 만화는 `.zip` URL 별칭으로 내려받되 `.cbz`로 저장합니다. 합본은 원본별 전체 이미지와 자연정렬을 유지하며, 알 수 없는 합본 크기를 원본 크기로 표시하지 않습니다.
+- 진행률: Panels 요청 또는 `saveProgress=false` 요청에서 진행률을 저장하지 않습니다.
+- 프로필: 너비·높이·원본 맞춤의 자동/상위 저장, 기존 Automatic 보존, 사용자·기기 소유권 검사와 계정 전환 시 지연 저장 취소를 보강했습니다. 기존 프로필 데이터와 공개 DTO/DB 구조를 유지합니다.
+- 폰트: 선택 폰트를 EPUB 중첩 요소에도 적용하고, 기본값 선택 시 원래 선언과 우선순위를 복원합니다. 챕터 이동·재열기·폰트 로딩 후 적용과 읽기 위치 보존을 검증했습니다. Kavita 웹 리더에 적용되는 변경입니다.
+- 읽기 안정성: 스캔 완료와 겹쳐 EPUB/TXT 캐시가 사라지는 경우 본문 읽기를 한 번 재시도합니다.
 
-검증: 서비스 2,618개, DB 75개, 서버 87개 테스트 통과(기존 서비스 테스트 6개 제외). 실제 HTTP 폴더 스캔과 리더 API, 운영 DB 복사본의 기동·데이터 보존을 확인했습니다. amd64·arm64·armv7 모두 기존 합성 GDS DB로 기동 및 health 검증을 통과했습니다. ARM 실행은 QEMU 검증입니다.
+검증: 서버 테스트102개, 서비스 회귀 및 실제 웹 화면→API→DB→재열기 검증, 내부/HTTPS 다운로드·Range·동시 합본 검사를 통과했습니다. amd64·arm64·armv7의 기동·SQLite·핵심 읽기와 기존 DB 재기동을 확인했습니다. ARM은 에뮬레이션 검증입니다. 운영 적용 후 기존 프로필·설정·진행률 보존과 웹 리더·OPDS를 확인했습니다.
+
+알려진 제한: Android16/MoonReader의 TXT 두 장 보기에서 회전 후 화면 잘림과 위치 변경이 재현됩니다. 한 장 보기로 바꾸면 잘림과 본문 중간 위치 문제를 피할 수 있었지만 책 끝의 진행률 재계산은 남습니다. 서버를 끈 로컬 파일에서도 재현되는 외부 앱 동작이며, 이 릴리스가 해결한다고 주장하지 않습니다. 전체 MoonReader/KOReader 단말 조합 검증은 완료되지 않았습니다.
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:0.9.1.4-2
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.1.4-3
 ```
 
-GHCR 버전 태그와 `latest`는 같은 멀티아키텍처 이미지를 가리킵니다. 배포 전 config/DB를 백업하세요.
+버전 태그와 `latest`는 같은 멀티아키텍처 이미지를 제공합니다. 업데이트 전 config/DB를 백업하세요. 문제 발생 시 이전 `0.9.1.4-2` 이미지로 되돌릴 수 있으며 DB 복원은 필요한 경우에만 수행하세요.
 
-- Multi-arch: `sha256:3fdb4bcc997d1d6bdfd6ae96a3f922d46242bddf4ece1956b4994f4f161eedbb`
-- `linux/amd64`: `sha256:f8c4db61f7d4649ba5f63e45caf0b2cf270cd0dbfef7d2cb810e5e4e8afe5851`
-- `linux/arm64`: `sha256:ba3dd94b2907e31fb486650d5cb5fa107777af147aa328dc2321d88ad07c90c5`
-- `linux/arm/v7`: `sha256:d579da0adf68308011173cb2378329575b8d0fbc0e56836caf92b3e93b42386b`
+- Multi-arch: `sha256:acc15baf95f79eefa8b98d5b35c69fa2847a74f71578cc2e520e052b8f50d540`
+- `linux/amd64`: `sha256:4d6e9cd045c4a99deeff46f3cfd5482d4d00233742413ed2fd9b8fc9e3d297c8`
+- `linux/arm64`: `sha256:6f759420cd9c9c0dbaf132ebd6d5bae7edc1626f14e1e673db8cc96f2f561074`
+- `linux/arm/v7`: `sha256:3050c5f620cf7c4b6df66023446261f46de1c22e0edca22e36d492380ef70e06`
 
-빌드 소스: [e28c60571](https://github.com/suikano1304/Kavita-GDS/commit/e28c6057189ec359cd3ce738066334306eae8260). GHCR가 기본 배포물이며 별도 오프라인 이미지 파일은 첨부하지 않습니다.
+빌드 소스: [d4263af41](https://github.com/suikano1304/Kavita-GDS/commit/d4263af41ad908313d3ac5f865a981e000d91dc1). GHCR가 기본 배포물이며 별도 오프라인 이미지 파일은 첨부하지 않습니다.
