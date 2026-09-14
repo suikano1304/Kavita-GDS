@@ -33,6 +33,8 @@ public static class ApplicationServiceExtensions
         services.AddScoped<IStatsService, StatsService>();
         services.AddScoped<ITaskScheduler, TaskScheduler>();
         services.AddScoped<ICacheService, CacheService>();
+        services.AddSingleton<OpdsPrefetchService>();
+        services.AddHostedService(sp => sp.GetRequiredService<OpdsPrefetchService>());
         services.AddScoped<IArchiveService, ArchiveService>();
         services.AddScoped<IBackupService, BackupService>();
         services.AddScoped<ICleanupService, CleanupService>();

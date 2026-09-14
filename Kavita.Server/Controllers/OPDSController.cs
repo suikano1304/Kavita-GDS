@@ -35,7 +35,8 @@ public class OpdsController(
     ICacheService cacheService,
     IReaderService readerService,
     ILocalizationService localizationService,
-    IOpdsService opdsService)
+    IOpdsService opdsService,
+    OpdsPrefetchService prefetchService)
     : BaseApiController
 {
     private static readonly SemaphoreSlim[] DownloadLocks = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
@@ -774,6 +775,11 @@ public class OpdsController(
                 }, userId);
             }
 
+            Response.OnCompleted(() =>
+            {
+                prefetchService.TryQueue(userId, chapterId);
+                return Task.CompletedTask;
+            });
             return CachedContent(content, MimeTypeMap.GetMimeType(format));
         }
         catch (Exception)

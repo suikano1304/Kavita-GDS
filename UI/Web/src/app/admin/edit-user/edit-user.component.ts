@@ -9,7 +9,7 @@ import {
   OnInit,
   signal
 } from '@angular/core';
-import {FormControl, FormGroup, ReactiveFormsModule, Validators} from '@angular/forms';
+import {FormControl, FormGroup, ReactiveFormsModule, ValidatorFn, Validators} from '@angular/forms';
 import {NgbActiveModal} from '@ng-bootstrap/ng-bootstrap';
 import {SentenceCasePipe} from '../../_pipes/sentence-case.pipe';
 import {RestrictionSelectorComponent} from '../../user-settings/restriction-selector/restriction-selector.component';
@@ -88,7 +88,12 @@ export class EditUserComponent implements OnInit {
   ngOnInit(): void {
     this.libraryService.getLibraries().subscribe(libraries => this.libraries.set(libraries));
 
-    this.userForm.addControl('email', new FormControl(this.member().email, [Validators.required, Validators.pattern(EmailRegex)]));
+    // Legacy accounts may have no valid email. Validate only an actual email change,
+    // so role/library edits preserve existing account data without being blocked.
+    const originalEmail = this.member().email;
+    const validateEmail = Validators.compose([Validators.required, Validators.pattern(EmailRegex)])!;
+    const emailValidator: ValidatorFn = control => control.value === originalEmail ? null : validateEmail(control);
+    this.userForm.addControl('email', new FormControl(originalEmail, [emailValidator]));
     this.userForm.addControl('username', new FormControl(this.member().username, [Validators.required, Validators.pattern(AllowedUsernameCharacters)]));
     this.userForm.addControl('identityProvider', new FormControl(this.member().identityProvider, [Validators.required]));
     this.userForm.addControl('roles', new FormControl(this.member().roles));
@@ -127,6 +132,8 @@ export class EditUserComponent implements OnInit {
   }
 
   save() {
+    if (this.isLocked() || this.isSaving || !this.userForm.valid) return;
+    this.isSaving = true;
     const model = this.userForm.getRawValue();
     model.userId = this.member().id;
     model.ageRestriction = this.selectedRestriction;
@@ -138,6 +145,8 @@ export class EditUserComponent implements OnInit {
         this.modal.close(true);
       },
       error: err => {
+        this.isSaving = false;
+        this.cdRef.markForCheck();
         console.error(err);
       }
     });

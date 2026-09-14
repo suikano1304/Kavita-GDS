@@ -1,4 +1,4 @@
-import {ChangeDetectionStrategy, Component, effect, inject, signal} from '@angular/core';
+import {ChangeDetectionStrategy, Component, computed, effect, inject, signal} from '@angular/core';
 import {ToastrService} from '@openng/ngx-toastr';
 import {AgeRatingPipe} from '../../_pipes/age-rating.pipe';
 import {RestrictionSelectorComponent} from '../restriction-selector/restriction-selector.component';
@@ -26,7 +26,7 @@ export class ChangeAgeRestrictionComponent {
   selectedRestriction!: AgeRestriction;
   originalRestriction!: AgeRestriction;
   resetValue = signal<AgeRestriction | undefined>(undefined);
-  canEdit = this.accountService.hasChangeAgeRestrictionRole;
+  canEdit = computed(() => !this.accountService.hasReadOnlyRole() && this.accountService.hasChangeAgeRestrictionRole());
 
   constructor() {
     effect(() => {
