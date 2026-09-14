@@ -44,7 +44,8 @@ echo
 
 echo "== Public-doc privacy scan =="
 private_patterns=(
-  "$(printf '%s' '/mnt/')gds"
+  # The documented container root and explicit placeholder are public examples.
+  "$(printf '%s' '/mnt/')gds(?!(?:/READING_ROOT)?(?:[[:space:]:\\x60\\x22\\x27]|$))"
   "$(printf '%s' '/mnt/')gds2"
   "GDRIVE$(printf '%s' '/')READING"
   "library$(printf '%s' 'Id=')"
@@ -55,7 +56,7 @@ private_pattern="$(IFS='|'; echo "${private_patterns[*]}")"
 doc_files="$(mktemp /tmp/gds-doc-files.XXXXXX)"
 trap 'rm -f "${doc_files}"' EXIT
 if touched_files | rg -i '(^docs/|README|CHANGELOG|RELEASE|BUILD|USAGE)' >"${doc_files}"; then
-  if xargs -r rg -n "${private_pattern}" < "${doc_files}"; then
+  if xargs -r rg --pcre2 -n "${private_pattern}" < "${doc_files}"; then
     echo "privacy_scan=FAIL"
     exit 1
   fi
