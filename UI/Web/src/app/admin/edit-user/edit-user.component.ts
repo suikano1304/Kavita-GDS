@@ -145,6 +145,8 @@ export class EditUserComponent implements OnInit {
         this.modal.close(true);
       },
       error: err => {
+        this.isSaving = false;
+        this.cdRef.markForCheck();
         console.error(err);
       }
     });

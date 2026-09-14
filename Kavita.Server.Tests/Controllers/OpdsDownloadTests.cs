@@ -122,7 +122,8 @@ public class OpdsDownloadTests
         userContext.GetUserIdOrThrow().Returns(7);
         var services = new ServiceCollection().AddSingleton(userContext).BuildServiceProvider();
         return new OpdsController(uow, new DownloadService(), directory, cache, reader,
-            Substitute.For<ILocalizationService>(), Substitute.For<IOpdsService>())
+            Substitute.For<ILocalizationService>(), Substitute.For<IOpdsService>(),
+            new OpdsPrefetchService(services.GetRequiredService<IServiceScopeFactory>(), Substitute.For<ILogger<OpdsPrefetchService>>()))
         {
             ControllerContext = new ControllerContext {HttpContext = new DefaultHttpContext
             {
