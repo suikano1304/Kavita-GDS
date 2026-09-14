@@ -216,3 +216,9 @@ PASS 기준:
 - Prefetch alone must not create reading progress or modify reading profiles. Explicit page requests retain the documented Panels/saveProgress behavior.
 - Administrator user edits must allow role/library updates with unchanged legacy blank or malformed email, reject newly entered invalid email, and recover the save button after API failure.
 - Non-administrator settings must match server permissions: Read Only blocks language/profile/age edits; permitted accounts retain settings after re-login, and existing OPDS keys continue to work after role changes. Confirm foreign profile/device IDs are denied without DB mutation.
+
+## OPDS progress and continuation regression
+
+- Reopening a completed streamed chapter must preserve its saved completion and modification time when neighbouring image requests arrive backwards or concurrently. Image retrieval must not create reading-session activity; Panels and `saveProgress=false` remain excluded from progress writes.
+- Web and OPDS continuation must follow the furthest chapter with progress. Earlier incomplete chapters or newer manual edits must not pull the recommendation backwards. At 90%, recommend the next chapter without rewriting the stored position or exact completion; at the end, omit OPDS continuation and safely handle HTTP 204 in the web client.
+- Explicit web rewind, unread status and direct rereading must remain available. Verify two users' records independently, live OPDS client reopening, and scoped restoration of all test-induced reading-state changes.

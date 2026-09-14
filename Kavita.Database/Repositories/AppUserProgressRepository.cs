@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -19,6 +19,37 @@ namespace Kavita.Database.Repositories;
 
 public class AppUserProgressRepository(DataContext context, IMapper mapper) : IAppUserProgressRepository
 {
+    /// <summary>
+    /// Image retrieval is only an approximate high-water mark. A write transaction
+    /// serializes first-row creation as well as conditional advancement; no tracked
+    /// entity is written back over a concurrent completion or a newer image request.
+    /// SQLite's provider retries busy writes up to its configured command timeout.
+    /// </summary>
+    public async Task<bool> AdvanceOpdsProgressAsync(ProgressDto progress, int userId)
+    {
+        if (progress.PageNum <= 0) return false;
+        await using var transaction = await context.Database.BeginTransactionAsync();
+        var now = DateTime.Now;
+        var utcNow = DateTime.UtcNow;
+        var changed = await context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE AppUserProgresses
+            SET PagesRead = {progress.PageNum}, LastModified = {now}, LastModifiedUtc = {utcNow}
+            WHERE AppUserId = {userId} AND ChapterId = {progress.ChapterId}
+                AND PagesRead < {progress.PageNum}
+            """);
+        changed += await context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO AppUserProgresses
+                (AppUserId, ChapterId, VolumeId, SeriesId, LibraryId, PagesRead,
+                 BookScrollId, TotalReads, Created, CreatedUtc, LastModified, LastModifiedUtc)
+            SELECT {userId}, {progress.ChapterId}, {progress.VolumeId}, {progress.SeriesId},
+                {progress.LibraryId}, {progress.PageNum}, NULL, 0, {now}, {utcNow}, {now}, {utcNow}
+            WHERE NOT EXISTS (SELECT 1 FROM AppUserProgresses
+                WHERE AppUserId = {userId} AND ChapterId = {progress.ChapterId})
+            """);
+        await transaction.CommitAsync();
+        return changed > 0;
+    }
+
     public void Update(AppUserProgress userProgress)
     {
         context.Entry(userProgress).State = EntityState.Modified;

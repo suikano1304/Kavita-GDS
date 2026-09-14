@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -315,6 +315,27 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
     }
 
     /// <summary>
+    /// OPDS image requests can be speculative or arrive out of order. Preserve
+    /// their high-water mark for compatibility, but never call them reading sessions.
+    /// </summary>
+    public async Task<bool> SaveOpdsProgress(ProgressDto progressDto, int userId)
+    {
+        var (page, _) = await CapPageToChapter(progressDto.ChapterId, progressDto.PageNum);
+        progressDto.PageNum = page;
+        if (!await unitOfWork.AppUserProgressRepository.AdvanceOpdsProgressAsync(progressDto, userId))
+            return true;
+
+        await eventHub.SendMessageAsync(MessageFactory.UserProgressUpdate,
+            MessageFactory.UserProgressUpdateEvent(userId, progressDto.SeriesId,
+                progressDto.VolumeId, progressDto.ChapterId, page));
+        BackgroundJob.Enqueue(() => scrobblingService.ScrobbleReadingUpdate(userId,
+            progressDto.SeriesId, progressDto.ChapterId, CancellationToken.None));
+        BackgroundJob.Enqueue(() =>
+            unitOfWork.SeriesRepository.ClearOnDeckRemovalAsync(progressDto.SeriesId, userId));
+        return true;
+    }
+
+    /// <summary>
     /// Ensures that the page is within 0 and total pages for a chapter. Makes one DB call.
     /// </summary>
     /// <param name="chapterId"></param>
@@ -536,8 +557,10 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
     }
 
     /// <summary>
-    /// Finds the chapter to continue reading from. If a chapter has progress and not complete, return that. If not, progress in the
-    /// ordering (Volumes -> Loose Chapters -> Annuals -> Special) to find next chapter. If all are read, return first in order for series.
+    /// Continue from the furthest chapter with progress, independent of timestamps
+    /// changed by manual status edits or image prefetch. Recommendations consider
+    /// 90% sufficient to move on without changing the saved position/completion.
+    /// Exact completion consumers (Tachiyomi) opt out of that threshold.
     /// </summary>
     /// <param name="seriesId"></param>
     /// <param name="userId"></param>
