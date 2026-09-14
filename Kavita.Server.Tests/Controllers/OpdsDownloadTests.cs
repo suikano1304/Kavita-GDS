@@ -42,8 +42,8 @@ public class OpdsDownloadTests
             var controller = Create(uow, directory, cache, reader);
             controller.Request.Headers.UserAgent = agent;
             await controller.GetPageStreamedImage("fixture", 1, 1, 1, 1, 0, save);
-            await reader.Received(expected ? 1 : 0).SaveReadingProgress(Arg.Any<ProgressDto>(), 7);
-            await reader.DidNotReceive().SaveReadingProgress(Arg.Any<ProgressDto>(), Arg.Is<int>(i => i != 7));
+            await reader.Received(expected ? 1 : 0).SaveOpdsProgress(Arg.Any<ProgressDto>(), 7);
+            await reader.DidNotReceive().SaveOpdsProgress(Arg.Any<ProgressDto>(), Arg.Is<int>(i => i != 7));
         }
         finally { File.Delete(page); }
     }

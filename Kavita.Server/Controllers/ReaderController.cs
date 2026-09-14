@@ -644,7 +644,8 @@ public class ReaderController(ICacheService cacheService,
     [HttpGet("continue-point")]
     public async Task<ActionResult<ChapterDto>> GetContinuePoint(int seriesId)
     {
-        return Ok(await readerService.GetContinuePoint(seriesId, UserId));
+        var chapter = await readerService.GetContinuePoint(seriesId, UserId);
+        return chapter == null ? NoContent() : Ok(chapter);
     }
 
     /// <summary>

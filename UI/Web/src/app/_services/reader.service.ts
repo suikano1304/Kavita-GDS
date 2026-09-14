@@ -257,7 +257,7 @@ export class ReaderService {
   }
 
   getCurrentChapter(seriesId: number) {
-    return this.httpClient.get<Chapter>(this.baseUrl + 'reader/continue-point?seriesId=' + seriesId);
+    return this.httpClient.get<Chapter | null>(this.baseUrl + 'reader/continue-point?seriesId=' + seriesId);
   }
 
   getTimeLeft(seriesId: number) {

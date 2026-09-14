@@ -37,10 +37,11 @@ public class TachiyomiService(
 
     public async Task<TachiyomiChapterDto?> GetLatestChapter(int seriesId, int userId, CancellationToken ct = default)
     {
-        var currentChapter = await readerService.GetContinuePoint(seriesId, userId);
+        var currentChapter = await readerService.GetContinuePoint(seriesId, userId, useRecommendationThreshold: false);
 
         var prevChapterId =
-            await readerService.GetPrevChapterIdAsync(seriesId, currentChapter.VolumeId, currentChapter.Id, userId);
+            currentChapter == null ? -1 :
+                await readerService.GetPrevChapterIdAsync(seriesId, currentChapter.VolumeId, currentChapter.Id, userId);
 
         // If prevChapterId is -1, this means either nothing is read or everything is read.
         if (prevChapterId == -1)

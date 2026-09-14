@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -299,6 +299,27 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
     }
 
     /// <summary>
+    /// OPDS image requests can be speculative or arrive out of order. Preserve
+    /// their high-water mark for compatibility, but never call them reading sessions.
+    /// </summary>
+    public async Task<bool> SaveOpdsProgress(ProgressDto progressDto, int userId)
+    {
+        var (page, _) = await CapPageToChapter(progressDto.ChapterId, progressDto.PageNum);
+        progressDto.PageNum = page;
+        if (!await unitOfWork.AppUserProgressRepository.AdvanceOpdsProgressAsync(progressDto, userId))
+            return true;
+
+        await eventHub.SendMessageAsync(MessageFactory.UserProgressUpdate,
+            MessageFactory.UserProgressUpdateEvent(userId, progressDto.SeriesId,
+                progressDto.VolumeId, progressDto.ChapterId, page));
+        BackgroundJob.Enqueue(() => scrobblingService.ScrobbleReadingUpdate(userId,
+            progressDto.SeriesId, progressDto.ChapterId, CancellationToken.None));
+        BackgroundJob.Enqueue(() =>
+            unitOfWork.SeriesRepository.ClearOnDeckRemovalAsync(progressDto.SeriesId, userId));
+        return true;
+    }
+
+    /// <summary>
     /// Ensures that the page is within 0 and total pages for a chapter. Makes one DB call.
     /// </summary>
     /// <param name="chapterId"></param>
@@ -518,29 +539,33 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
     }
 
     /// <summary>
-    /// Finds the chapter to continue reading from. If a chapter has progress and not complete, return that. If not, progress in the
-    /// ordering (Volumes -> Loose Chapters -> Annuals -> Special) to find next chapter. If all are read, return first in order for series.
+    /// Continue from the furthest chapter with progress, independent of timestamps
+    /// changed by manual status edits or image prefetch. Recommendations consider
+    /// 90% sufficient to move on without changing the saved position/completion.
+    /// Exact completion consumers (Tachiyomi) opt out of that threshold.
     /// </summary>
-    /// <param name="seriesId"></param>
-    /// <param name="userId"></param>
-    /// <returns></returns>
-    public async Task<ChapterDto> GetContinuePoint(int seriesId, int userId)
+    public async Task<ChapterDto?> GetContinuePoint(int seriesId, int userId,
+        bool useRecommendationThreshold = true)
     {
-        // Since the first chapter has progress already on it, we can check if there is any progress and if not, return that chapter
-        var firstChapter = await unitOfWork.ChapterRepository.GetFirstChapterForSeriesAsync(seriesId, userId);
-        if (firstChapter is { PagesRead: 0 }) return firstChapter;
+        var volumes = await unitOfWork.VolumeRepository.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files);
+        var chapters = volumes.OrderBy(v => v.IsSpecial())
+            .ThenBy(v => v.MinNumber, _chapterSortComparerDefaultLast)
+            .SelectMany(v => v.Chapters.OrderBy(c => c.SortOrder)).ToList();
+        if (chapters.Count == 0) throw new KavitaNotFoundException();
 
-        var currentlyReading = await unitOfWork.ChapterRepository.GetCurrentlyReadingChapterAsync(seriesId, userId);
-        if (currentlyReading != null) return currentlyReading;
-
-        var volumes = (await unitOfWork.VolumeRepository.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files)).ToList();
-
-        var allChapters = volumes
-            .OrderBy(v => v.MinNumber, _chapterSortComparerDefaultLast)
-            .SelectMany(v => v.Chapters.OrderBy(c => c.SortOrder))
-            .ToList();
-
-        return FindNextReadingChapter(allChapters);
+        var progress = (await unitOfWork.AppUserProgressRepository.GetUserProgressForSeriesAsync(seriesId, userId))
+            .GroupBy(p => p.ChapterId).ToDictionary(g => g.Key, g => g.MaxBy(p => p.PagesRead)!);
+        foreach (var chapter in chapters)
+        {
+            if (!progress.TryGetValue(chapter.Id, out var saved)) continue;
+            chapter.PagesRead = saved.PagesRead;
+            chapter.LastReadingProgressUtc = saved.LastModifiedUtc;
+        }
+        var last = chapters.FindLastIndex(c => c.PagesRead > 0);
+        if (last < 0) return chapters[0];
+        var threshold = useRecommendationThreshold ? 90 : 100;
+        return chapters.Skip(last).FirstOrDefault(c => c.Pages <= 0 ||
+            (long)c.PagesRead * 100 < (long)c.Pages * threshold);
     }
 
     private static ChapterDto FindNextReadingChapter(IList<ChapterDto> volumeChapters)
@@ -775,7 +800,10 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
 
         var namingContext = await CreateNamingContext(userId, libraryId);
 
-        var continuePoint = await GetContinuePoint(seriesId, userId);
+        // This endpoint is an explicit read/re-read action, not an automatic recommendation.
+        var continuePoint = await GetContinuePoint(seriesId, userId)
+            ?? await unitOfWork.ChapterRepository.GetFirstChapterForSeriesAsync(seriesId, userId);
+        if (continuePoint == null) return RereadDto.Dont();
         var continuePointLabel = await FormatReReadLabel(userId, namingContext, continuePoint);
 
         var lastProgress = await unitOfWork.AppUserProgressRepository.GetLatestProgressForSeries(seriesId, userId);

@@ -1,4 +1,4 @@
-﻿using System.IO.Abstractions;
+using System.IO.Abstractions;
 using AutoMapper;
 using Hangfire;
 using Hangfire.InMemory;
@@ -257,6 +257,84 @@ public class OpdsServiceTests(ITestOutputHelper testOutputHelper) : AbstractDbTe
 
         Assert.Equal(3, feed.Entries.Count);
         Assert.StartsWith("Continue Reading from", feed.Entries.First().Title);
+    }
+
+    [Fact]
+    public async Task ContinuePoint_UsesFurthestChapterInsteadOfOldIncompleteChapter()
+    {
+        var (unitOfWork, context, mapper) = await CreateDatabase();
+        var (opdsService, readerService) = SetupService(unitOfWork, mapper);
+        var user = await SetupSeriesAndUser(context, unitOfWork);
+        // A numbered volume reproduces the regular-volume query used by the reported series.
+        var volume = context.Volume.Single();
+        volume.Number = 1;
+        volume.MinNumber = 1;
+        volume.MaxNumber = 1;
+        volume.Name = "1";
+        await unitOfWork.CommitAsync();
+        var first = await unitOfWork.ChapterRepository.GetChapterAsync(1);
+        var second = await unitOfWork.ChapterRepository.GetChapterAsync(2);
+        await readerService.SaveReadingProgress(new ProgressDto
+        {
+            ChapterId = first.Id, VolumeId = first.VolumeId, SeriesId = 1,
+            LibraryId = 1, PageNum = 5
+        }, user.Id, false);
+        await readerService.SaveReadingProgress(new ProgressDto
+        {
+            ChapterId = second.Id, VolumeId = second.VolumeId, SeriesId = 1,
+            LibraryId = 1, PageNum = 7
+        }, user.Id, false);
+
+        var feed = await opdsService.GetSeriesDetail(new OpdsItemsFromEntityIdRequest
+        {
+            ApiKey = user.GetOpdsAuthKey(), Prefix = OpdsService.DefaultApiPrefix,
+            BaseUrl = string.Empty, UserId = user.Id,
+            Preferences = await unitOfWork.UserRepository.GetOpdsPreferences(user.Id),
+            EntityId = 1, PageNumber = 0
+        });
+        Assert.StartsWith("Continue Reading from", feed.Entries.First().Title);
+        Assert.Equal(second.Id.ToString(), feed.Entries.First().Id);
+        var stream = feed.Entries.First().Links.Single(l => l.IsPageStream);
+        Assert.Equal(7, stream.LastRead);
+        Assert.False(string.IsNullOrWhiteSpace(stream.LastReadDate));
+    }
+
+    [Theory]
+    [InlineData(1, 10, 2)] // Finished recent first chapter: advance normally.
+    [InlineData(2, 10, 0)] // Finished latest chapter at end: no stale chapter-one recommendation.
+    [InlineData(1, 3, 2)]  // Reopening an earlier chapter does not move the recommendation back.
+    public async Task ContinuePoint_DoesNotMoveBackAfterEarlierCompletionOrReread(int recentId, int page, int expectedId)
+    {
+        var (unitOfWork, context, mapper) = await CreateDatabase();
+        var (opdsService, readerService) = SetupService(unitOfWork, mapper);
+        var user = await SetupSeriesAndUser(context, unitOfWork);
+        var otherId = recentId == 1 ? 2 : 1;
+        foreach (var (id, pages) in new[] {(otherId, 5), (recentId, page)})
+        {
+            var chapter = await unitOfWork.ChapterRepository.GetChapterAsync(id);
+            await readerService.SaveReadingProgress(new ProgressDto
+            {
+                ChapterId = id, VolumeId = chapter.VolumeId, SeriesId = 1,
+                LibraryId = 1, PageNum = pages
+            }, user.Id, false);
+        }
+        var feed = await opdsService.GetSeriesDetail(new OpdsItemsFromEntityIdRequest
+        {
+            ApiKey = user.GetOpdsAuthKey(), Prefix = OpdsService.DefaultApiPrefix,
+            BaseUrl = string.Empty, UserId = user.Id,
+            Preferences = await unitOfWork.UserRepository.GetOpdsPreferences(user.Id),
+            EntityId = 1, PageNumber = 0
+        });
+        if (expectedId == 0)
+        {
+            Assert.Equal(2, feed.Entries.Count);
+            Assert.DoesNotContain(feed.Entries, e => e.Title.StartsWith("Continue Reading from"));
+        }
+        else
+        {
+            Assert.StartsWith("Continue Reading from", feed.Entries.First().Title);
+            Assert.Equal(expectedId.ToString(), feed.Entries.First().Id);
+        }
     }
 
     [Fact]

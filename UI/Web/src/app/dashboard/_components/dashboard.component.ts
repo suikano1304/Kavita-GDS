@@ -302,7 +302,11 @@ export class DashboardComponent {
   async handleRecentlyAddedChapterRead(item: RecentlyAddedItem) {
     // Get Continue Reading point and open directly
     this.readerService.getCurrentChapter(item.seriesId).subscribe(chapter => {
-      this.readerService.readChapter(item.libraryId, item.seriesId, chapter, false);
+      if (chapter) {
+        this.readerService.readChapter(item.libraryId, item.seriesId, chapter, false);
+      } else {
+        void this.router.navigate(['library', item.libraryId, 'series', item.seriesId]);
+      }
     });
   }
 

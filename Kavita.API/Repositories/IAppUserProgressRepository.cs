@@ -10,6 +10,7 @@ namespace Kavita.API.Repositories;
 
 public interface IAppUserProgressRepository
 {
+    Task<bool> AdvanceOpdsProgressAsync(ProgressDto progress, int userId);
     void Update(AppUserProgress userProgress);
     void Remove(AppUserProgress userProgress);
     Task<int> CleanupAbandonedChapters(CancellationToken ct = default);

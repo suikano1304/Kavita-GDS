@@ -765,7 +765,7 @@ public class OpdsController(
                     }
                 }
 
-                await readerService.SaveReadingProgress(new ProgressDto()
+                await readerService.SaveOpdsProgress(new ProgressDto()
                 {
                     ChapterId = chapterId,
                     PageNum = pageNumber + koreaderOffset,

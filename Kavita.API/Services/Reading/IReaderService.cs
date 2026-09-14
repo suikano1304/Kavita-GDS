@@ -22,10 +22,11 @@ public interface IReaderService
     Task MarkChaptersAsRead(AppUser user, int seriesId, IList<Chapter> chapters);
     Task MarkChaptersAsUnread(AppUser user, int seriesId, IList<Chapter> chapters);
     Task<bool> SaveReadingProgress(ProgressDto progressDto, int userId, bool saveToReadingSession = true);
+    Task<bool> SaveOpdsProgress(ProgressDto progressDto, int userId);
     int CapPageToChapter(Chapter chapter, int page);
     Task<int> GetNextChapterIdAsync(int seriesId, int volumeId, int currentChapterId, int userId);
     Task<int> GetPrevChapterIdAsync(int seriesId, int volumeId, int currentChapterId, int userId);
-    Task<ChapterDto> GetContinuePoint(int seriesId, int userId);
+    Task<ChapterDto?> GetContinuePoint(int seriesId, int userId, bool useRecommendationThreshold = true);
     IDictionary<int, int> GetPairs(IEnumerable<FileDimensionDto> dimensions);
     Task<string> GetThumbnail(Chapter chapter, int pageNum, IEnumerable<string> cachedImages);
     Task<RereadDto> CheckSeriesForReRead(int userId, int seriesId, int libraryId);

@@ -1,4 +1,4 @@
-﻿using System.IO.Abstractions.TestingHelpers;
+using System.IO.Abstractions.TestingHelpers;
 using Hangfire;
 using Hangfire.InMemory;
 using Kavita.API.Database;
@@ -2120,7 +2120,7 @@ public class ReaderServiceTests(ITestOutputHelper testOutputHelper) : AbstractDb
 
         var nextChapter = await readerService.GetContinuePoint(1, 1);
 
-        Assert.Equal("100", nextChapter.Range);
+        Assert.Null(nextChapter); // The later special is finished; do not return to earlier gaps.
     }
 
     [Fact]
@@ -2191,7 +2191,7 @@ public class ReaderServiceTests(ITestOutputHelper testOutputHelper) : AbstractDb
     }
 
     [Fact]
-    public async Task GetContinuePoint_ShouldReturnFirstChapter_WhenAllRead()
+    public async Task GetContinuePoint_ShouldReturnNothing_WhenAllRead()
     {
         var (unitOfWork, context, _) = await CreateDatabase();
         var readerService = Setup(unitOfWork);
@@ -2254,11 +2254,11 @@ public class ReaderServiceTests(ITestOutputHelper testOutputHelper) : AbstractDb
 
         var nextChapter = await readerService.GetContinuePoint(1, 1);
 
-        Assert.Equal("1", nextChapter.Range);
+        Assert.Null(nextChapter);
     }
 
     [Fact]
-    public async Task GetContinuePoint_ShouldReturnFirstChapter_WhenAllReadAndAllChapters()
+    public async Task GetContinuePoint_ShouldReturnNothing_WhenAllReadAndAllChapters()
     {
         var (unitOfWork, context, _) = await CreateDatabase();
         var readerService = Setup(unitOfWork);
@@ -2301,7 +2301,7 @@ public class ReaderServiceTests(ITestOutputHelper testOutputHelper) : AbstractDb
 
         var nextChapter = await readerService.GetContinuePoint(1, 1);
 
-        Assert.Equal("11", nextChapter.Range);
+        Assert.Null(nextChapter);
     }
 
     [Fact]
@@ -2373,7 +2373,7 @@ public class ReaderServiceTests(ITestOutputHelper testOutputHelper) : AbstractDb
     }
 
     [Fact]
-    public async Task GetContinuePoint_ShouldReturnFirstVolumeChapter_WhenPreExistingProgress()
+    public async Task GetContinuePoint_ShouldStayAfterFurthestProgress_WhenEarlierChaptersAreAdded()
     {
         var (unitOfWork, context, _) = await CreateDatabase();
         var readerService = Setup(unitOfWork);
@@ -2426,9 +2426,9 @@ public class ReaderServiceTests(ITestOutputHelper testOutputHelper) : AbstractDb
         context.Series.Attach(series);
         await context.SaveChangesAsync();
 
-        // This tests that if you add a series later to a volume and a loose leaf chapter, we continue from that volume, rather than loose leaf
+        // Earlier unread additions must not pull continuation back before the furthest read chapter.
         var nextChapter = await readerService.GetContinuePoint(1, 1);
-        Assert.Equal("14.9", nextChapter.Range);
+        Assert.Equal("231", nextChapter.Range);
     }
 
     [Fact]
@@ -2610,7 +2610,7 @@ public class ReaderServiceTests(ITestOutputHelper testOutputHelper) : AbstractDb
 
         var nextChapter = await readerService.GetContinuePoint(1, 1);
 
-        Assert.Equal("91", nextChapter.Range);
+        Assert.Null(nextChapter); // The later special is finished; do not return to earlier gaps.
     }
 
     [Fact]

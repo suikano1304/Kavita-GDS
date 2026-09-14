@@ -88,6 +88,8 @@ public class ReaderServiceRereadTests
         _seriesRepo.GetSeriesDtoByIdAsync(seriesId, userId).Returns(seriesDto);
         _libraryRepo.GetLibraryTypeAsync(libraryId).Returns(LibraryType.Manga);
         _chapterRepo.GetFirstChapterForSeriesAsync(seriesId, userId).Returns(continuePoint);
+        _volumeRepo.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files)
+            .Returns(new List<VolumeDto> { new() { Id = 1, Chapters = [continuePoint] } });
         _progressRepo.AnyUserProgressForSeriesAsync(seriesId, userId).Returns(false);
         _progressRepo.GetLatestProgressForSeries(seriesId, userId).Returns((DateTime?)null);
 
@@ -139,9 +141,11 @@ public class ReaderServiceRereadTests
         _progressRepo.AnyUserProgressForSeriesAsync(seriesId, userId).Returns(true);
         _progressRepo.GetLatestProgressForSeries(seriesId, userId).Returns(DateTime.UtcNow.AddDays(-1));
 
-        // Mock GetContinuePoint internals
+        // Supply the ordered chapters used by the common recommendation resolver.
         _progressRepo.AnyUserProgressForSeriesAsync(seriesId, userId).Returns(true);
-        _chapterRepo.GetCurrentlyReadingChapterAsync(seriesId, userId).Returns(continuePoint);
+        _volumeRepo.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files)
+            .Returns(new List<VolumeDto> { new() { Id = continuePoint.VolumeId, Chapters = [continuePoint] } });
+        _chapterRepo.GetFirstChapterForSeriesAsync(seriesId, userId).Returns(firstChapter);
 
         // Act
         var result = await _readerService.CheckSeriesForReRead(userId, seriesId, libraryId);
@@ -190,7 +194,9 @@ public class ReaderServiceRereadTests
         _userRepo.GetPreferencesForUser(userId).Returns(userPrefs);
         _progressRepo.AnyUserProgressForSeriesAsync(seriesId, userId).Returns(true);
         _progressRepo.GetLatestProgressForSeries(seriesId, userId).Returns(DateTime.UtcNow.AddDays(-1));
-        _chapterRepo.GetCurrentlyReadingChapterAsync(seriesId, userId).Returns(continuePoint);
+        _volumeRepo.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files)
+            .Returns(new List<VolumeDto> { new() { Id = continuePoint.VolumeId, Chapters = [continuePoint] } });
+        _chapterRepo.GetFirstChapterForSeriesAsync(seriesId, userId).Returns(continuePoint);
 
         // Act
         var result = await _readerService.CheckSeriesForReRead(userId, seriesId, libraryId);
@@ -236,7 +242,9 @@ public class ReaderServiceRereadTests
         _userRepo.GetPreferencesForUser(userId).Returns(userPrefs);
         _progressRepo.AnyUserProgressForSeriesAsync(seriesId, userId).Returns(true);
         _progressRepo.GetLatestProgressForSeries(seriesId, userId).Returns(DateTime.UtcNow.AddDays(-1));
-        _chapterRepo.GetCurrentlyReadingChapterAsync(seriesId, userId).Returns(continuePoint);
+        _volumeRepo.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files)
+            .Returns(new List<VolumeDto> { new() { Id = continuePoint.VolumeId, Chapters = [continuePoint] } });
+        _chapterRepo.GetFirstChapterForSeriesAsync(seriesId, userId).Returns(continuePoint);
 
         // Act
         var result = await _readerService.CheckSeriesForReRead(userId, seriesId, libraryId);
@@ -284,7 +292,9 @@ public class ReaderServiceRereadTests
         _userRepo.GetPreferencesForUser(userId).Returns(userPrefs);
         _progressRepo.AnyUserProgressForSeriesAsync(seriesId, userId).Returns(true);
         _progressRepo.GetLatestProgressForSeries(seriesId, userId).Returns(DateTime.UtcNow.AddDays(-daysSinceRead));
-        _chapterRepo.GetCurrentlyReadingChapterAsync(seriesId, userId).Returns(continuePoint);
+        _volumeRepo.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files)
+            .Returns(new List<VolumeDto> { new() { Id = continuePoint.VolumeId, Chapters = [continuePoint] } });
+        _chapterRepo.GetFirstChapterForSeriesAsync(seriesId, userId).Returns(continuePoint);
 
         // Act
         var result = await _readerService.CheckSeriesForReRead(userId, seriesId, libraryId);
@@ -343,7 +353,9 @@ public class ReaderServiceRereadTests
         _userRepo.GetPreferencesForUser(userId).Returns(userPrefs);
         _progressRepo.AnyUserProgressForSeriesAsync(seriesId, userId).Returns(true);
         _progressRepo.GetLatestProgressForSeries(seriesId, userId).Returns(DateTime.UtcNow.AddDays(-daysSinceRead));
-        _chapterRepo.GetCurrentlyReadingChapterAsync(seriesId, userId).Returns(continuePoint);
+        _volumeRepo.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files)
+            .Returns(new List<VolumeDto> { new() { Id = continuePoint.VolumeId, Chapters = [continuePoint] } });
+        _chapterRepo.GetFirstChapterForSeriesAsync(seriesId, userId).Returns(continuePoint);
         _chapterRepo.GetChapterDtoAsync(4, userId).Returns(prevChapter);
 
         // Mock GetPrevChapterIdAsync to return chapter 4
@@ -361,6 +373,7 @@ public class ReaderServiceRereadTests
             }
         };
         _volumeRepo.GetVolumesDtoAsync(seriesId, userId).Returns(volumes);
+        _volumeRepo.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files).Returns(volumes);
 
         // Act
         var result = await _readerService.CheckSeriesForReRead(userId, seriesId, libraryId);
