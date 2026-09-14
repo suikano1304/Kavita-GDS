@@ -2,20 +2,20 @@
 
 Google Drive/rclone 같은 원격 저장소에 큰 만화/책 라이브러리를 두고 쓰는 환경을 위한 Kavita 비공식 Docker 빌드입니다. official Kavita `0.9.1.4`를 기반으로 GDS 스캔, 표지, 페이지 수, reader/cache, 검색, 정렬 문제를 보정했습니다.
 
-현재 릴리즈: `0.9.1.4-3`
+현재 릴리즈: `0.9.1.4-4`
 
-이번 버전은 OPDS 다운로드·진행률, 사용자별 읽기 프로필, EPUB 폰트 적용을 수정합니다. 검증 범위와 외부 앱 회전 제한은 [릴리스 노트](RELEASE_NOTES.md)를 확인하세요.
+이번 버전은 OPDS 다음 권 미리 준비와 관리자 사용자 설정 저장을 수정합니다. 검증 범위와 외부 앱 회전 제한은 [릴리스 노트](RELEASE_NOTES.md)를 확인하세요.
 
 ## 빠른 시작
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:0.9.1.4-3
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.1.4-4
 ```
 
 ```yaml
 services:
   kavita:
-    image: ghcr.io/suikano1304/kavita-gds:0.9.1.4-3
+    image: ghcr.io/suikano1304/kavita-gds:0.9.1.4-4
     container_name: kavita
     restart: always
     ports:
@@ -60,22 +60,22 @@ services:
 - **GDS broad scan hardening (0.9.0.12-5)**: scan phase 결과를 streaming grouping으로 처리하고, 대형 sidecar YAML, mixed-format fingerprint, 반복 재처리, post-scan CPU tail 문제를 보강했습니다.
 - **GDS scan/cover memory 보강 (0.9.0.12-6)**: scan queue/index 참조를 줄이고, scan 종료 후 sidecar cache를 해제하며, 대표 cover와 권/챕터 cover 생성 경로의 메모리 사용을 보강했습니다.
 
-OPDS: upstream #4759에서 정식 해결되어(단일엔트리+병합cbz) GDS 패치스택에 별도 OPDS 커스텀 없이 upstream 동작을 그대로 상속합니다.
+OPDS: 실제 페이지를 읽으면 다음 항목 하나를 미리 준비합니다. 다운로드 형식 및 진행률·프로필 보존 수정도 포함합니다.
 
 ## 이번 버전
 
-- 시리즈 설명의 `\n`·`\r\n`, 실제 줄바꿈, YAML 여러 줄 문자열 표시를 복원했습니다. 기존 저장된 설명도 전체 재스캔 없이 표시됩니다.
-- GDS/Book 라이브러리 생성·설정 저장과 시간대 경계의 읽기 기록 집계를 수정했습니다.
-- 기존 GDS 기능과 게임패드/PageUp·PageDown 보정을 유지했습니다.
+- OPDS 만화 스트리밍에서 접근 가능한 다음 항목 하나를 미리 준비합니다. 디스크와 I/O 부하를 확인하고 일시적 부하 이후에는 제한된 시간 동안 재시도합니다.
+- 기존 이메일이 비어 있거나 과거 형식이어도 이메일을 바꾸지 않는 관리자 권한·라이브러리 수정은 저장할 수 있습니다.
+- 읽기 전용 계정의 연령 설정 화면을 서버 권한과 맞췄습니다. 기존 사용자별 프로필·폰트 수정은 유지합니다.
 
-서비스 테스트 2,614개, DB 테스트 75개, 서버 테스트 85개, 설명 표시 브라우저 테스트와 리더 API 회귀 검증을 통과했습니다. 플랫폼별 실행 결과와 digest는 [RELEASE_NOTES.md](RELEASE_NOTES.md)를 참고하세요.
+서비스 테스트 2,626개(기존 6개 건너뜀), 서버 테스트 102개와 실제 웹 UI/API/DB 검증을 통과했습니다. 플랫폼별 실행 결과와 검증 제한은 [RELEASE_NOTES.md](RELEASE_NOTES.md)를 참고하세요.
 
 ## 태그와 플랫폼
 
 운영에서는 고정 버전 태그를 권장합니다.
 
 ```text
-ghcr.io/suikano1304/kavita-gds:0.9.1.4-3
+ghcr.io/suikano1304/kavita-gds:0.9.1.4-4
 ```
 
 지원 플랫폼: `linux/amd64`, `linux/arm64`, `linux/arm/v7`
