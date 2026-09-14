@@ -208,3 +208,12 @@ PASS 기준:
 - [ ] 한글 지원 기본/업로드 폰트로 EPUB·TXT의 실제 glyph, 챕터 이동·재열기·폰트 로딩 후 위치 보존을 확인한다.
 - [ ] 스캔 완료 캐시 정리가 본문 읽기와 겹쳐도 원본이 남아 있으면 캐시 재생성으로 EPUB/TXT 본문을 반환한다. 지속적인 I/O 오류는 무한 재시도하지 않는다.
 - [ ] 서버 테스트 외에 실제 Angular→API→DB→재열기와 두 Android OPDS 앱의 내부/HTTPS 다운로드·스트리밍·회전 검증을 완료한 뒤 배포한다.
+
+## OPDS successor preparation and user settings
+
+- Actual OPDS image responses may prepare exactly one accessible successor using web-reader ordering and the shared extraction lock. Catalogue requests must not extract media or enqueue successor chains.
+- Test with both volumes absent from the media cache: cold current-volume read, bounded wait for I/O pressure to settle, successor preparation, and first client request for the successor. Distinguish server response latency from client rendering latency.
+- Prefer the reader's cgroup-v2 I/O pressure; fall back to host PSI where unavailable. Verify container namespace paths, disk headroom, persistent-pressure retry bounds, cancellation, permission revalidation, and deduplication. Never bypass load protection in release acceptance tests.
+- Prefetch alone must not create reading progress or modify reading profiles. Explicit page requests retain the documented Panels/saveProgress behavior.
+- Administrator user edits must allow role/library updates with unchanged legacy blank or malformed email, reject newly entered invalid email, and recover the save button after API failure.
+- Non-administrator settings must match server permissions: Read Only blocks language/profile/age edits; permitted accounts retain settings after re-login, and existing OPDS keys continue to work after role changes. Confirm foreign profile/device IDs are denied without DB mutation.
