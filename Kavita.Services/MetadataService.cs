@@ -343,7 +343,7 @@ public class MetadataService(
                 seriesIndex++;
             }
 
-            await unitOfWork.CommitAsync(ct);
+            await CommitCoverChangesAsync(ct);
 
             await FlushEvents();
 
@@ -589,7 +589,7 @@ public class MetadataService(
 
         if (unitOfWork.HasChanges())
         {
-            await unitOfWork.CommitAsync(ct);
+            await CommitCoverChangesAsync(ct);
             logger.LogInformation("[MetadataService] Updated representative cover for {SeriesName} in {ElapsedMilliseconds} milliseconds",
                 series.Name, sw.ElapsedMilliseconds);
         }
@@ -597,6 +597,19 @@ public class MetadataService(
         await eventHub.SendMessageAsync(MessageFactory.CoverUpdate,
             MessageFactory.CoverUpdateEvent(series.Id, MessageFactoryEntityTypes.Series), false, ct);
         await FlushEvents();
+    }
+
+    private async Task CommitCoverChangesAsync(CancellationToken ct)
+    {
+        // Cover repositories mark entire entities Modified. Their tracked page counts can
+        // predate a reader's zero-page repair, so a cover-only save must not write them back.
+        foreach (var entry in unitOfWork.DataContext.ChangeTracker.Entries()
+                     .Where(e => e.State == EntityState.Modified &&
+                                 e.Entity is Chapter or Volume or Series or MangaFile).ToList())
+        {
+            entry.Property(nameof(Chapter.Pages)).IsModified = false;
+        }
+        await unitOfWork.CommitAsync(ct);
     }
 
     /// <summary>
@@ -620,7 +633,7 @@ public class MetadataService(
 
         if (unitOfWork.HasChanges())
         {
-            await unitOfWork.CommitAsync(ct);
+            await CommitCoverChangesAsync(ct);
             logger.LogInformation("[MetadataService] Updated covers for {SeriesName} in {ElapsedMilliseconds} milliseconds", series.Name, sw.ElapsedMilliseconds);
         }
 

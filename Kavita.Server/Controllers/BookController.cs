@@ -123,10 +123,12 @@ public class BookController(
             await using var transaction = await db.Database.BeginTransactionAsync(HttpContext.RequestAborted);
             var selected = await db.MangaFile.AsNoTracking().SingleAsync(f => f.Id == selectedFileId && f.ChapterId == chapterId);
             var oldPages = await db.Chapter.AsNoTracking().Where(c => c.Id == chapterId).Select(c => c.Pages).SingleAsync();
-            if (selected.Pages == pageCount || oldPages > 1) return oldPages;
-            var delta = pageCount - selected.Pages;
+            if (oldPages > 1) return oldPages;
+            // A prior cover save may have left the selected file correct but its chapter stale.
+            // Reconcile the selected reading count, preserving alternative-file metadata.
+            var delta = pageCount - oldPages;
             await db.MangaFile.Where(f => f.Id == selectedFileId).ExecuteUpdateAsync(u => u.SetProperty(f => f.Pages, pageCount));
-            await db.Chapter.Where(c => c.Id == chapterId).ExecuteUpdateAsync(u => u.SetProperty(c => c.Pages, c => c.Pages + delta));
+            await db.Chapter.Where(c => c.Id == chapterId).ExecuteUpdateAsync(u => u.SetProperty(c => c.Pages, pageCount));
             await db.Volume.Where(v => v.Id == volumeId).ExecuteUpdateAsync(u => u.SetProperty(v => v.Pages, v => v.Pages + delta));
             await db.Series.Where(v => v.Id == seriesId).ExecuteUpdateAsync(u => u.SetProperty(v => v.Pages, v => v.Pages + delta));
             await transaction.CommitAsync(HttpContext.RequestAborted);
