@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -112,77 +112,11 @@ public partial class BookService(
         }
     };
 
-    private sealed class EpubBookLease(EpubBookRef? book, string? repairedPath) : IDisposable
-    {
-        public EpubBookRef? Book { get; } = book;
+    private EpubBookOpener.Lease OpenEpubBook(string path, EpubReaderOptions options) =>
+        EpubBookOpener.Open(path, Path.Join(directoryService.TempDirectory, "epub-manifest-repair"), options);
 
-        public void Dispose()
-        {
-            Book?.Dispose();
-            EpubManifestRepairHelper.DeleteQuietly(repairedPath);
-        }
-    }
-
-    private string EpubManifestRepairTempDirectory =>
-        Path.Join(directoryService.TempDirectory, "epub-manifest-repair");
-
-    private EpubBookLease OpenEpubBook(string filePath, EpubReaderOptions options)
-    {
-        try
-        {
-            return new EpubBookLease(EpubReader.OpenBook(filePath, options), null);
-        }
-        catch (EpubReaderException ex)
-        {
-            if (!EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(filePath,
-                    EpubManifestRepairTempDirectory, out var repairedPath))
-            {
-                throw;
-            }
-
-            try
-            {
-                logger.LogWarning(
-                    "[BookService] Repaired EPUB manifest in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
-                    filePath, ex.Message);
-                return new EpubBookLease(EpubReader.OpenBook(repairedPath, options), repairedPath);
-            }
-            catch
-            {
-                EpubManifestRepairHelper.DeleteQuietly(repairedPath);
-                throw;
-            }
-        }
-    }
-
-    private async Task<EpubBookLease> OpenEpubBookAsync(string filePath, EpubReaderOptions options)
-    {
-        try
-        {
-            return new EpubBookLease(await EpubReader.OpenBookAsync(filePath, options), null);
-        }
-        catch (EpubReaderException ex)
-        {
-            if (!EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(filePath,
-                    EpubManifestRepairTempDirectory, out var repairedPath))
-            {
-                throw;
-            }
-
-            try
-            {
-                logger.LogWarning(
-                    "[BookService] Repaired EPUB manifest in a temporary copy: {FilePath}. Original error: {ErrorMessage}",
-                    filePath, ex.Message);
-                return new EpubBookLease(await EpubReader.OpenBookAsync(repairedPath, options), repairedPath);
-            }
-            catch
-            {
-                EpubManifestRepairHelper.DeleteQuietly(repairedPath);
-                throw;
-            }
-        }
-    }
+    private Task<EpubBookOpener.Lease> OpenEpubBookAsync(string path, EpubReaderOptions options) =>
+        Task.FromResult(OpenEpubBook(path, options));
 
     private static bool HasClickableHrefPart(HtmlNode anchor)
     {
@@ -228,7 +162,7 @@ public partial class BookService(
                     : anchor.GetAttributeValue("href", string.Empty);
 
                 // hrefParts[0] might not have path from mappings
-                var pageKey = mappings.Keys.FirstOrDefault(mKey => mKey.EndsWith(hrefParts[0]));
+                var pageKey = string.IsNullOrEmpty(hrefParts[0]) ? null : mappings.Keys.FirstOrDefault(mKey => mKey.EndsWith(hrefParts[0]));
                 if (!string.IsNullOrEmpty(pageKey))
                 {
                     mappings.TryGetValue(pageKey, out currentPage);
@@ -271,35 +205,8 @@ public partial class BookService(
     public async Task<string> ScopeStyles(string stylesheetHtml, string apiBase, string filename, EpubBookRef book,
         CancellationToken ct = default)
     {
-        // @Import statements will be handled by browser, so we must inline the css into the original file that request it, so they can be Scoped
-        var prepend = filename.Length > 0 ? filename.Replace(Path.GetFileName(filename), string.Empty) : string.Empty;
-        var importBuilder = new StringBuilder();
-
-        foreach (Match match in Parser.CssImportUrlRegex.Matches(stylesheetHtml))
-        {
-            if (!match.Success) continue;
-
-            var importFile = match.Groups["Filename"].Value;
-            var key = CleanContentKeys(importFile); // Validate if CoalesceKey works well here
-            if (!key.Contains(prepend))
-            {
-                key = prepend + key;
-            }
-            if (!book.Content.AllFiles.TryGetLocalFileRefByKey(key, out var bookFile) || bookFile == null) continue;
-
-            var content = await bookFile.ReadContentAsBytesAsync();
-            importBuilder.Append(Encoding.UTF8.GetString(content));
-        }
-
-        stylesheetHtml = stylesheetHtml.Insert(0, importBuilder.ToString());
-
-        EscapeCssImportReferences(ref stylesheetHtml, apiBase, prepend);
-
-        EscapeFontFamilyReferences(ref stylesheetHtml, apiBase, prepend);
-
-
-        // Check if there are any background images and rewrite those urls
-        EscapeCssImageReferences(ref stylesheetHtml, apiBase, book);
+        stylesheetHtml = await InlineCssResourcesAsync(stylesheetHtml, apiBase, filename, book,
+            new HashSet<string>(StringComparer.Ordinal), 0, ct);
 
         var styleContent = RemoveWhiteSpaceFromStylesheets(stylesheetHtml);
 
@@ -333,13 +240,43 @@ public partial class BookService(
         return RemoveWhiteSpaceFromStylesheets($"{CssScopeClass} {styleContent}");
     }
 
+    private async Task<string> InlineCssResourcesAsync(string css, string apiBase, string owner, EpubBookRef book,
+        HashSet<string> visited, int depth, CancellationToken ct)
+    {
+        if (depth > 16) return "";
+        foreach (Match match in Parser.CssImportUrlRegex.Matches(css))
+        {
+            var href = match.Groups["Filename"].Value;
+            if (!IsLocalCssReference(href)) continue;
+            var key = CoalesceKeyForAnyFile(book, EpubResourcePath.Resolve(owner, href));
+            var replacement = "";
+            if (visited.Add(key) && book.Content.AllFiles.TryGetLocalFileRefByKey(key, out var file) && file != null)
+                replacement = await InlineCssResourcesAsync(Encoding.UTF8.GetString(await file.ReadContentAsBytesAsync()),
+                    apiBase, file.FilePath, book, visited, depth + 1, ct);
+            css = css.Replace(match.Value, replacement);
+        }
+        return Regex.Replace(css, """url\(\s*(?<quote>['"]?)(?<path>.*?)\k<quote>\s*\)""", match =>
+        {
+            var href = match.Groups["path"].Value;
+            if (!IsLocalCssReference(href)) return match.Value;
+            var key = CoalesceKeyForAnyFile(book, EpubResourcePath.Resolve(owner, href));
+            var fragment = href.Contains('#') ? href[href.IndexOf('#')..] : "";
+            return "url('" + apiBase + Uri.EscapeDataString(key) + fragment + "')";
+        }, RegexOptions.IgnoreCase, Parser.RegexTimeout);
+    }
+
+    private static bool IsLocalCssReference(string href) => !string.IsNullOrWhiteSpace(href) &&
+        !href.StartsWith('#') && !href.StartsWith("//", StringComparison.Ordinal) &&
+        !Uri.TryCreate(href, UriKind.Absolute, out _);
+
     private static void EscapeCssImportReferences(ref string stylesheetHtml, string apiBase, string prepend)
     {
         foreach (Match match in Parser.CssImportUrlRegex.Matches(stylesheetHtml))
         {
             if (!match.Success) continue;
             var importFile = match.Groups["Filename"].Value;
-            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + NormalizeContentKey(prepend + importFile));
+            if (!IsLocalCssReference(importFile) || match.Value.Contains("local(", StringComparison.OrdinalIgnoreCase)) continue;
+            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + Uri.EscapeDataString(NormalizeContentKey(prepend + Uri.UnescapeDataString(importFile))));
         }
     }
 
@@ -349,7 +286,8 @@ public partial class BookService(
         {
             if (!match.Success) continue;
             var importFile = match.Groups["Filename"].Value;
-            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + NormalizeContentKey(prepend + importFile));
+            if (!IsLocalCssReference(importFile) || match.Value.Contains("local(", StringComparison.OrdinalIgnoreCase)) continue;
+            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + Uri.EscapeDataString(NormalizeContentKey(prepend + Uri.UnescapeDataString(importFile))));
         }
     }
 
@@ -364,7 +302,7 @@ public partial class BookService(
             var key = CleanContentKeys(importFile);
             if (!book.Content.AllFiles.ContainsLocalFileRefWithKey(key)) continue;
 
-            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + key);
+            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + Uri.EscapeDataString(key));
         }
     }
 
@@ -417,14 +355,14 @@ public partial class BookService(
         AnnotationHelper.InjectMultiElementAnnotations(doc, multiElementAnnotations);
     }
 
-    private static void ScopeImages(HtmlDocument doc, EpubBookRef book, string apiBase)
+    private static void ScopeImages(HtmlDocument doc, EpubBookRef book, string apiBase, string owner)
     {
-        ScopeHtmlImageCollection(book, apiBase, doc.DocumentNode.SelectNodes("//img"));
-        ScopeHtmlImageCollection(book, apiBase, doc.DocumentNode.SelectNodes("//image"));
-        ScopeHtmlImageCollection(book, apiBase, doc.DocumentNode.SelectNodes("//svg"));
+        ScopeHtmlImageCollection(book, apiBase, doc.DocumentNode.SelectNodes("//img"), owner);
+        ScopeHtmlImageCollection(book, apiBase, doc.DocumentNode.SelectNodes("//image"), owner);
+        ScopeHtmlImageCollection(book, apiBase, doc.DocumentNode.SelectNodes("//svg"), owner);
     }
 
-    private static void ScopeHtmlImageCollection(EpubBookRef book, string apiBase, HtmlNodeCollection? images)
+    private static void ScopeHtmlImageCollection(EpubBookRef book, string apiBase, HtmlNodeCollection? images, string owner)
     {
         if (images == null) return;
 
@@ -436,10 +374,10 @@ public partial class BookService(
 
             if (string.IsNullOrEmpty(key)) continue;
 
-            var imageFile = GetKeyForImage(book, image.Attributes[key].Value);
+            var imageFile = GetKeyForImage(book, image.Attributes[key].Value, owner);
             image.Attributes.Remove(key);
 
-            if (!imageFile.StartsWith("http"))
+            if (!Uri.TryCreate(imageFile, UriKind.Absolute, out _) && !imageFile.StartsWith("//", StringComparison.Ordinal))
             {
                 // UrlEncode here to transform ../ into an escaped version, which avoids blocking on nginx
                 image.Attributes.Add(key, $"{apiBase}" + Uri.EscapeDataString(imageFile));
@@ -462,28 +400,11 @@ public partial class BookService(
     /// <param name="book"></param>
     /// <param name="imageFile"></param>
     /// <returns></returns>
-    private static string GetKeyForImage(EpubBookRef book, string imageFile)
+    private static string GetKeyForImage(EpubBookRef book, string imageFile, string owner = "")
     {
+        if (Uri.TryCreate(imageFile, UriKind.Absolute, out _) || imageFile.StartsWith("//", StringComparison.Ordinal)) return imageFile;
         if (book.Content.Images.ContainsLocalFileRefWithKey(imageFile)) return imageFile;
-
-        var correctedKey = book.Content.Images.Local.Select(s => s.Key).SingleOrDefault(s => s.EndsWith(imageFile));
-        if (correctedKey != null)
-        {
-            imageFile = correctedKey;
-        }
-        else if (imageFile.StartsWith(".."))
-        {
-            // There are cases where the key is defined static like OEBPS/Images/1-4.jpg but reference is ../Images/1-4.jpg
-            correctedKey =
-                book.Content.Images.Local.Select(s => s.Key).SingleOrDefault(s => s.EndsWith(imageFile.Replace("..", string.Empty)));
-            if (correctedKey != null)
-            {
-                imageFile = correctedKey;
-            }
-        }
-
-
-        return imageFile;
+        return CoalesceKeyForAnyFile(book, EpubResourcePath.Resolve(owner, imageFile));
     }
 
     private static string PrepareFinalHtml(HtmlDocument doc, HtmlNode body)
@@ -516,7 +437,7 @@ public partial class BookService(
         }
     }
 
-    private async Task InlineStyles(HtmlDocument doc, EpubBookRef book, string apiBase, HtmlNode body, CancellationToken ct = default)
+    private async Task InlineStyles(HtmlDocument doc, EpubBookRef book, string apiBase, HtmlNode body, string owner, CancellationToken ct = default)
     {
         var inlineStyles = doc.DocumentNode.SelectNodes("//style");
         // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
@@ -524,7 +445,7 @@ public partial class BookService(
         {
             foreach (var inlineStyle in inlineStyles)
             {
-                var styleContent = await ScopeStyles(inlineStyle.InnerHtml, apiBase, "", book, ct);
+                var styleContent = await ScopeStyles(inlineStyle.InnerHtml, apiBase, owner, book, ct);
                 body.PrependChild(HtmlNode.CreateNode($"<style>{styleContent}</style>"));
             }
         }
@@ -535,20 +456,8 @@ public partial class BookService(
         {
             foreach (var styleLinks in styleNodes)
             {
-                var key = CleanContentKeys(styleLinks.Attributes["href"].Value);
-                // Some epubs are malformed the key in content.opf might be: content/resources/filelist_0_0.xml but the actual html links to resources/filelist_0_0.xml
-                // In this case, we will do a search for the key that ends with
-                if (!book.Content.Css.ContainsLocalFileRefWithKey(key))
-                {
-                    var correctedKey = book.Content.Css.Local.Select(s => s.Key).SingleOrDefault(s => s.EndsWith(key));
-                    if (correctedKey == null)
-                    {
-                        logger.LogError("Epub is Malformed, key: {Key} is not matching OPF file", key);
-                        continue;
-                    }
-
-                    key = correctedKey;
-                }
+                var key = CoalesceKeyForAnyFile(book, EpubResourcePath.Resolve(owner, styleLinks.Attributes["href"].Value));
+                if (!book.Content.Css.ContainsLocalFileRefWithKey(key)) continue;
 
                 try
                 {
@@ -574,7 +483,7 @@ public partial class BookService(
 
     private ComicInfo? GetEpubComicInfo(string filePath)
     {
-        EpubBookLease? epubBookLease = null;
+        EpubBookOpener.Lease? epubBookLease = null;
 
         try
         {
@@ -813,7 +722,7 @@ public partial class BookService(
         }
     }
 
-    private EpubBookLease OpenEpubWithFallback(string filePath)
+    private EpubBookOpener.Lease OpenEpubWithFallback(string filePath)
     {
         try
         {
@@ -973,6 +882,16 @@ public partial class BookService(
         return false;
     }
 
+    private async Task<List<EpubNavigationItemRef>?> GetOptionalNavigationAsync(EpubBookRef book)
+    {
+        try { return await book.GetNavigationAsync(); }
+        catch (EpubReaderException ex)
+        {
+            logger.LogWarning(ex, "Optional EPUB navigation is invalid; using spine navigation");
+            return null;
+        }
+    }
+
     private async Task<List<VirtualEpubPage>> GetSingleSpineNavigationPagesAsync(EpubBookRef book,
         CancellationToken ct = default)
     {
@@ -982,7 +901,7 @@ public partial class BookService(
         if (readingOrder.Count != 1) return [];
 
         var mappings = await CreateKeyToPageMappingAsync(book, ct);
-        var navItems = await book.GetNavigationAsync();
+        var navItems = await GetOptionalNavigationAsync(book);
         if (navItems == null) return [];
 
         var pages = new List<VirtualEpubPage>();
@@ -1001,6 +920,13 @@ public partial class BookService(
             pages.Add(new VirtualEpubPage(navigationItem.Title ?? string.Empty, key, anchor));
         }
 
+        var document = new HtmlDocument();
+        document.LoadHtml(await readingOrder[0].ReadContentAsync());
+        var nodes = document.DocumentNode.SelectSingleNode("//body")?.Descendants().ToList() ?? [];
+        int Position(VirtualEpubPage p) => string.IsNullOrWhiteSpace(p.Anchor) ? -1 : nodes.FindIndex(n =>
+            n.GetAttributeValue("id", "") == p.Anchor || n.GetAttributeValue("name", "") == p.Anchor);
+        pages = pages.Where(p => string.IsNullOrWhiteSpace(p.Anchor) || Position(p) >= 0)
+            .OrderBy(Position).ToList();
         return pages.Count > 1 ? pages : [];
     }
 
@@ -1103,29 +1029,7 @@ public partial class BookService(
         return key.Replace("../", string.Empty);
     }
 
-    public static string NormalizeContentKey(string key)
-    {
-        if (string.IsNullOrWhiteSpace(key)) return key;
-        if (key.StartsWith("http", StringComparison.OrdinalIgnoreCase) || key.StartsWith("//", StringComparison.Ordinal))
-        {
-            return key;
-        }
-
-        var segments = new Stack<string>();
-        foreach (var segment in key.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (segment == ".") continue;
-            if (segment == "..")
-            {
-                if (segments.Count > 0) segments.Pop();
-                continue;
-            }
-
-            segments.Push(segment);
-        }
-
-        return string.Join("/", segments.Reverse());
-    }
+    public static string NormalizeContentKey(string key) => EpubResourcePath.Normalize(key);
 
     public async Task<Dictionary<string, int>> CreateKeyToPageMappingAsync(EpubBookRef book,
         CancellationToken ct = default)
@@ -1134,9 +1038,9 @@ public partial class BookService(
         var pageCount = 0;
         foreach (var contentFileRef in await book.GetReadingOrderAsync())
         {
-            if (contentFileRef.ContentType != EpubContentType.XHTML_1_1) continue;
+            // Each spine occurrence consumes a page; generic links target its first occurrence.
             // Some keys are different than FilePath, so we add both to ease loookup
-            dict.Add(contentFileRef.FilePath, pageCount); // FileName -> FilePath
+            dict.TryAdd(contentFileRef.FilePath, pageCount); // FileName -> FilePath
             dict.TryAdd(contentFileRef.Key, pageCount); // FileName -> FilePath
             pageCount += 1;
         }
@@ -1733,13 +1637,21 @@ public partial class BookService(
     /// <returns></returns>
     private async Task<string> ScopePage(HtmlDocument doc, EpubBookRef book, string apiBase, HtmlNode body,
         Dictionary<string, int> mappings, int page, List<PersonalToCDto> ptocBookmarks, List<AnnotationDto> annotations,
-        CancellationToken ct = default)
+        string owner, CancellationToken ct = default)
     {
-        await InlineStyles(doc, book, apiBase, body, ct);
+        await InlineStyles(doc, book, apiBase, body, owner, ct);
 
+        foreach (var anchor in doc.DocumentNode.Descendants("a"))
+        {
+            var href = anchor.GetAttributeValue("href", "");
+            if (!IsLocalCssReference(href)) continue;
+            var fragment = href.Contains('#') ? href[href.IndexOf('#')..] : "";
+            var resolved = CoalesceKeyForAnyFile(book, EpubResourcePath.Resolve(owner, href));
+            anchor.SetAttributeValue("href", EpubResourcePath.EncodePath(resolved) + fragment);
+        }
         RewriteAnchors(page, doc, mappings);
 
-        ScopeImages(doc, book, apiBase);
+        ScopeImages(doc, book, apiBase, owner);
 
         // Inject PTOC Bookmark Icons
         InjectTextBookmarks(doc, ptocBookmarks);
@@ -1793,12 +1705,14 @@ public partial class BookService(
         var normalizedKey = NormalizeContentKey(key);
         if (book.Content.AllFiles.ContainsLocalFileRefWithKey(normalizedKey)) return normalizedKey;
 
+        var fullMatch = book.Content.AllFiles.Local.FirstOrDefault(file =>
+            string.Equals(NormalizeContentKey(file.FilePath), normalizedKey, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(NormalizeContentKey(file.Key), normalizedKey, StringComparison.OrdinalIgnoreCase));
+        if (fullMatch != null) return fullMatch.Key;
         var normalizedFileName = Path.GetFileName(normalizedKey);
-        var correctedFile = book.Content.AllFiles.Local.SingleOrDefault(file =>
-            string.Equals(NormalizeContentKey(file.FilePath), normalizedKey, StringComparison.Ordinal) ||
-            string.Equals(Path.GetFileName(file.FilePath), normalizedFileName, StringComparison.Ordinal) ||
-            string.Equals(file.Key, normalizedFileName, StringComparison.Ordinal));
-        if (correctedFile != null) return correctedFile.Key;
+        var candidates = book.Content.AllFiles.Local.Where(file =>
+            string.Equals(Path.GetFileName(file.FilePath), normalizedFileName, StringComparison.OrdinalIgnoreCase)).Take(2).ToList();
+        if (candidates.Count == 1) return candidates[0].Key;
 
         var cleanedKey = CleanContentKeys(key);
         if (book.Content.AllFiles.ContainsLocalFileRefWithKey(cleanedKey)) return cleanedKey;
@@ -1860,7 +1774,7 @@ public partial class BookService(
 
         var mappings = await CreateKeyToPageMappingAsync(book, ct);
 
-        var navItems = await book.GetNavigationAsync();
+        var navItems = await GetOptionalNavigationAsync(book);
         var chaptersList = new List<BookChapterItem>();
 
         if (navItems != null)
@@ -1883,7 +1797,8 @@ public partial class BookService(
             .FirstOrDefault(k => k.Equals("TOC.XHTML", StringComparison.InvariantCultureIgnoreCase) ||
             k.Equals("NAVIGATION.XHTML", StringComparison.InvariantCultureIgnoreCase));
 
-        if (string.IsNullOrEmpty(tocPage)) return chaptersList;
+        if (string.IsNullOrEmpty(tocPage)) return (await book.GetReadingOrderAsync())
+            .Select((content, index) => new BookChapterItem { Title = $"{index + 1} Page", Page = index, Part = "", Children = [] }).ToList();
         if (!book.Content.Html.TryGetLocalFileRefByKey(tocPage, out var file) || file == null) return chaptersList;
         var content = await file.ReadContentAsync();
 
@@ -2046,7 +1961,7 @@ public partial class BookService(
                     body = doc.DocumentNode.SelectSingleNode("/html/body");
                 }
 
-                return await ScopePage(doc, book, apiBase, body!, mappings, page, ptocBookmarks, annotations, ct);
+                return await ScopePage(doc, book, apiBase, body!, mappings, page, ptocBookmarks, annotations, contentFileRef.FilePath, ct);
             }
         } catch (Exception ex)
         {
@@ -2089,48 +2004,31 @@ public partial class BookService(
         }
 
         var nextAnchor = page + 1 < virtualPages.Count ? virtualPages[page + 1].Anchor : string.Empty;
-        TrimBodyToVirtualPage(body!, virtualPages[page].Anchor, nextAnchor);
-        return await ScopePage(doc, book, apiBase, body!, mappings, page, ptocBookmarks, annotations, ct);
+        TrimBodyToVirtualPage(body!, page == 0 ? null : virtualPages[page].Anchor, nextAnchor);
+        return await ScopePage(doc, book, apiBase, body!, mappings, page, ptocBookmarks, annotations, contentFileRef.FilePath, ct);
     }
 
     private static void TrimBodyToVirtualPage(HtmlNode body, string? startAnchor, string? nextAnchor)
     {
-        var children = body.ChildNodes.ToList();
-        if (children.Count == 0) return;
-
-        var startIndex = FindTopLevelAnchorIndex(body, startAnchor);
-        var endIndex = FindTopLevelAnchorIndex(body, nextAnchor);
-        if (endIndex <= startIndex) endIndex = children.Count;
-
-        for (var i = children.Count - 1; i >= 0; i--)
+        var nodes = body.Descendants().ToList();
+        int Boundary(string? anchor, int fallback) => string.IsNullOrWhiteSpace(anchor) ? fallback :
+            nodes.FindIndex(n => n.GetAttributeValue("id", "") == anchor.TrimStart('#') ||
+                                n.GetAttributeValue("name", "") == anchor.TrimStart('#'));
+        var start = Boundary(startAnchor, 0);
+        var end = Boundary(nextAnchor, nodes.Count);
+        if (start < 0 || end < 0 || end <= start) throw new InvalidDataException("Invalid EPUB anchor interval");
+        var keep = nodes.Skip(start).Take(end - start).ToHashSet();
+        foreach (var node in keep.ToList())
+            for (var ancestor = node.ParentNode; ancestor != null && ancestor != body; ancestor = ancestor.ParentNode)
+                keep.Add(ancestor);
+        foreach (var node in nodes.AsEnumerable().Reverse())
+            if (!keep.Contains(node)) node.Remove();
+        // Retained ancestors provide structure only; an earlier anchor must not appear on a later page.
+        foreach (var ancestor in nodes.Take(start).Where(keep.Contains))
         {
-            if (i < startIndex || i >= endIndex)
-            {
-                children[i].Remove();
-            }
+            ancestor.Attributes.Remove("id");
+            ancestor.Attributes.Remove("name");
         }
-    }
-
-    private static int FindTopLevelAnchorIndex(HtmlNode body, string? anchor)
-    {
-        if (string.IsNullOrWhiteSpace(anchor)) return 0;
-
-        var normalizedAnchor = anchor.TrimStart('#');
-        var anchorNode = body.Descendants()
-            .FirstOrDefault(node =>
-                string.Equals(node.GetAttributeValue("id", string.Empty), normalizedAnchor, StringComparison.Ordinal) ||
-                string.Equals(node.GetAttributeValue("name", string.Empty), normalizedAnchor, StringComparison.Ordinal));
-        if (anchorNode == null) return 0;
-
-        var topLevelNode = anchorNode;
-        while (topLevelNode.ParentNode != null && topLevelNode.ParentNode != body)
-        {
-            topLevelNode = topLevelNode.ParentNode;
-        }
-
-        var children = body.ChildNodes.ToList();
-        var index = children.IndexOf(topLevelNode);
-        return index < 0 ? 0 : index;
     }
 
     public async Task<string> GetBookPageText(int page, int chapterId, string cachedTextPath, CancellationToken ct = default)

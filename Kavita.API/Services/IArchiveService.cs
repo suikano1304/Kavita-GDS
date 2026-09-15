@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO.Compression;
 using System.Threading.Tasks;
+using System.Threading;
 using Kavita.Common;
 using Kavita.Models.DTOs.Archive;
 using Kavita.Models.Entities.Enums;
@@ -11,6 +12,7 @@ namespace Kavita.API.Services;
 
 public interface IArchiveService
 {
+    Task<string> CreateDownloadArchiveAsync(IReadOnlyList<DownloadArchiveEntry> files, Func<Tuple<string, float>, Task> progress, CancellationToken ct = default);
     void ExtractArchive(string archivePath, string extractPath);
     int GetNumberOfPagesFromArchive(string archivePath);
     string GetCoverImage(string archivePath, string fileName, string outputDirectory, EncodeFormat format, CoverImageSize size = CoverImageSize.Default);

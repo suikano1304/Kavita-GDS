@@ -25,12 +25,12 @@ public class ScanFolderSchedulingTests(ITestOutputHelper output) : AbstractDbTes
     {
         var (uow, context, _) = await CreateDatabase();
         var library = new LibraryBuilder("Folder request fixture", LibraryType.GDS)
-            .WithFolders([new FolderPath {Path = "/library/completed/"}]).Build();
+            .WithFolders([new FolderPath {Path = Parser.NormalizePath(Path.GetFullPath("/library/completed/"))}]).Build();
         var requested = new SeriesBuilder("Series A").Build();
         var sibling = new SeriesBuilder("Series B").Build();
-        requested.FolderPath = sibling.FolderPath = "/library/completed/category";
-        requested.LowestFolderPath = "/library/completed/category/series-a";
-        sibling.LowestFolderPath = "/library/completed/category/series-b";
+        requested.FolderPath = sibling.FolderPath = Parser.NormalizePath(Path.GetFullPath("/library/completed/category"));
+        requested.LowestFolderPath = Parser.NormalizePath(Path.GetFullPath("/library/completed/category/series-a"));
+        sibling.LowestFolderPath = Parser.NormalizePath(Path.GetFullPath("/library/completed/category/series-b"));
         library.Series = [requested, sibling];
         context.Library.Add(library);
         await context.SaveChangesAsync();

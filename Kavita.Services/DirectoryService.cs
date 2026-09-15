@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
@@ -356,6 +356,18 @@ public class DirectoryService : IDirectoryService
     /// <param name="directoryPath"></param>
     /// <returns></returns>
     public void ClearDirectory(string directoryPath)
+    {
+        var path = FileSystem.Path.GetFullPath(directoryPath).TrimEnd('/', '\\');
+        if (path == FileSystem.Path.GetFullPath(CacheDirectory).TrimEnd('/', '\\') ||
+            path == FileSystem.Path.GetFullPath(TempDirectory).TrimEnd('/', '\\'))
+        {
+            Kavita.Services.Helpers.CacheActivityGate.Purge(() => ClearDirectoryCore(directoryPath));
+            return;
+        }
+        ClearDirectoryCore(directoryPath);
+    }
+
+    private void ClearDirectoryCore(string directoryPath)
     {
         directoryPath = directoryPath.Replace(Environment.NewLine, string.Empty);
         var di = FileSystem.DirectoryInfo.New(directoryPath);

@@ -654,6 +654,7 @@ public class OpdsController(
             return PhysicalFile(path, download.IsCbz ? OpdsDownloadDescriptor.ComicBookMime : contentType, download.Filename, true);
         }
 
+        using var activity = Kavita.Services.Helpers.CacheActivityGate.Enter();
         // Serialize cache extraction and packaging. Never expose a partially written ZIP to another request.
         var gate = DownloadLocks[(int)((uint)chapterId % DownloadLocks.Length)];
         await gate.WaitAsync(HttpContext.RequestAborted);
@@ -664,7 +665,7 @@ public class OpdsController(
             using (var archive = ZipFile.Open(outputPath, ZipArchiveMode.Create))
             {
                 var pageNumber = 0;
-                foreach (var source in files.OrderByNatural(f => f.FilePath))
+                foreach (var source in files.OrderByNatural(f => f.FilePath, StringComparer.OrdinalIgnoreCase))
                 {
                     // Extract each source independently so duplicate page basenames cannot overwrite another file.
                     var extractPath = outputPath + ".pages";

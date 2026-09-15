@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO.Abstractions;
 using System.IO.Abstractions.TestingHelpers;
 using System.IO.Compression;
@@ -114,9 +114,15 @@ public class ArchiveServiceTests
         _directoryService.ClearAndDeleteDirectory(extractDirectory);
 
         var sw = Stopwatch.StartNew();
+        if (!File.Exists(Path.Join(testDirectory, archivePath)))
+        {
+            Assert.Throws<Kavita.Common.KavitaException>(() => _archiveService.ExtractArchive(Path.Join(testDirectory, archivePath), extractDirectory));
+            Assert.False(Directory.Exists(extractDirectory));
+            return;
+        }
         _archiveService.ExtractArchive(Path.Join(testDirectory, archivePath), extractDirectory);
         var di1 = new DirectoryInfo(extractDirectory);
-        Assert.Equal(expectedFileCount, di1.Exists ? _directoryService.GetFiles(extractDirectory, searchOption:SearchOption.AllDirectories).Count() : 0);
+        Assert.Equal(expectedFileCount, di1.Exists ? _directoryService.GetFilesWithExtension(extractDirectory, Parser.ImageFileExtensions).Count() : 0);
         _testOutputHelper.WriteLine($"Processed in {sw.ElapsedMilliseconds} ms");
 
         _directoryService.ClearAndDeleteDirectory(extractDirectory);

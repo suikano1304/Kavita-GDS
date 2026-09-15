@@ -222,3 +222,23 @@ PASS 기준:
 - Reopening a completed streamed chapter must preserve its saved completion and modification time when neighbouring image requests arrive backwards or concurrently. Image retrieval must not create reading-session activity; Panels and `saveProgress=false` remain excluded from progress writes.
 - Web and OPDS continuation must follow the furthest chapter with progress. Earlier incomplete chapters or newer manual edits must not pull the recommendation backwards. At 90%, recommend the next chapter without rewriting the stored position or exact completion; at the end, omit OPDS continuation and safely handle HTTP 204 in the web client.
 - Explicit web rewind, unread status and direct rereading must remain available. Verify two users' records independently, live OPDS client reopening, and scoped restoration of all test-induced reading-state changes.
+
+## EPUB·압축 캐시·웹 다운로드 통합 회귀
+
+- EPUB 2/3의 존재하지 않는 선택적 NCX 링크만 제외하고 유효한 목차와 본문을 보존한다. 선언된 EPUB 3 nav 리소스가 없어도 정상 spine에서 대체 목차를 만든다.
+- 표지 메타데이터가 XHTML을 가리키면 실제 이미지 참조를 해석한다. 선택적 표지/목차 실패와 실제 본문 부재를 구분한다.
+- 중복 manifest/spine의 모든 본문 발생을 보존하며 페이지 수, 페이지 인덱스와 목차가 같은 순서를 사용한다. 일반 링크는 첫 발생으로 연결한다.
+- 중첩된 단일 본문을 실제 앵커 경계로 나누고 상위 태그, 첫 장 이전 내용, 각 장의 고유 본문이 보존되는지 검사한다.
+- 상대·퍼센트 인코딩·대소문자 경로를 실제 ZIP 항목으로 해석한다. CSS import와 이미지·폰트 URL의 전체 `file` 쿼리 값을 한 번 인코딩한다.
+- 기존 0페이지 메타데이터를 1페이지 및 다중 페이지로 자동 갱신한다. 선택한 파일과 관련 합계만 변경하고 동시/반복 요청으로 합계가 중복 증가하지 않아야 한다.
+- Windows에서 실패한 EPUB 열기의 파일 핸들이 닫히는지 확인한다. 같은 원본 버전의 검증된 보정본은 공유하고, 원본 변경과 사용 중 정리에서도 활성 독자를 보존한다.
+- 실제 이미지로 중복 ZIP 경로, 루트/하위 폴더 충돌, 자연정렬 키 동률을 검증한다. 모든 항목을 보존하고 동률에는 ZIP 등장 순서를 유지한다.
+- 여러 압축파일과 낱장 이미지가 섞인 챕터에서 입력 순서 양쪽을 시험한다. 웹 페이지와 OPDS의 이미지 수·순서·해시가 일치해야 한다.
+- 추출 완료 표식은 검증 후에만 게시한다. 중간 실패, 손실된 캐시 페이지, 연결 파일 목록 변경, 취소와 디스크 부족 후 부분 캐시를 재사용하지 않는다.
+- 웹 다운로드는 요청별 파일을 만들고 전체 원본을 보존한다. 원본 변경 후 재다운로드, 동시 요청, 취소, 정확한 Range 바이트와 실패 시 정리를 확인한다.
+- 시리즈·권·외전·소수 권·복수 파일의 다운로드 이름은 메타데이터로 만든다. Windows 금지문자, 예약 이름, 후행 점/공백과 대소문자 무시 충돌을 처리한다.
+- 처리 파일 수에 따라 준비 진행률을 증가시키고 ZIP 완성 전 완료를 알리지 않는다. 실패 요청은 완료 이벤트를 보내지 않는다.
+- 캐시 정리와 EPUB 이미지·폰트 요청을 경쟁시킨다. 캐시 소실만 한 번 재시도하고 원본 부재나 지속 오류에는 무한 재시도하지 않는다.
+- 메서드 테스트에 더해 격리 DB의 API→Angular→재열기, Linux 경로/오류 처리와 배포할 각 아키텍처를 확인한다. 기존 사용자 완료 상태·책갈피·프로필은 보존한다.
+- 북마크·로그 ZIP도 응답 종료·취소 후 요청별 임시 파일을 정리한다. 작성 중인 로그는 시작 시점의 길이로 제한해 스냅샷을 만든다.
+- 선택적 외부 메타데이터 ID가 없는 북마크 조회 결과를 그대로 다운로드 요청으로 보낼 수 있어야 한다. 빈 북마크 선택은 정상적인 400 응답으로 처리한다.

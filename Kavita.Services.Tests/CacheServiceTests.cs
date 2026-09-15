@@ -1,4 +1,4 @@
-﻿using System.IO.Abstractions.TestingHelpers;
+using System.IO.Abstractions.TestingHelpers;
 using Kavita.API.Services;
 using Kavita.Database.Tests;
 using Kavita.Models.Builders;
@@ -60,7 +60,7 @@ public class CacheServiceTests(ITestOutputHelper outputHelper): AbstractDbTest(o
     #region Ensure
 
     [Fact]
-    public async Task Ensure_DirectoryAlreadyExists_DontExtractAnything()
+    public async Task Ensure_EmptyExtractionIsRejectedAndNeverCached()
     {
         var (unitOfWork, context, _) = await CreateDatabase();
 
@@ -87,7 +87,8 @@ public class CacheServiceTests(ITestOutputHelper outputHelper): AbstractDbTest(o
 
         await context.SaveChangesAsync();
 
-        await cleanupService.Ensure(1);
+        await Assert.ThrowsAsync<Kavita.Common.KavitaException>(() => cleanupService.Ensure(1));
+        await Assert.ThrowsAsync<Kavita.Common.KavitaException>(() => cleanupService.Ensure(1));
         Assert.Empty(ds.GetFiles(filesystem.Path.Join(CacheDirectory, "1"), searchOption:SearchOption.AllDirectories));
     }
 

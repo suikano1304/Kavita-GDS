@@ -176,6 +176,9 @@ export class DownloadService {
 
         if (evt.eventType === 'started') {
           this.debugLog(`DownloadProgress started for id=${active.id}`);
+        } else if (evt.eventType === 'updated' && active.status === 'preparing') {
+          const progress = Number(evt.body?.progress ?? evt.body?.Progress);
+          if (Number.isFinite(progress)) this._updateItem(active.id, {progress: Math.max(0, Math.min(99, progress * 100))});
         } else if (evt.eventType === 'ended') {
           // Safety net: if the stream somehow missed completion, mark it done
           if (active.status !== 'completed') {

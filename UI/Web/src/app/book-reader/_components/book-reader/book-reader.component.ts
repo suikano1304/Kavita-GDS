@@ -998,7 +998,7 @@ export class BookReaderComponent implements OnInit, AfterViewInit, OnDestroy {
       forkJoin({
         chapter: this.seriesService.getChapter(this.chapterId),
         progress: this.readerService.getProgress(this.chapterId),
-        chapters: this.bookService.getBookChapters(this.chapterId),
+        chapters: this.bookService.getBookChapters(this.chapterId).pipe(catchError(() => of([] as BookChapterItem[]))),
       }).subscribe({
         next: ({chapter, progress, chapters}) => {
           this.authorText.set(chapter.writers.map(p => p.name).join(', '));

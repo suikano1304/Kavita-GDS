@@ -13,11 +13,13 @@ using Kavita.Common;
 using Kavita.Common.Helpers;
 using Kavita.Models.Constants;
 using Kavita.Models.DTOs.Jobs;
+using Kavita.Models.DTOs.Archive;
 using Kavita.Models.DTOs.MediaErrors;
 using Kavita.Models.DTOs.Stats;
 using Kavita.Models.DTOs.Update;
 using Kavita.Models.Entities.Enums;
 using Kavita.Services.Scanner;
+using Kavita.Services.Helpers;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -148,11 +150,19 @@ public class ServerController(
     public async Task<ActionResult> GetLogs()
     {
         var files = backupService.GetLogFiles();
+        var activity = CacheActivityGate.Enter();
+        HttpContext.Response.RegisterForDispose(activity);
         try
         {
-            var zipPath = archiveService.CreateZipForDownload(files, "logs");
-            return PhysicalFile(zipPath, MimeTypeMap.GetMimeType(Path.GetExtension(zipPath)),
-                System.Web.HttpUtility.UrlEncode(Path.GetFileName(zipPath)), true);
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var entries = files.Select(path => new DownloadArchiveEntry(path,
+                DownloadFileName.Unique(Path.GetFileNameWithoutExtension(path), Path.GetExtension(path), used), false)).ToList();
+            var zipPath = await archiveService.CreateDownloadArchiveAsync(entries, _ => Task.CompletedTask, HttpContext.RequestAborted);
+            ActivityFileStream stream;
+            try { stream = new ActivityFileStream(zipPath, true, activity); }
+            catch { EpubManifestRepairHelper.DeleteQuietly(zipPath); throw; }
+            HttpContext.Response.RegisterForDispose(stream);
+            return File(stream, MimeTypeMap.GetMimeType(Path.GetExtension(zipPath)), "logs.zip", true);
         }
         catch (KavitaException ex)
         {

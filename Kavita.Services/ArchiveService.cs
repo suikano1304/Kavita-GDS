@@ -1,10 +1,13 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
+using Kavita.Services.Helpers;
 using System.Xml.Linq;
 using System.Xml.Serialization;
 using Kavita.API.Services;
@@ -32,6 +35,9 @@ public class ArchiveService(
     IMediaErrorService mediaErrorService)
     : IArchiveService
 {
+    private static readonly ConcurrentDictionary<string, object> ExtractionGates = new(StringComparer.Ordinal);
+    private const long MaxExpandedBytes = 32L * 1024 * 1024 * 1024;
+    private const int MaxPageEntries = 100000;
     private const string ComicInfoFilename = "ComicInfo.xml";
 
     /// <summary>
@@ -83,7 +89,7 @@ public class ArchiveService(
                 case ArchiveLibrary.Default:
                 {
                     using var archive = ZipFile.OpenRead(archivePath);
-                    return archive.Entries.Count(e => !Parser.HasBlacklistedFolderInPath(e.FullName) && Parser.IsImage(e.FullName));
+                    return OrderedPages(archive).Count;
                 }
                 case ArchiveLibrary.SharpCompress:
                 {
@@ -267,109 +273,68 @@ public class ArchiveService(
     /// <param name="tempFolder">Temp folder name to use for preparing the files. Will be created and deleted</param>
     /// <returns>Path to the temp zip</returns>
     /// <exception cref="KavitaException"></exception>
-    public string CreateZipForDownload(IEnumerable<string> files, string tempFolder)
-    {
-        var dateString = DateTime.UtcNow.ToShortDateString().Replace("/", "_");
-
-        var tempLocation = Path.Join(directoryService.TempDirectory, $"{tempFolder}_{dateString}");
-        var potentialExistingFile = directoryService.FileSystem.FileInfo.New(Path.Join(directoryService.TempDirectory, $"kavita_{tempFolder}_{dateString}.zip"));
-        if (potentialExistingFile.Exists)
-        {
-            // A previous download exists, just return it immediately
-            return potentialExistingFile.FullName;
-        }
-
-        directoryService.ExistOrCreate(tempLocation);
-
-        if (!directoryService.CopyFilesToDirectory(files, tempLocation))
-        {
-            throw new KavitaException("bad-copy-files-for-download");
-        }
-
-        var zipPath = Path.Join(directoryService.TempDirectory, $"kavita_{tempFolder}_{dateString}.zip");
-        try
-        {
-            ZipFile.CreateFromDirectory(tempLocation, zipPath);
-            // Remove the folder as we have the zip
-            directoryService.ClearAndDeleteDirectory(tempLocation);
-        }
-        catch (AggregateException ex)
-        {
-            logger.LogError(ex, "There was an issue creating temp archive");
-            throw new KavitaException("generic-create-temp-archive");
-        }
-
-        return zipPath;
-    }
+    public string CreateZipForDownload(IEnumerable<string> files, string tempFolder) =>
+        CreateZipFromFoldersForDownload(files.ToList(), tempFolder, _ => Task.CompletedTask);
 
     public string CreateZipFromFoldersForDownload(IList<string> files, string tempFolder, Func<Tuple<string, float>, Task> progressCallback)
     {
-        var dateString = DateTime.UtcNow.ToShortDateString().Replace("/", "_");
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var entries = files.Select(path => new DownloadArchiveEntry(path,
+            DownloadFileName.Unique(Path.GetFileNameWithoutExtension(path), Path.GetExtension(path), used))).ToList();
+        return CreateDownloadArchiveAsync(entries, progressCallback).GetAwaiter().GetResult();
+    }
 
-        var potentialExistingFile = directoryService.FileSystem.FileInfo.New(Path.Join(directoryService.TempDirectory, $"kavita_{tempFolder}_{dateString}.cbz"));
-        if (potentialExistingFile.Exists)
-        {
-            // A previous download exists, just return it immediately
-            return potentialExistingFile.FullName;
-        }
-
-        // Extract all the files to a temp directory and create zip on that
-        var tempLocation = Path.Join(directoryService.TempDirectory, $"{tempFolder}_{dateString}");
-        var totalFiles = files.Count + 1;
-        var count = 1f;
+    public async Task<string> CreateDownloadArchiveAsync(IReadOnlyList<DownloadArchiveEntry> files,
+        Func<Tuple<string, float>, Task> progress, CancellationToken ct = default)
+    {
+        using var activity = CacheActivityGate.Enter();
+        directoryService.ExistOrCreate(directoryService.TempDirectory);
+        var zipPath = Path.Join(directoryService.TempDirectory, $"download-{Guid.NewGuid():N}.zip");
         try
         {
-            directoryService.ExistOrCreate(tempLocation);
-            foreach (var path in files)
+            using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
             {
-                var tempPath = Path.Join(tempLocation, directoryService.FileSystem.Path.GetFileNameWithoutExtension(directoryService.FileSystem.FileInfo.New(path).Name));
-
-                // Image series need different handling
-                if (Parser.IsImage(path))
+                var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (var index = 0; index < files.Count; index++)
                 {
-                    var parentDirectory = directoryService.FileSystem.DirectoryInfo.New(path).Parent?.Name;
-                    tempPath = Path.Join(tempLocation, parentDirectory ?? directoryService.FileSystem.FileInfo.New(path).Name);
+                    ct.ThrowIfCancellationRequested();
+                    var file = files[index];
+                    if (Path.GetFileName(file.EntryName) != file.EntryName || !used.Add(file.EntryName))
+                        throw new InvalidDataException("Invalid or duplicate download name");
+                    var info = new FileInfo(file.SourcePath);
+                    var before = (info.Length, info.LastWriteTimeUtc);
+                    using var input = new FileStream(file.SourcePath, FileMode.Open, FileAccess.Read,
+                        file.RequireStableSource ? FileShare.Read : FileShare.ReadWrite, 81920, FileOptions.Asynchronous);
+                    var entry = zip.CreateEntry(file.EntryName, CompressionLevel.NoCompression);
+                    entry.LastWriteTime = new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+                    using (var output = entry.Open())
+                    {
+                        var buffer = new byte[81920];
+                        var remaining = before.Length;
+                        while (remaining > 0)
+                        {
+                            var count = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), ct);
+                            if (count == 0) throw new IOException("Download source was truncated");
+                            await output.WriteAsync(buffer.AsMemory(0, count), ct);
+                            remaining -= count;
+                        }
+                    }
+                    info.Refresh();
+                    if (file.RequireStableSource && before != (info.Length, info.LastWriteTimeUtc))
+                        throw new IOException("Download source changed during packaging");
+                    await progress(Tuple.Create(file.EntryName, (index + 1f) / (files.Count + 1f)));
                 }
-
-                if (Parser.IsArchive(path))
-                {
-                    // Archives don't need to be put into a subdirectory of the same name
-                    tempPath = directoryService.GetParentDirectoryName(tempPath);
-                }
-
-                progressCallback(Tuple.Create(directoryService.FileSystem.FileInfo.New(path).Name, (1.0f * totalFiles) / count));
-
-                directoryService.CopyFileToDirectory(path, tempPath);
-                count++;
             }
+            ct.ThrowIfCancellationRequested();
+            return zipPath;
         }
         catch
         {
-            throw new KavitaException("bad-copy-files-for-download");
+            EpubManifestRepairHelper.DeleteQuietly(zipPath);
+            throw;
         }
-
-        var zipPath = Path.Join(directoryService.TempDirectory, $"kavita_{tempFolder}_{dateString}.cbz");
-        try
-        {
-            ZipFile.CreateFromDirectory(tempLocation, zipPath);
-            // Remove the folder as we have the zip
-            directoryService.ClearAndDeleteDirectory(tempLocation);
-        }
-        catch (AggregateException ex)
-        {
-            logger.LogError(ex, "There was an issue creating temp archive");
-            throw new KavitaException("generic-create-temp-archive");
-        }
-
-        return zipPath;
     }
 
-
-    /// <summary>
-    /// Test if the archive path exists and an archive
-    /// </summary>
-    /// <param name="archivePath"></param>
-    /// <returns></returns>
     public bool IsValidArchive(string archivePath)
     {
         if (!File.Exists(archivePath))
@@ -483,30 +448,52 @@ public class ArchiveService(
     }
 
 
+    private static List<ZipArchiveEntry> OrderedPages(ZipArchive archive) => archive.Entries
+        .Where(e => !e.FullName.EndsWith('/') && !Parser.HasBlacklistedFolderInPath(e.FullName) && Parser.IsImage(e.FullName))
+        .OrderByNatural(e => e.FullName.Replace('\\', '/'), StringComparer.OrdinalIgnoreCase).ToList();
+
+    private static void CopyPage(Stream input, string destination, long expected, ref long written)
+    {
+        using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        var buffer = new byte[81920];
+        long pageBytes = 0;
+        int count;
+        while ((count = input.Read(buffer)) != 0)
+        {
+            pageBytes += count;
+            written += count;
+            if (written > MaxExpandedBytes || pageBytes > expected) throw new InvalidDataException("Archive expansion budget exceeded");
+            output.Write(buffer, 0, count);
+        }
+        if (pageBytes != expected) throw new InvalidDataException("Archive entry is truncated");
+    }
+
     private void ExtractArchiveEntities(IEnumerable<IArchiveEntry> entries, string extractPath)
     {
-        directoryService.ExistOrCreate(extractPath);
-        // TODO: Look into a Parallel.ForEach
-        foreach (var entry in entries)
+        Directory.CreateDirectory(extractPath);
+        var pages = entries.OrderByNatural(e => e.Key!.Replace('\\', '/'), StringComparer.OrdinalIgnoreCase).ToList();
+        if (pages.Count > MaxPageEntries || pages.Sum(e => e.Size) > MaxExpandedBytes)
+            throw new InvalidDataException("Archive expansion budget exceeded");
+        long written = 0;
+        for (var index = 0; index < pages.Count; index++)
         {
-            entry.WriteToDirectory(extractPath, new ExtractionOptions()
-            {
-                ExtractFullPath = true, // Don't flatten, let the flattener ensure correct order of nested folders
-                Overwrite = false
-            });
+            using var input = pages[index].OpenEntryStream();
+            CopyPage(input, Path.Join(extractPath, $"{index:D8}{Path.GetExtension(pages[index].Key)}"), pages[index].Size, ref written);
         }
     }
 
     private void ExtractArchiveEntries(ZipArchive archive, string extractPath)
     {
-        var needsFlattening = ArchiveNeedsFlattening(archive);
-        if (!archive.HasFiles() && !needsFlattening) return;
-
-        archive.ExtractToDirectory(extractPath, true);
-        if (!needsFlattening) return;
-
-        logger.LogDebug("Extracted archive is nested in root folder, flattening...");
-        directoryService.Flatten(extractPath);
+        var pages = OrderedPages(archive);
+        if (pages.Count > MaxPageEntries || pages.Sum(e => e.Length) > MaxExpandedBytes)
+            throw new InvalidDataException("Archive expansion budget exceeded");
+        Directory.CreateDirectory(extractPath);
+        long written = 0;
+        for (var index = 0; index < pages.Count; index++)
+        {
+            using var input = pages[index].Open();
+            CopyPage(input, Path.Join(extractPath, $"{index:D8}{Path.GetExtension(pages[index].FullName)}"), pages[index].Length, ref written);
+        }
     }
 
     /// <summary>
@@ -519,54 +506,40 @@ public class ArchiveService(
     /// <returns></returns>
     public void ExtractArchive(string archivePath, string extractPath)
     {
-        if (!IsValidArchive(archivePath)) return;
-
-        if (directoryService.FileSystem.Directory.Exists(extractPath)) return;
-
-        if (!directoryService.FileSystem.File.Exists(archivePath))
+        lock (ExtractionGates.GetOrAdd(Path.GetFullPath(extractPath), _ => new object()))
         {
-            logger.LogError("{Archive} does not exist on disk", archivePath);
-            throw new KavitaException($"{archivePath} does not exist on disk");
-        }
-
-        var sw = Stopwatch.StartNew();
-
-        try
-        {
-            var libraryHandler = CanOpen(archivePath);
-            switch (libraryHandler)
+            var info = new FileInfo(archivePath);
+            if (!info.Exists) throw new KavitaException("Archive source is missing");
+            var version = $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
+            var marker = Path.Join(extractPath, ".archive-complete");
+            if (File.Exists(marker) && File.ReadAllText(marker) == version) return;
+            var staging = extractPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + $".staging-{Guid.NewGuid():N}";
+            try
             {
-                case ArchiveLibrary.Default:
+                switch (CanOpen(archivePath))
                 {
-                    using var archive = ZipFile.OpenRead(archivePath);
-                    ExtractArchiveEntries(archive, extractPath);
-                    break;
+                    case ArchiveLibrary.Default:
+                        using (var archive = ZipFile.OpenRead(archivePath)) ExtractArchiveEntries(archive, staging);
+                        break;
+                    case ArchiveLibrary.SharpCompress:
+                        using (var archive = ArchiveFactory.OpenArchive(archivePath))
+                            ExtractArchiveEntities(archive.Entries.Where(e => !e.IsDirectory &&
+                                !Parser.HasBlacklistedFolderInPath(e.Key ?? "") && Parser.IsImage(e.Key)), staging);
+                        break;
+                    default: throw new InvalidDataException("Unsupported archive");
                 }
-                case ArchiveLibrary.SharpCompress:
-                {
-                    using var archive = ArchiveFactory.OpenArchive(archivePath);
-                    ExtractArchiveEntities(archive.Entries.Where(entry => !entry.IsDirectory
-                                                                          && !Parser.HasBlacklistedFolderInPath(Path.GetDirectoryName(entry.Key) ?? string.Empty)
-                                                                          && Parser.IsImage(entry.Key)), extractPath);
-                    break;
-                }
-                case ArchiveLibrary.NotSupported:
-                    logger.LogWarning("[ExtractArchive] This archive cannot be read: {ArchivePath}", archivePath);
-                    return;
-                default:
-                    logger.LogWarning("[ExtractArchive] There was an exception when reading archive stream: {ArchivePath}", archivePath);
-                    return;
+                info.Refresh();
+                if (version != $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}") throw new IOException("Archive changed during extraction");
+                File.WriteAllText(Path.Join(staging, ".archive-complete"), version);
+                if (Directory.Exists(extractPath)) Directory.Delete(extractPath, true);
+                Directory.Move(staging, extractPath);
             }
-
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Archive extraction failed");
+                throw new KavitaException("There was an error extracting the archive");
+            }
+            finally { if (Directory.Exists(staging)) Directory.Delete(staging, true); }
         }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "[ExtractArchive] There was a problem extracting {ArchivePath} to {ExtractPath}",archivePath, extractPath);
-            mediaErrorService.ReportMediaIssue(archivePath, MediaErrorProducer.ArchiveService,
-                "This archive cannot be read or not supported", ex);
-            throw new KavitaException(
-                $"There was an error when extracting {archivePath}. Check the file exists, has read permissions or the server OS can support all path characters.");
-        }
-        logger.LogDebug("Extracted archive to {ExtractPath} in {ElapsedMilliseconds} milliseconds", extractPath, sw.ElapsedMilliseconds);
     }
 }

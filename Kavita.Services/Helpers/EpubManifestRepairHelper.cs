@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Xml.Linq;
+using HtmlAgilityPack;
 
 namespace Kavita.Services.Helpers;
 
@@ -21,6 +22,9 @@ public static class EpubManifestRepairHelper
         {
             Directory.CreateDirectory(tempDirectory);
             using var source = ZipFile.OpenRead(sourcePath);
+            const long maxExpandedBytes = 4L * 1024 * 1024 * 1024;
+            if (source.Entries.Count > 100000 || source.Entries.Sum(e => e.Length) > maxExpandedBytes)
+                throw new InvalidDataException("EPUB repair expansion budget exceeded");
             var opfPath = GetOpfPath(source);
             if (string.IsNullOrWhiteSpace(opfPath)) return false;
 
@@ -33,16 +37,19 @@ public static class EpubManifestRepairHelper
                 opfDocument = XDocument.Load(opfStream, LoadOptions.PreserveWhitespace);
             }
 
+            var repairedPaths = NormalizeReferences(opfDocument, source, opfPath);
             var repairedManifest = RepairDuplicateManifestItems(opfDocument);
             var repairedMediaTypes = NormalizeImageMediaTypes(opfDocument);
             var repairedMissingReferences = RepairMissingManifestReferences(opfDocument, source, opfPath);
             var repairedSpine = RemoveMissingSpineItemRefs(opfDocument);
             var synthesizedEntries = RepairMissingEpub3NavDocument(opfDocument, source, opfPath);
-            if (!repairedManifest && !repairedMediaTypes && !repairedMissingReferences && !repairedSpine &&
+            if (!repairedPaths && !repairedManifest && !repairedMediaTypes && !repairedMissingReferences && !repairedSpine &&
                 synthesizedEntries.Count == 0) return false;
 
             repairedPath = Path.Join(tempDirectory, $"epub-manifest-repair-{Guid.NewGuid():N}.epub");
             using var repaired = ZipFile.Open(repairedPath, ZipArchiveMode.Create);
+            long written = 0;
+            var buffer = new byte[81920];
             foreach (var entry in source.Entries)
             {
                 var repairedEntry = repaired.CreateEntry(entry.FullName, CompressionLevel.Optimal);
@@ -58,7 +65,17 @@ public static class EpubManifestRepairHelper
                 }
 
                 using var input = entry.Open();
-                input.CopyTo(output);
+                long entryWritten = 0;
+                int count;
+                while ((count = input.Read(buffer)) != 0)
+                {
+                    written += count;
+                    entryWritten += count;
+                    if (written > maxExpandedBytes || entryWritten > entry.Length)
+                        throw new InvalidDataException("EPUB repair expansion budget exceeded");
+                    output.Write(buffer, 0, count);
+                }
+                if (entryWritten != entry.Length) throw new InvalidDataException("Truncated EPUB resource");
             }
 
             foreach (var synthesizedEntry in synthesizedEntries)
@@ -229,7 +246,33 @@ public static class EpubManifestRepairHelper
             if (manifestById.TryGetValue(content, out var manifestItem))
             {
                 var href = manifestItem.Attribute("href")?.Value;
-                if (!string.IsNullOrWhiteSpace(href) && EntryExistsForHref(source, opfPath, href)) continue;
+                if (!string.IsNullOrWhiteSpace(href) && EntryExistsForHref(source, opfPath, href))
+                {
+                    if (GetMediaType(href) != "application/xhtml+xml") continue;
+                    var htmlEntry = FindEntry(source, GetArchivePathForHref(opfPath, href));
+                    var doc = new HtmlDocument();
+                    using (var reader = new StreamReader(htmlEntry!.Open())) doc.LoadHtml(reader.ReadToEnd());
+                    var image = doc.DocumentNode.Descendants()
+                        .Where(n => n.Name is "img" or "image")
+                        .Select(n => n.GetAttributeValue("src", n.GetAttributeValue("href", n.GetAttributeValue("xlink:href", ""))))
+                        .Select(src => FindEntry(source, GetArchivePathForHref(htmlEntry.FullName, src)))
+                        .FirstOrDefault(e => e != null && GetMediaType(e.FullName).StartsWith("image/", StringComparison.Ordinal));
+                    if (image != null)
+                    {
+                        var imageHref = RelativeHref(opfPath, image.FullName);
+                        var imageItem = manifestItems.FirstOrDefault(i => i.Attribute("href")?.Value == imageHref);
+                        if (imageItem == null)
+                        {
+                            imageItem = new XElement(opfNamespace + "item", new XAttribute("id", GetUniqueManifestId(manifestItems, "kavita-cover")),
+                                new XAttribute("href", imageHref), new XAttribute("media-type", GetMediaType(image.FullName)));
+                            manifest.Add(imageItem);
+                            manifestItems.Add(imageItem);
+                        }
+                        coverMeta.SetAttributeValue("content", imageItem.Attribute("id")!.Value);
+                        repaired = true;
+                        continue;
+                    }
+                }
 
                 coverMeta.Remove();
                 repaired = true;
@@ -318,18 +361,33 @@ public static class EpubManifestRepairHelper
         return true;
     }
 
-    private static bool EntryExistsForHref(ZipArchive source, string opfPath, string href)
-    {
-        var archivePath = GetArchivePathForHref(opfPath, href);
-        return source.GetEntry(archivePath) != null ||
-               source.Entries.Any(entry => string.Equals(entry.FullName, archivePath, StringComparison.OrdinalIgnoreCase));
-    }
+    private static ZipArchiveEntry? FindEntry(ZipArchive source, string key) =>
+        source.GetEntry(key) ?? source.Entries.FirstOrDefault(e => string.Equals(e.FullName, key, StringComparison.OrdinalIgnoreCase));
 
-    private static string GetArchivePathForHref(string opfPath, string href)
+    private static bool EntryExistsForHref(ZipArchive source, string opfPath, string href) =>
+        FindEntry(source, GetArchivePathForHref(opfPath, href)) != null;
+
+    private static string GetArchivePathForHref(string opfPath, string href) =>
+        EpubResourcePath.Resolve(opfPath, href);
+
+    private static string RelativeHref(string opfPath, string entry) =>
+        new Uri("https://epub.invalid/" + EpubResourcePath.EncodePath(opfPath))
+            .MakeRelativeUri(new Uri("https://epub.invalid/" + EpubResourcePath.EncodePath(entry))).ToString();
+
+    private static bool NormalizeReferences(XDocument opf, ZipArchive source, string opfPath)
     {
-        var hrefWithoutFragment = StripFragment(href).Replace('\\', '/');
-        var opfDirectory = Path.GetDirectoryName(opfPath)?.Replace('\\', '/') ?? string.Empty;
-        return string.IsNullOrWhiteSpace(opfDirectory) ? hrefWithoutFragment : $"{opfDirectory}/{hrefWithoutFragment}";
+        var changed = false;
+        foreach (var attribute in opf.Descendants().Attributes("href"))
+        {
+            var entry = FindEntry(source, GetArchivePathForHref(opfPath, attribute.Value));
+            if (entry == null) continue;
+            var fragment = attribute.Value.Contains('#') ? attribute.Value[attribute.Value.IndexOf('#')..] : "";
+            var actual = RelativeHref(opfPath, entry.FullName) + fragment;
+            if (actual == attribute.Value) continue;
+            attribute.Value = actual;
+            changed = true;
+        }
+        return changed;
     }
 
     private static string StripFragment(string href)
@@ -371,11 +429,12 @@ public static class EpubManifestRepairHelper
         if (manifest == null || spine == null) return synthesizedEntries;
 
         var manifestItems = manifest.Elements(opfNamespace + "item").ToList();
-        var hasNav = manifestItems.Any(item =>
-            item.Attribute("properties")?.Value
-                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                .Any(property => string.Equals(property, "nav", StringComparison.Ordinal)) == true);
-        if (hasNav) return synthesizedEntries;
+        var navItems = manifestItems.Where(item => item.Attribute("properties")?.Value
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("nav") == true).ToList();
+        if (navItems.Any(item => EntryExistsForHref(source, opfPath, item.Attribute("href")?.Value ?? "")))
+            return synthesizedEntries;
+        foreach (var item in navItems)
+            item.SetAttributeValue("properties", string.Join(" ", item.Attribute("properties")!.Value.Split(' ').Where(p => p != "nav")));
 
         var htmlManifestItems = manifestItems
             .Where(item => string.Equals(item.Attribute("media-type")?.Value, "application/xhtml+xml", StringComparison.Ordinal))
@@ -388,6 +447,7 @@ public static class EpubManifestRepairHelper
             .Select(idRef => htmlManifestItems.TryGetValue(idRef!, out var manifestItem) ? manifestItem.Attribute("href")?.Value : null)
             .Where(href => !string.IsNullOrWhiteSpace(href))
             .Select(href => href!)
+            .Where(href => EntryExistsForHref(source, opfPath, href))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 

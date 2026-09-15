@@ -1,10 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.Json;
 using Kavita.API.Database;
 using Kavita.API.Services;
 using Kavita.Common;
@@ -29,6 +30,23 @@ public class CacheService(
     : ICacheService
 {
     private static readonly ConcurrentDictionary<int, SemaphoreSlim> ExtractLocks = new();
+    private sealed record CacheInventory(string Mode, string Sources, Dictionary<string, long> Files);
+    private static string SourceVersion(IEnumerable<MangaFile> files) => JsonSerializer.Serialize(files
+        .OrderBy(f => f.Id).Select(f => new { f.Id, f.FilePath, f.Format, f.Bytes, f.LastModifiedUtc }));
+    private bool IsComplete(string path, string mode, string sources)
+    {
+        try
+        {
+            var fs = directoryService.FileSystem;
+            var marker = Path.Join(path, ".chapter-complete");
+            if (!fs.File.Exists(marker)) return false;
+            var inventory = JsonSerializer.Deserialize<CacheInventory>(fs.File.ReadAllText(marker));
+            return inventory?.Mode == mode && inventory.Sources == sources && inventory.Files.Count > 0 && inventory.Files.All(file =>
+                fs.File.Exists(Path.Join(path, file.Key)) && fs.FileInfo.New(Path.Join(path, file.Key)).Length == file.Value);
+        }
+        catch (IOException) { return false; }
+        catch (JsonException) { return false; }
+    }
 
     public IEnumerable<string> GetCachedPages(int chapterId)
     {
@@ -143,6 +161,7 @@ public class CacheService(
     /// <returns>This will always return the Chapter for the chapterId</returns>
     public async Task<Chapter?> Ensure(int chapterId, bool extractPdfToImages = false, CancellationToken ct = default)
     {
+        using var activity = CacheActivityGate.Enter();
         directoryService.ExistOrCreate(directoryService.CacheDirectory);
         var chapter = await unitOfWork.ChapterRepository.GetChapterAsync(chapterId, ct: ct);
         var extractPath = GetCachePath(chapterId);
@@ -152,32 +171,26 @@ public class CacheService(
         await extractLock.WaitAsync(ct);
 
         try {
-            if (directoryService.Exists(extractPath))
+            if (chapter == null) return null;
+            var mode = extractPdfToImages && chapter.Files.Any(f => f.Format == MangaFormat.Pdf) ? "images" : "reader";
+            var sources = SourceVersion(chapter.Files);
+            if (IsComplete(extractPath, mode, sources)) return chapter;
+            var staging = extractPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + $".staging-{Guid.NewGuid():N}";
+            try
             {
-                if (extractPdfToImages)
-                {
-                    var pdfImages = directoryService.GetFiles(extractPath, Parser.ImageFileExtensions);
-                    if (pdfImages.Any())
-                    {
-                        return chapter;
-                    }
-                }
-                else
-                {
-                    // Do an explicit check for files since rarely a "permission denied" error on deleting
-                    // the file can occur, thus leaving an empty folder and we would never re-cache the files.
-                    if (directoryService.GetFiles(extractPath).Any())
-                    {
-                        return chapter;
-                    }
-
-                    // Delete the extractPath as ExtractArchive will return if the directory already exists
-                    directoryService.ClearAndDeleteDirectory(extractPath);
-                }
+                await ExtractChapterFiles(staging, chapter.Files.ToList(), extractPdfToImages);
+                ct.ThrowIfCancellationRequested();
+                var inventory = directoryService.GetFiles(staging).ToDictionary(Path.GetFileName,
+                    file => directoryService.FileSystem.FileInfo.New(file).Length);
+                directoryService.FileSystem.File.WriteAllText(Path.Join(staging, ".chapter-complete"),
+                    JsonSerializer.Serialize(new CacheInventory(mode, sources, inventory)));
+                if (directoryService.Exists(extractPath)) directoryService.ClearAndDeleteDirectory(extractPath);
+                directoryService.FileSystem.Directory.Move(staging, extractPath);
             }
-
-            var files = chapter?.Files.ToList();
-            await ExtractChapterFiles(extractPath, files, extractPdfToImages);
+            finally
+            {
+                if (directoryService.Exists(staging)) directoryService.ClearAndDeleteDirectory(staging);
+            }
         } finally {
             extractLock.Release();
         }
@@ -195,83 +208,43 @@ public class CacheService(
     /// <returns></returns>
     public async Task ExtractChapterFiles(string extractPath, IReadOnlyList<MangaFile>? files, bool extractPdfImages = false)
     {
-        if (files == null || files.Count == 0) return;
-        var removeNonImages = true;
-        var fileCount = files.Count;
-        var extraPath = string.Empty;
-        var bookFileCached = false;
-        var extractDi = directoryService.FileSystem.DirectoryInfo.New(extractPath);
-
-        if (files[0].Format == MangaFormat.Image)
+        using var activity = CacheActivityGate.Enter();
+        if (files == null || files.Count == 0) throw new KavitaException("Chapter has no files");
+        files = files.OrderByNatural(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList();
+        directoryService.ExistOrCreate(extractPath);
+        var fs = directoryService.FileSystem;
+        var page = 0;
+        var selected = ChapterFileSelector.GetBestReadingFile(files);
+        for (var sourceIndex = 0; sourceIndex < files.Count; sourceIndex++)
         {
-            // Check if all the files are Images. If so, do a directory copy, else do the normal copy
-            if (files.All(f => f.Format == MangaFormat.Image))
+            var file = files[sourceIndex];
+            if (file != selected && file.Format is MangaFormat.Epub or MangaFormat.Text ||
+                file != selected && file.Format == MangaFormat.Pdf && !extractPdfImages) continue;
+            if (!fs.File.Exists(file.FilePath)) throw new KavitaException(await localizationService.TranslateAsync("file-doesnt-exist"));
+            if (file.Format == MangaFormat.Image)
             {
-                directoryService.ExistOrCreate(extractPath);
-                directoryService.CopyFilesToDirectory(files.Select(f => f.FilePath), extractPath);
+                fs.File.Copy(file.FilePath, Path.Join(extractPath, $"{page++:D8}{Path.GetExtension(file.FilePath)}"), false);
+                continue;
             }
-            else
+            if (file.Format == MangaFormat.Archive || (file.Format == MangaFormat.Pdf && extractPdfImages))
             {
-                foreach (var file in files)
+                var sourcePath = Path.Join(extractPath, $"source-{sourceIndex:D8}");
+                try
                 {
-                    if (fileCount > 1)
-                    {
-                        extraPath = file.Id + string.Empty;
-                    }
-                    readingItemService.Extract(file.FilePath, Path.Join(extractPath, extraPath), MangaFormat.Image, files.Count);
+                    readingItemService.Extract(file.FilePath, sourcePath, file.Format);
+                    var images = directoryService.GetFilesWithExtension(sourcePath, Parser.ImageFileExtensions)
+                        .OrderByNatural(Path.GetFileNameWithoutExtension).ToList();
+                    if (images.Count == 0) throw new KavitaException("Archive contains no pages");
+                    foreach (var image in images)
+                        fs.File.Move(image, Path.Join(extractPath, $"{page++:D8}{Path.GetExtension(image)}"));
                 }
-                directoryService.Flatten(extractDi.FullName);
+                finally { if (directoryService.Exists(sourcePath)) directoryService.ClearAndDeleteDirectory(sourcePath); }
+                continue;
             }
-
+            if (file == selected && file.Format is MangaFormat.Epub or MangaFormat.Pdf or MangaFormat.Text)
+                fs.File.Copy(file.FilePath, Path.Join(extractPath, Path.GetFileName(file.FilePath)), false);
         }
-
-        foreach (var file in files)
-        {
-            if (fileCount > 1)
-            {
-                extraPath = file.Id + string.Empty;
-            }
-
-            if (!directoryService.FileSystem.Path.Exists(file.FilePath))
-            {
-                logger.LogError("{File} does not exist on disk", file.FilePath);
-                throw new KavitaException(await localizationService.TranslateAsync("file-doesnt-exist"));
-            }
-
-            switch (file.Format)
-            {
-                case MangaFormat.Archive:
-                    readingItemService.Extract(file.FilePath, Path.Join(extractPath, extraPath), file.Format);
-                    break;
-                case MangaFormat.Epub:
-                case MangaFormat.Pdf:
-                {
-                    if (bookFileCached) continue;
-
-                    var readerFile = ChapterFileSelector.GetBestReadingFile(files);
-                    if (readerFile == null) continue;
-
-                    if (extractPdfImages)
-                    {
-                        readingItemService.Extract(readerFile.FilePath, Path.Join(extractPath, extraPath), readerFile.Format);
-                        bookFileCached = true;
-                        break;
-                    }
-                    removeNonImages = false;
-
-                    directoryService.ExistOrCreate(extractPath);
-                    directoryService.CopyFileToDirectory(readerFile.FilePath, extractPath);
-                    bookFileCached = true;
-                    break;
-                }
-            }
-        }
-
-        directoryService.Flatten(extractDi.FullName);
-        if (removeNonImages)
-        {
-            directoryService.RemoveNonImages(extractDi.FullName);
-        }
+        if (!directoryService.GetFiles(extractPath).Any()) throw new KavitaException("Chapter has no readable files");
     }
 
     /// <summary>
@@ -282,7 +255,10 @@ public class CacheService(
     {
         foreach (var chapter in chapterIds)
         {
-            directoryService.ClearAndDeleteDirectory(GetCachePath(chapter));
+            var gate = ExtractLocks.GetOrAdd(chapter, _ => new SemaphoreSlim(1, 1));
+            gate.Wait();
+            try { directoryService.ClearAndDeleteDirectory(GetCachePath(chapter)); }
+            finally { gate.Release(); }
         }
     }
 

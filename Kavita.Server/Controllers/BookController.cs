@@ -1,5 +1,7 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Threading;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -28,44 +30,10 @@ public class BookController(
     IDirectoryService directoryService)
     : BaseApiController
 {
-    private sealed class EpubBookLease(EpubBookRef? book, string? repairedPath) : IDisposable
-    {
-        public EpubBookRef? Book { get; } = book;
+    private static readonly ConcurrentDictionary<int, SemaphoreSlim> PageCountGates = new();
 
-        public void Dispose()
-        {
-            Book?.Dispose();
-            EpubManifestRepairHelper.DeleteQuietly(repairedPath);
-        }
-    }
-
-    private async Task<EpubBookLease> OpenEpubBookAsync(string filePath)
-    {
-        try
-        {
-            return new EpubBookLease(await EpubReader.OpenBookAsync(filePath, BookService.LenientBookReaderOptions), null);
-        }
-        catch (EpubReaderException)
-        {
-            var repairDirectory = directoryService.FileSystem.Path.Join(directoryService.TempDirectory, "epub-manifest-repair");
-            if (!EpubManifestRepairHelper.TryCreateDeduplicatedManifestCopy(filePath, repairDirectory,
-                    out var repairedPath))
-            {
-                throw;
-            }
-
-            try
-            {
-                return new EpubBookLease(
-                    await EpubReader.OpenBookAsync(repairedPath, BookService.LenientBookReaderOptions), repairedPath);
-            }
-            catch
-            {
-                EpubManifestRepairHelper.DeleteQuietly(repairedPath);
-                throw;
-            }
-        }
-    }
+    private Task<EpubBookOpener.Lease> OpenEpubBookAsync(string path) => Task.FromResult(
+        EpubBookOpener.Open(path, Path.Join(directoryService.TempDirectory, "epub-manifest-repair"), BookService.LenientBookReaderOptions));
 
     /// <summary>
     /// Retrieves information for the PDF and Epub reader. This will cache the file.
@@ -97,10 +65,11 @@ public class BookController(
 
                 bookTitle = book.Title;
                 var pageCount = bookService.GetNumberOfPages(file);
-                if (pageCount > 1 && dto.Pages <= 1)
+                if (pageCount <= 0) throw new InvalidDataException("EPUB has no readable pages");
+                if (dto.Pages <= 1)
                 {
-                    await UpdateBookPageCountAsync(chapterId, dto.VolumeId, dto.SeriesId, pageCount);
-                    dto.Pages = pageCount;
+                    dto.Pages = await UpdateBookPageCountAsync(chapterId, dto.VolumeId, dto.SeriesId,
+                        ChapterFileSelector.GetBestReadingFile(chapter.Files)!.Id, pageCount);
                 }
 
                 break;
@@ -144,37 +113,26 @@ public class BookController(
         return Ok(info);
     }
 
-    private async Task UpdateBookPageCountAsync(int chapterId, int volumeId, int seriesId, int pageCount)
+    private async Task<int> UpdateBookPageCountAsync(int chapterId, int volumeId, int seriesId, int selectedFileId, int pageCount)
     {
-        var chapter = await unitOfWork.ChapterRepository.GetChapterAsync(chapterId);
-        if (chapter == null) return;
-
-        var oldChapterPages = chapter.Pages;
-        if (oldChapterPages == pageCount) return;
-
-        chapter.Pages = pageCount;
-        foreach (var file in chapter.Files)
+        var gate = PageCountGates.GetOrAdd(seriesId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(HttpContext.RequestAborted);
+        try
         {
-            if (file.Format == MangaFormat.Epub)
-            {
-                file.Pages = pageCount;
-            }
+            var db = unitOfWork.DataContext;
+            await using var transaction = await db.Database.BeginTransactionAsync(HttpContext.RequestAborted);
+            var selected = await db.MangaFile.AsNoTracking().SingleAsync(f => f.Id == selectedFileId && f.ChapterId == chapterId);
+            var oldPages = await db.Chapter.AsNoTracking().Where(c => c.Id == chapterId).Select(c => c.Pages).SingleAsync();
+            if (selected.Pages == pageCount || oldPages > 1) return oldPages;
+            var delta = pageCount - selected.Pages;
+            await db.MangaFile.Where(f => f.Id == selectedFileId).ExecuteUpdateAsync(u => u.SetProperty(f => f.Pages, pageCount));
+            await db.Chapter.Where(c => c.Id == chapterId).ExecuteUpdateAsync(u => u.SetProperty(c => c.Pages, c => c.Pages + delta));
+            await db.Volume.Where(v => v.Id == volumeId).ExecuteUpdateAsync(u => u.SetProperty(v => v.Pages, v => v.Pages + delta));
+            await db.Series.Where(v => v.Id == seriesId).ExecuteUpdateAsync(u => u.SetProperty(v => v.Pages, v => v.Pages + delta));
+            await transaction.CommitAsync(HttpContext.RequestAborted);
+            return oldPages + delta;
         }
-
-        var delta = pageCount - oldChapterPages;
-        var volume = await unitOfWork.DataContext.Volume.FirstOrDefaultAsync(v => v.Id == volumeId);
-        if (volume != null)
-        {
-            volume.Pages = Math.Max(0, volume.Pages + delta);
-        }
-
-        var series = await unitOfWork.DataContext.Series.FirstOrDefaultAsync(s => s.Id == seriesId);
-        if (series != null)
-        {
-            series.Pages = Math.Max(0, series.Pages + delta);
-        }
-
-        await unitOfWork.CommitAsync();
+        finally { gate.Release(); }
     }
 
     /// <summary>
@@ -188,6 +146,9 @@ public class BookController(
     [HttpGet("{chapterId}/book-resources")]
     [ResponseCache(CacheProfileName = ResponseCacheProfiles.FiveMinute, VaryByQueryKeys = ["chapterId", "file"])]
     public async Task<ActionResult> GetBookPageResources(int chapterId, [FromQuery] string file)
+        => await ReadBookResource(chapterId, file, true);
+
+    private async Task<ActionResult> ReadBookResource(int chapterId, string file, bool retryEvictedCache)
     {
         if (chapterId <= 0) return BadRequest(await localizationService.GetAsync("en", "chapter-doesnt-exist"));
 
@@ -198,7 +159,13 @@ public class BookController(
         if (mangaFile == null) return BadRequest(await localizationService.GetAsync("en", "chapter-doesnt-exist"));
 
         var cachedFilePath = Path.Join(cacheService.GetCachePath(chapterId), Path.GetFileName(mangaFile.FilePath));
-        var result = await bookService.GetResourceAsync(cachedFilePath, file);
+        Kavita.Models.DTOs.Reader.BookResourceResultDto result;
+        try { result = await bookService.GetResourceAsync(cachedFilePath, file); }
+        catch (IOException ex) when (retryEvictedCache && ex is FileNotFoundException or DirectoryNotFoundException &&
+            !System.IO.File.Exists(cachedFilePath) && System.IO.File.Exists(mangaFile.FilePath))
+        {
+            return await ReadBookResource(chapterId, file, false);
+        }
 
         if (!result.IsSuccess) return BadRequest(await localizationService.GetAsync("en", result.ErrorMessage));
 
