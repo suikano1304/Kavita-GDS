@@ -71,6 +71,11 @@ public partial class BookService(
         {
             IgnoreMissingContentForNavigationPoints = false
         },
+        // A broken optional TOC target must not prevent reading valid spine content.
+        NavigationReaderOptions = new NavigationReaderOptions
+        {
+            SkipNavigationItemsReferencingMissingContent = true
+        },
         SpineReaderOptions = new SpineReaderOptions
         {
             IgnoreMissingManifestItems = false
@@ -91,6 +96,11 @@ public partial class BookService(
         Epub2NcxReaderOptions = new Epub2NcxReaderOptions
         {
             IgnoreMissingContentForNavigationPoints = false
+        },
+        // A broken optional TOC target must not prevent reading valid spine content.
+        NavigationReaderOptions = new NavigationReaderOptions
+        {
+            SkipNavigationItemsReferencingMissingContent = true
         },
         SpineReaderOptions = new SpineReaderOptions
         {
