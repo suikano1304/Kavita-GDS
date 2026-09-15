@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -15,6 +15,9 @@ using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
 using Kavita.Server.Attributes;
 using Kavita.Services.Extensions;
+using Kavita.Services.Helpers;
+using Kavita.Models.DTOs.Archive;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -207,7 +210,10 @@ public class DownloadController(
 
     private async Task<ActionResult> DownloadFiles(ICollection<MangaFile> files, string tempFolder, string downloadName, string? correlationId = null, CancellationToken ct = default)
     {
+        var activity = CacheActivityGate.Enter();
+        HttpContext.Response.RegisterForDispose(activity);
         var username = Username!;
+        downloadName = DownloadFileName.Clean(Path.GetFileNameWithoutExtension(downloadName)) + ".zip";
         var filename = Path.GetFileNameWithoutExtension(downloadName);
         try
         {
@@ -215,25 +221,54 @@ public class DownloadController(
                 MessageFactory.DownloadProgressEvent(username,
                     filename, $"Downloading {filename}", 0F, "started", correlationId), ct: ct);
 
-            if (files.Count == 1 && files.First().Format != MangaFormat.Image)
+            var ids = files.Select(f => f.Id).ToArray();
+            var metadata = await unitOfWork.DataContext.MangaFile.AsNoTracking().Where(f => ids.Contains(f.Id))
+                .Include(f => f.Chapter).ThenInclude(c => c.Volume).ThenInclude(v => v.Series).ToListAsync(HttpContext.RequestAborted);
+            if (metadata.Count != ids.Distinct().Count()) throw new KavitaException("Download metadata is missing");
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var stems = files.Select((f, index) =>
+            {
+                var item = metadata.Single(m => m.Id == f.Id);
+                return (File: f, Stem: DownloadFileName.Clean(item.Chapter.Volume.Series.Name + "_" +
+                    DownloadFileName.BookLabel(item.Chapter, item.Chapter.Volume, index + 1)));
+            }).ToList();
+            var counts = stems.GroupBy(x => x.Stem, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+            var ordinals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var entries = stems.Select(x =>
+            {
+                ordinals.TryGetValue(x.Stem, out var ordinal);
+                ordinals[x.Stem] = ++ordinal;
+                var stem = counts[x.Stem] > 1 ? $"{x.Stem}_{ordinal:D2}" : x.Stem;
+                return new DownloadArchiveEntry(x.File.FilePath, DownloadFileName.Unique(stem, Path.GetExtension(x.File.FilePath), used));
+            }).ToList();
+            if (!forceZip && files.Count == 1 && files.First().Format != MangaFormat.Image)
             {
                 // Emit "ended" after the response is fully sent to the client
                 HttpContext.Response.OnCompleted(async () =>
                 {
+                    if (HttpContext.RequestAborted.IsCancellationRequested) return;
                     await eventHub.SendMessageAsync(MessageFactory.DownloadProgress,
                         MessageFactory.DownloadProgressEvent(username,
                             filename, "Download Complete", 1F, "ended", correlationId), ct: ct);
                 });
-                return GetFirstFileDownload(files);
+                var (sourcePath, contentType, _) = downloadService.GetFirstFileDownload(files);
+                return File(new ActivityFileStream(sourcePath, false, activity), contentType, entries[0].EntryName, true);
             }
 
-            var filePath = archiveService.CreateZipFromFoldersForDownload(files.Select(c => c.FilePath).ToList(), tempFolder, ProgressCallback);
+            var filePath = await archiveService.CreateDownloadArchiveAsync(entries, ProgressCallback, HttpContext.RequestAborted);
+            FileStream stream;
+            try
+            {
+                stream = new ActivityFileStream(filePath, true, activity);
+                HttpContext.Response.RegisterForDispose(stream);
+            }
+            catch { EpubManifestRepairHelper.DeleteQuietly(filePath); throw; }
 
             await eventHub.SendMessageAsync(MessageFactory.DownloadProgress,
                 MessageFactory.DownloadProgressEvent(username,
                     filename, "Download Complete", 1F, "ended", correlationId), ct: ct);
 
-            return PhysicalFile(filePath, DefaultContentType, Uri.EscapeDataString(downloadName), true);
+            return File(stream, DefaultContentType, downloadName, enableRangeProcessing: true);
 
             async Task ProgressCallback(Tuple<string, float> progressInfo)
             {
@@ -244,6 +279,7 @@ public class DownloadController(
         }
         catch (Exception ex)
         {
+            activity.Dispose();
             logger.LogError(ex, "There was an exception when trying to download files");
             await eventHub.SendMessageAsync(MessageFactory.DownloadProgress,
                 MessageFactory.DownloadProgressEvent(Username!,
@@ -301,13 +337,22 @@ public class DownloadController(
         await eventHub.SendMessageAsync(MessageFactory.DownloadProgress,
             MessageFactory.DownloadProgressEvent(username, Path.GetFileNameWithoutExtension(filename), $"Downloading {filename}",0F), ct: ct);
 
-        var filePath =  archiveService.CreateZipForDownload(files,$"download_{userId}_{seriesId}_bookmarks");
+        var activity = CacheActivityGate.Enter();
+        HttpContext.Response.RegisterForDispose(activity);
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var entries = files.Select(path => new DownloadArchiveEntry(path,
+            DownloadFileName.Unique(Path.GetFileNameWithoutExtension(path), Path.GetExtension(path), used))).ToList();
+        var filePath = await archiveService.CreateDownloadArchiveAsync(entries, _ => Task.CompletedTask, HttpContext.RequestAborted);
+        ActivityFileStream stream;
+        try { stream = new ActivityFileStream(filePath, true, activity); }
+        catch { EpubManifestRepairHelper.DeleteQuietly(filePath); throw; }
+        HttpContext.Response.RegisterForDispose(stream);
 
         await eventHub.SendMessageAsync(MessageFactory.DownloadProgress,
             MessageFactory.DownloadProgressEvent(username, Path.GetFileNameWithoutExtension(filename), $"Downloading {filename}", 1F), ct: ct);
 
 
-        return PhysicalFile(filePath, DefaultContentType, Uri.EscapeDataString(filename), true);
+        return File(stream, DefaultContentType, Uri.EscapeDataString(filename), true);
     }
 
 }

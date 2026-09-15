@@ -366,6 +366,18 @@ public class DirectoryService : IDirectoryService
     /// <returns></returns>
     public void ClearDirectory(string directoryPath)
     {
+        var path = FileSystem.Path.GetFullPath(directoryPath).TrimEnd('/', '\\');
+        if (path == FileSystem.Path.GetFullPath(CacheDirectory).TrimEnd('/', '\\') ||
+            path == FileSystem.Path.GetFullPath(TempDirectory).TrimEnd('/', '\\'))
+        {
+            Kavita.Services.Helpers.CacheActivityGate.Purge(() => ClearDirectoryCore(directoryPath));
+            return;
+        }
+        ClearDirectoryCore(directoryPath);
+    }
+
+    private void ClearDirectoryCore(string directoryPath)
+    {
         directoryPath = directoryPath.Replace(Environment.NewLine, string.Empty);
         var di = FileSystem.DirectoryInfo.New(directoryPath);
         if (!di.Exists) return;

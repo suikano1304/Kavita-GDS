@@ -18,7 +18,7 @@ export interface NotificationProgressEvent {
     /**
      * Type of event. Helps events widget to understand how to handle said event
      */
-    eventType: 'single' | 'started' | 'updated' | 'ended';
+    eventType: 'single' | 'started' | 'updated' | 'ended' | 'failed';
     /**
      * Type of progress. Helps widget understand how to display spinner
      */

@@ -20,6 +20,7 @@ using Xunit.Abstractions;
 
 namespace Kavita.Services.Tests;
 
+[Collection("Scan folder jobs")]
 public class OpdsProgressTests(ITestOutputHelper output) : AbstractDbTest(output)
 {
     private static ReaderService Reader(IUnitOfWork uow) => new(uow,
@@ -125,7 +126,7 @@ public class OpdsProgressTests(ITestOutputHelper output) : AbstractDbTest(output
         var path = Path.Join(Path.GetTempPath(), "opds-progress-" + Guid.NewGuid() + ".db");
         try
         {
-            await using (var copy = new SqliteConnection("Data Source=" + path))
+            await using (var copy = new SqliteConnection("Data Source=" + path + ";Pooling=False"))
             {
                 await copy.OpenAsync();
                 ((SqliteConnection)context.Database.GetDbConnection()).BackupDatabase(copy);
