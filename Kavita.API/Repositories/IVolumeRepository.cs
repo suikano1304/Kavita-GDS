@@ -23,6 +23,7 @@ public enum VolumeIncludes
 
 public interface IVolumeRepository
 {
+    Task<IList<VolumeDto>> GetContinuationVolumesAsync(IList<int> seriesIds, int userId, CancellationToken ct = default);
     void Add(Volume volume);
     void Update(Volume volume);
     void Remove(Volume volume);

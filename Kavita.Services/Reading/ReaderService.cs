@@ -320,8 +320,15 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
     /// </summary>
     public async Task<bool> SaveOpdsProgress(ProgressDto progressDto, int userId)
     {
-        var (page, _) = await CapPageToChapter(progressDto.ChapterId, progressDto.PageNum);
+        // A stale/malformed client URL must not attach this book's progress to
+        // another volume or series. Chapter identity is authoritative in the DB.
+        var chapter = await unitOfWork.ChapterRepository.GetChapterInfoDtoAsync(progressDto.ChapterId);
+        if (chapter == null) return false;
+        var page = Math.Clamp(progressDto.PageNum, 0, Math.Max(0, chapter.Pages));
         progressDto.PageNum = page;
+        progressDto.LibraryId = chapter.LibraryId;
+        progressDto.SeriesId = chapter.SeriesId;
+        progressDto.VolumeId = chapter.VolumeId;
         if (!await unitOfWork.AppUserProgressRepository.AdvanceOpdsProgressAsync(progressDto, userId))
             return true;
 

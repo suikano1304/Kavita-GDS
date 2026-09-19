@@ -23,6 +23,30 @@ namespace Kavita.Server.Tests.Controllers;
 public class OpdsDownloadTests
 {
     [Theory]
+    [InlineData("OPDSy", 0, 1)]
+    [InlineData("OPDSy", 183, 184)]
+    [InlineData("KOReader", 0, 1)]
+    [InlineData("KOReader", 183, 184)]
+    public async Task StreamIndexMapsToOneBasedProgress(string agent, int index, int expected)
+    {
+        var page = Path.GetTempFileName();
+        try
+        {
+            var cache = Substitute.For<ICacheService>();
+            var reader = Substitute.For<IReaderService>();
+            var directory = Substitute.For<IDirectoryService>();
+            cache.Ensure(1, true, Arg.Any<CancellationToken>()).Returns(new Chapter {Id=1,Range="1",Pages=184});
+            cache.GetCachedPagePath(1,index).Returns(page);
+            directory.ReadFileAsync(page).Returns(new byte[]{1,2,3});
+            var controller = Create(Substitute.For<IUnitOfWork>(),directory,cache,reader);
+            controller.Request.Headers.UserAgent=agent;
+            await controller.GetPageStreamedImage("fixture",1,1,1,1,index);
+            await reader.Received(1).SaveOpdsProgress(Arg.Is<ProgressDto>(p=>p.PageNum==expected),7);
+        }
+        finally { File.Delete(page); }
+    }
+
+    [Theory]
     [InlineData("Panels", true, false)]
     [InlineData("Panels", false, false)]
     [InlineData("Moon", true, true)]

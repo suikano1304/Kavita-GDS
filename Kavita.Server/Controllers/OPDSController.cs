@@ -313,7 +313,7 @@ public class OpdsController(
     /// <returns></returns>
     [Produces("application/xml")]
     [HttpGet("{apiKey}/reading-list/{readingListId}")]
-    public async Task<IActionResult> GetReadingListItems(int readingListId, string apiKey, [FromQuery] int pageNumber = OpdsService.FirstPageNumber)
+    public async Task<IActionResult> GetReadingListItems(int readingListId, string apiKey, [FromQuery] int pageNumber = OpdsService.FirstPageNumber, [FromQuery] bool continueReading = false)
     {
         try
         {
@@ -321,6 +321,7 @@ public class OpdsController(
 
             var feed = await opdsService.GetReadingListItems(new OpdsItemsFromEntityIdRequest()
             {
+                ContinueReading = continueReading,
                 BaseUrl = baseUrl,
                 Prefix = prefix,
                 UserId = UserId,
@@ -531,7 +532,7 @@ public class OpdsController(
     [SeriesAccess]
     [HttpGet("{apiKey}/series/{seriesId}")]
     [Produces("application/xml")]
-    public async Task<IActionResult> GetSeriesDetail(string apiKey, int seriesId)
+    public async Task<IActionResult> GetSeriesDetail(string apiKey, int seriesId, [FromQuery] bool continueReading = false)
     {
         try
         {
@@ -539,6 +540,7 @@ public class OpdsController(
 
             var feed = await opdsService.GetSeriesDetail(new OpdsItemsFromEntityIdRequest()
             {
+                ContinueReading = continueReading,
                 BaseUrl = baseUrl,
                 Prefix = prefix,
                 UserId = UserId,
@@ -566,7 +568,7 @@ public class OpdsController(
     [VolumeAccess]
     [Produces("application/xml")]
     [HttpGet("{apiKey}/series/{seriesId}/volume/{volumeId}")]
-    public async Task<IActionResult> GetVolume(string apiKey, int seriesId, int volumeId)
+    public async Task<IActionResult> GetVolume(string apiKey, int seriesId, int volumeId, [FromQuery] bool continueReading = false)
     {
         try
         {
@@ -574,6 +576,7 @@ public class OpdsController(
 
             var feed = await opdsService.GetItemsFromVolume(new OpdsItemsFromCompoundEntityIdsRequest()
             {
+                ContinueReading = continueReading,
                 BaseUrl = baseUrl,
                 Prefix = prefix,
                 UserId = UserId,
@@ -713,8 +716,10 @@ public class OpdsController(
         }
     }
 
-    private static ContentResult CreateXmlResult(string xml)
+    private ContentResult CreateXmlResult(string xml)
     {
+        Response.Headers.CacheControl = "private, no-store, no-cache, max-age=0";
+        Response.Headers.Pragma = "no-cache";
         return new ContentResult
         {
             ContentType = "application/xml",
@@ -744,6 +749,8 @@ public class OpdsController(
         if (pageNumber < 0) return BadRequest(await localizationService.TranslateAsync(userId, "greater-0", "Page"));
         var chapter = await cacheService.Ensure(chapterId, true);
         if (chapter == null) return BadRequest(await localizationService.TranslateAsync(userId, "cache-file-find"));
+        if (chapter.Pages > 0 && pageNumber >= chapter.Pages)
+            return BadRequest(await localizationService.TranslateAsync(userId, "no-image-for-page", pageNumber));
 
         try
         {
@@ -759,22 +766,13 @@ public class OpdsController(
 
             if (!userAgent.StartsWith("Panels", StringComparison.InvariantCultureIgnoreCase) && saveProgress)
             {
-                // Kavita expects 0-N for progress, KOReader doesn't respect the OPDS-PS spec and does some wierd stuff
-                // https://github.com/Kareadita/Kavita/pull/4014#issuecomment-3313677492
-                var koreaderOffset = 0;
-                if (userAgent.StartsWith("Koreader", StringComparison.InvariantCultureIgnoreCase))
-                {
-                    var totalPages = await unitOfWork.ChapterRepository.GetChapterTotalPagesAsync(chapterId);
-                    if (totalPages - pageNumber < 2)
-                    {
-                        koreaderOffset = 1;
-                    }
-                }
-
+                // OPDS-PSE image indexes are zero-based; lastRead/count are one-based.
+                // This remains a speculative high-water mark, not proof of viewport
+                // visibility: SaveOpdsProgress never creates sessions or TotalReads.
                 await readerService.SaveOpdsProgress(new ProgressDto()
                 {
                     ChapterId = chapterId,
-                    PageNum = pageNumber + koreaderOffset,
+                    PageNum = pageNumber == int.MaxValue ? int.MaxValue : pageNumber + 1,
                     SeriesId = seriesId,
                     VolumeId = volumeId,
                     LibraryId =libraryId

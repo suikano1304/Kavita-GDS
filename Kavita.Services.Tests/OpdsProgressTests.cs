@@ -46,6 +46,25 @@ public class OpdsProgressTests(ITestOutputHelper output) : AbstractDbTest(output
     { ChapterId = chapter, VolumeId = chapter, SeriesId = 1, LibraryId = 1, PageNum = page };
 
     [Fact]
+    public async Task OpdsProgressUsesStoredChapterIdentityAndCountsTheFirstAndLastPageWithoutSessions()
+    {
+        var (uow,context,_) = await CreateDatabase();
+        await Seed(context);
+        var reader = Reader(uow);
+        var input = Progress(2,1);
+        input.SeriesId=999;input.VolumeId=999;input.LibraryId=999;
+        await reader.SaveOpdsProgress(input,1);
+        var row=await context.AppUserProgresses.AsNoTracking().SingleAsync();
+        Assert.Equal(1,row.PagesRead);Assert.Equal(1,row.SeriesId);Assert.Equal(2,row.VolumeId);Assert.Equal(1,row.LibraryId);
+        await reader.SaveOpdsProgress(Progress(2,184),1);
+        foreach(var page in new[]{183,180,160,1}) await reader.SaveOpdsProgress(Progress(2,page),1);
+        row=await context.AppUserProgresses.AsNoTracking().SingleAsync();
+        Assert.Equal(184,row.PagesRead);Assert.Equal(0,row.TotalReads);
+        Assert.False(await reader.SaveOpdsProgress(Progress(999,1),1));
+        Assert.Single(await context.AppUserProgresses.ToListAsync());
+    }
+
+    [Fact]
     public async Task CompletedChapterSurvivesLeafNeighbourRequestsWithoutTimestampOrSessionChanges()
     {
         var (uow, context, _) = await CreateDatabase();

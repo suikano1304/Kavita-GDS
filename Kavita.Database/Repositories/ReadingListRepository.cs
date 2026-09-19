@@ -322,12 +322,14 @@ public class ReadingListRepository(DataContext context, IMapper mapper) : IReadi
     }
 
     public async Task<ReadingListItemDto?> GetContinueReadingPoint(int readingListId, int userId,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool useRecommendationThreshold = false)
     {
         var userLibraries = context.Library.GetUserLibraries(userId);
+        var ageRestriction = await context.AppUser.GetUserAgeRestriction(userId, ct);
 
         var query = context.ReadingListItem
             .Where(rli => rli.ReadingListId == readingListId)
+            .RestrictAgainstAgeRestriction(ageRestriction)
             .Join(context.Chapter, rli => rli.ChapterId, chapter => chapter.Id, (rli, chapter) => new
                 {
                     ReadingListItem = rli,
@@ -379,12 +381,13 @@ public class ReadingListRepository(DataContext context, IMapper mapper) : IReadi
                 })
             .OrderBy(x => x.ReadingListItem.Order);
 
-        // First try to find a partially read item, then the first unread item
-        var item = await query
-            .OrderBy(x => x.IsPartiallyRead ? 0 : x.IsUnread ? 1 : 2)
-            .ThenBy(x => x.ReadingListItem.Order)
-            .FirstOrDefaultAsync(ct);
-
+        var ordered = await query.ThenBy(x => x.ReadingListItem.Id).ToListAsync(ct);
+        var last = ordered.FindLastIndex(x => x.PagesRead > 0);
+        var item = useRecommendationThreshold
+            ? ordered.Skip(Math.Max(0, last)).FirstOrDefault(x => x.Chapter.Pages <= 0 ||
+                (long)x.PagesRead * 100 < (long)x.Chapter.Pages * 90)
+            : ordered.Where(x => x.IsPartiallyRead || x.IsUnread)
+                .OrderBy(x => x.IsPartiallyRead ? 0 : 1).FirstOrDefault();
 
         if (item == null) return null;
 
@@ -472,7 +475,7 @@ public class ReadingListRepository(DataContext context, IMapper mapper) : IReadi
             .Where(rli => rli.ReadingListId == readingListId)
             .Where(rli => userLibraries.Contains(rli.Series.LibraryId))
             .RestrictAgainstAgeRestriction(ageRating)
-            .OrderBy(rli => rli.Order)
+            .OrderBy(rli => rli.Order).ThenBy(rli => rli.Id)
             .ProjectToWithProgress<ReadingListItem, ReadingListItemDto>(mapper, userId)
             .AsSplitQuery();
 
