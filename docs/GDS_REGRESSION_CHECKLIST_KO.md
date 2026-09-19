@@ -219,6 +219,10 @@ PASS 기준:
 
 ## OPDS progress and continuation regression
 
+- OPDS library feeds default to latest content modification first, with stable ID ties across pagination and real modification timestamps in Atom entries. Volume/chapter lists retain reading order.
+- Series, volume and reading-list acquisition entries have unique identities and canonical order. Continue-reading shortcuts are navigation links to a forward-only suffix, never duplicate acquisitions; exhausted sequences are empty and absent from On Deck. Verify both direct catalogue and On Deck entry paths, including reading-list pagination.
+- PSE image indexes are zero-based while saved lastRead is one-based: first image saves 1 and final image saves N. Reject out-of-range requests, retain UTC progress timestamps, never regress progress on neighbour/prefetch requests, and derive chapter ownership from stored identity. Feed responses must not reuse stale shared caches.
+
 - Reopening a completed streamed chapter must preserve its saved completion and modification time when neighbouring image requests arrive backwards or concurrently. Image retrieval must not create reading-session activity; Panels and `saveProgress=false` remain excluded from progress writes.
 - Web and OPDS continuation must follow the furthest chapter with progress. Earlier incomplete chapters or newer manual edits must not pull the recommendation backwards. At 90%, recommend the next chapter without rewriting the stored position or exact completion; at the end, omit OPDS continuation and safely handle HTTP 204 in the web client.
 - Explicit web rewind, unread status and direct rereading must remain available. Verify two users' records independently, live OPDS client reopening, and scoped restoration of all test-induced reading-state changes.
@@ -243,3 +247,5 @@ PASS 기준:
 - 북마크·로그 ZIP도 응답 종료·취소 후 요청별 임시 파일을 정리한다. 작성 중인 로그는 시작 시점의 길이로 제한해 스냅샷을 만든다.
 - 선택적 외부 메타데이터 ID가 없는 북마크 조회 결과를 그대로 다운로드 요청으로 보낼 수 있어야 한다. 빈 북마크 선택은 정상적인 400 응답으로 처리한다.
 - 느린 표지 생성 작업과 리더의 페이지 수 보정을 경쟁시킨다. 표지 저장이 오래된 페이지 수를 덮어쓰지 않아야 하며, 파일 수만 보정되고 챕터 합계가 0/1로 남은 상태도 관련 합계를 한 번만 갱신해 복구한다.
+
+- OPDS progress symbols must follow the chapter/list title, so title-sorting clients keep volume order as progress changes. Verify a completed fourth volume still recommends a partially read fifth, not the sixth. Apply the same access/age eligibility when selecting reading-list continuation and rendering its items.

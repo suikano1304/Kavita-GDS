@@ -4,6 +4,7 @@ namespace Kavita.Models.DTOs.OPDS.Requests;
 
 public sealed record OpdsItemsFromEntityIdRequest : IOpdsRequest, IOpdsPagination
 {
+    public bool ContinueReading { get; init; }
     public string ApiKey { get; init; }
     public string Prefix { get; init; }
     public string BaseUrl { get; init; }

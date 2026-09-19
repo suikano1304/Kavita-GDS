@@ -8,6 +8,7 @@ namespace Kavita.Models.DTOs.OPDS.Requests;
 /// <remarks>Not all variables will always be used. Implementation will use</remarks>
 public sealed record OpdsItemsFromCompoundEntityIdsRequest : IOpdsRequest, IOpdsPagination
 {
+    public bool ContinueReading { get; init; }
     public string ApiKey { get; init; }
     public string Prefix { get; init; }
     public string BaseUrl { get; init; }

@@ -304,8 +304,15 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
     /// </summary>
     public async Task<bool> SaveOpdsProgress(ProgressDto progressDto, int userId)
     {
-        var (page, _) = await CapPageToChapter(progressDto.ChapterId, progressDto.PageNum);
+        // A stale/malformed client URL must not attach this book's progress to
+        // another volume or series. Chapter identity is authoritative in the DB.
+        var chapter = await unitOfWork.ChapterRepository.GetChapterInfoDtoAsync(progressDto.ChapterId);
+        if (chapter == null) return false;
+        var page = Math.Clamp(progressDto.PageNum, 0, Math.Max(0, chapter.Pages));
         progressDto.PageNum = page;
+        progressDto.LibraryId = chapter.LibraryId;
+        progressDto.SeriesId = chapter.SeriesId;
+        progressDto.VolumeId = chapter.VolumeId;
         if (!await unitOfWork.AppUserProgressRepository.AdvanceOpdsProgressAsync(progressDto, userId))
             return true;
 
@@ -548,9 +555,7 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
         bool useRecommendationThreshold = true)
     {
         var volumes = await unitOfWork.VolumeRepository.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files);
-        var chapters = volumes.OrderBy(v => v.IsSpecial())
-            .ThenBy(v => v.MinNumber, _chapterSortComparerDefaultLast)
-            .SelectMany(v => v.Chapters.OrderBy(c => c.SortOrder)).ToList();
+        var chapters = ReadingContinuation.Order(volumes);
         if (chapters.Count == 0) throw new KavitaNotFoundException();
 
         var progress = (await unitOfWork.AppUserProgressRepository.GetUserProgressForSeriesAsync(seriesId, userId))
@@ -561,11 +566,7 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
             chapter.PagesRead = saved.PagesRead;
             chapter.LastReadingProgressUtc = saved.LastModifiedUtc;
         }
-        var last = chapters.FindLastIndex(c => c.PagesRead > 0);
-        if (last < 0) return chapters[0];
-        var threshold = useRecommendationThreshold ? 90 : 100;
-        return chapters.Skip(last).FirstOrDefault(c => c.Pages <= 0 ||
-            (long)c.PagesRead * 100 < (long)c.Pages * threshold);
+        return ReadingContinuation.Select(chapters, useRecommendationThreshold);
     }
 
     private static ChapterDto FindNextReadingChapter(IList<ChapterDto> volumeChapters)

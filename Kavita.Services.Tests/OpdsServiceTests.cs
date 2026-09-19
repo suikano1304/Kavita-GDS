@@ -231,6 +231,107 @@ public class OpdsServiceTests(ITestOutputHelper testOutputHelper) : AbstractDbTe
 
     #endregion
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AcquisitionSequence_IsUniqueAndCanonical_WhenContinuationExists(bool volumeFeed)
+    {
+        var (uow, context, mapper) = await CreateDatabase();
+        var (opds, reader) = SetupService(uow, mapper);
+        var user = await SetupSeriesAndUser(context, uow);
+        await reader.SaveReadingProgress(new ProgressDto
+            { ChapterId = 2, VolumeId = 1, SeriesId = 1, LibraryId = 1, PageNum = 5 }, user.Id, false);
+        var preferences = await uow.UserRepository.GetOpdsPreferences(user.Id);
+        var feed = volumeFeed
+            ? await opds.GetItemsFromVolume(new OpdsItemsFromCompoundEntityIdsRequest
+                { ApiKey = "test", Prefix = "/api/opds/", BaseUrl = "", UserId = user.Id,
+                  Preferences = preferences, SeriesId = 1, VolumeId = 1, PageNumber = 1 })
+            : await opds.GetSeriesDetail(new OpdsItemsFromEntityIdRequest
+                { ApiKey = "test", Prefix = "/api/opds/", BaseUrl = "", UserId = user.Id,
+                  Preferences = preferences, EntityId = 1, PageNumber = 1 });
+        var books = feed.Entries.Where(e => e.Links.Any(l => l.IsPageStream)).ToList();
+        Assert.Equal(new[] { "1", "2" }, books.Select(e => e.Id));
+        Assert.Equal(new[] { "1", "2" }, books.OrderBy(e => e.Title, StringComparer.Ordinal).Select(e => e.Id));
+        Assert.Equal(feed.Entries.Count, feed.Entries.Select(e => e.Id).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task ContinuationFeed_FollowsFourFiveSix_AndNeverWrapsAtEnd()
+    {
+        var (uow, context, mapper) = await CreateDatabase();
+        var (opds, reader) = SetupService(uow, mapper);
+        var user = await SetupSeriesAndUser(context, uow);
+        var volume = context.Volume.Single();
+        foreach (var n in Enumerable.Range(3, 4))
+            volume.Chapters.Add(new ChapterBuilder(n.ToString()).WithSortOrder(n - 1).WithPages(10)
+                .WithFile(new MangaFileBuilder(_testFilePath, MangaFormat.Archive, 10).Build()).Build());
+        volume.Pages = 60;
+        context.Series.Single().Pages = 60;
+        await uow.CommitAsync();
+        var request = new OpdsItemsFromEntityIdRequest
+        { ApiKey = "test", Prefix = "/api/opds/", BaseUrl = "", UserId = user.Id,
+          Preferences = await uow.UserRepository.GetOpdsPreferences(user.Id), EntityId = 1, PageNumber = 1 };
+        foreach (var (page, expected) in new[] { (8, new[]{"4","5","6"}), (9, new[]{"5","6"}), (10, new[]{"5","6"}) })
+        {
+            await reader.SaveReadingProgress(new ProgressDto
+                {ChapterId=4, VolumeId=1, SeriesId=1, LibraryId=1, PageNum=page}, user.Id, false);
+            var feed = await opds.GetSeriesDetail(request with {ContinueReading=true});
+            Assert.Equal(expected, feed.Entries.Select(e => e.Id));
+            var ordinary = await opds.GetSeriesDetail(request);
+            Assert.Equal(Enumerable.Range(1,6).Select(i=>i.ToString()),
+                ordinary.Entries.Where(e=>e.Links.Any(l=>l.IsPageStream)).Select(e=>e.Id));
+        }
+        await reader.SaveReadingProgress(new ProgressDto
+            {ChapterId=6, VolumeId=1, SeriesId=1, LibraryId=1, PageNum=9}, user.Id, false);
+        Assert.Empty((await opds.GetSeriesDetail(request with {ContinueReading=true})).Entries);
+        var onDeck = await opds.GetOnDeck(new OpdsPaginatedCatalogueRequest
+        {ApiKey="test",Prefix="/api/opds/",BaseUrl="",UserId=user.Id,Preferences=request.Preferences,PageNumber=1});
+        Assert.Empty(onDeck.Entries); // Older incomplete books cannot revive a finished sequence.
+        Assert.Equal(6, (await opds.GetSeriesDetail(request)).Entries.Count); // Explicit reread stays available.
+    }
+
+    [Fact]
+    public async Task OnDeck_RemovesAllLastIndexSeries_ButKeepsUnreadSuccessor()
+    {
+        var (uow, context, mapper) = await CreateDatabase();
+        var (opds, reader) = SetupService(uow, mapper);
+        var user = await SetupSeriesAndUser(context, uow, 2);
+        foreach (var series in context.Series) series.Pages = 20;
+        await uow.CommitAsync();
+        foreach (var (chapter, series) in new[] {(1,1),(2,1),(3,2)})
+            await reader.SaveReadingProgress(new ProgressDto
+                {ChapterId=chapter,VolumeId=series,SeriesId=series,LibraryId=1,PageNum=9},user.Id,false);
+        var feed = await opds.GetOnDeck(new OpdsPaginatedCatalogueRequest
+        {ApiKey="test",Prefix="/api/opds/",BaseUrl="",UserId=user.Id,
+         Preferences=await uow.UserRepository.GetOpdsPreferences(user.Id),PageNumber=1});
+        Assert.Single(feed.Entries);
+        Assert.Contains(feed.Entries[0].Links, l => l.Href.EndsWith("series/2?continueReading=true"));
+        Assert.Equal(1,feed.Total);
+    }
+
+    [Fact]
+    public async Task LibraryFeed_SortsByContentModifiedDescending_WithStablePagesAndRealUpdatedDates()
+    {
+        var (uow, context, mapper) = await CreateDatabase();
+        var (opds, _) = SetupService(uow, mapper);
+        var user = await SetupSeriesAndUser(context,uow,23);
+        var timestamp = new DateTime(2026,1,1,0,0,0,DateTimeKind.Local);
+        foreach (var series in context.Series)
+            series.ContentLastModified = timestamp.AddDays(series.Id / 2);
+        await uow.CommitAsync();
+        var request = new OpdsItemsFromEntityIdRequest
+        {ApiKey="test",Prefix="/api/opds/",BaseUrl="",UserId=user.Id,
+         Preferences=await uow.UserRepository.GetOpdsPreferences(user.Id),EntityId=(await uow.LibraryRepository.GetLibrariesForUserIdAsync(user.Id)).First().Id,PageNumber=1};
+        var first = await opds.GetSeriesFromLibrary(request);
+        var second = await opds.GetSeriesFromLibrary(request with {PageNumber=2});
+        var expected = context.Series.OrderByDescending(s=>s.ContentLastModified).ThenBy(s=>s.Id).ToList();
+        var actual = first.Entries.Concat(second.Entries).ToList();
+        Assert.Equal(expected.Select(s=>s.Id.ToString()),actual.Select(e=>e.Id));
+        Assert.Empty(first.Entries.Select(e=>e.Id).Intersect(second.Entries.Select(e=>e.Id)));
+        for(var i=0;i<actual.Count;i++)
+            Assert.Equal(expected[i].ContentLastModified.ToUniversalTime(),DateTime.Parse(actual[i].Updated).ToUniversalTime());
+    }
+
     #region Continue Points
 
     [Fact]
@@ -293,8 +394,9 @@ public class OpdsServiceTests(ITestOutputHelper testOutputHelper) : AbstractDbTe
             EntityId = 1, PageNumber = 0
         });
         Assert.StartsWith("Continue Reading from", feed.Entries.First().Title);
-        Assert.Equal(second.Id.ToString(), feed.Entries.First().Id);
-        var stream = feed.Entries.First().Links.Single(l => l.IsPageStream);
+        Assert.EndsWith("-continue", feed.Entries.First().Id);
+        Assert.DoesNotContain(feed.Entries.First().Links, l => l.IsPageStream);
+        var stream = feed.Entries.Single(e => e.Id == second.Id.ToString()).Links.Single(l => l.IsPageStream);
         Assert.Equal(7, stream.LastRead);
         Assert.False(string.IsNullOrWhiteSpace(stream.LastReadDate));
     }
@@ -333,7 +435,8 @@ public class OpdsServiceTests(ITestOutputHelper testOutputHelper) : AbstractDbTe
         else
         {
             Assert.StartsWith("Continue Reading from", feed.Entries.First().Title);
-            Assert.Equal(expectedId.ToString(), feed.Entries.First().Id);
+            Assert.EndsWith("-continue", feed.Entries.First().Id);
+            Assert.Contains(feed.Entries, e => e.Id == expectedId.ToString());
         }
     }
 
@@ -439,7 +542,7 @@ public class OpdsServiceTests(ITestOutputHelper testOutputHelper) : AbstractDbTe
         Assert.NotEmpty(feed.Entries);
         var expectedIcon = typeof(OpdsService).GetField(expectedIconField)?.GetValue(null) as string;
         Assert.NotNull(expectedIcon);
-        Assert.Contains(expectedIcon, feed.Entries[entryIndex].Title);
+        Assert.EndsWith(expectedIcon, feed.Entries[entryIndex].Title);
     }
 
     [Fact]
@@ -1062,6 +1165,55 @@ public class OpdsServiceTests(ITestOutputHelper testOutputHelper) : AbstractDbTe
         // The continue reading should point to the first unread item (page 3, first item)
         var expectedNextUnreadItemIndex = itemsInFirst2Pages + 1; // First item of page 3
         Assert.Contains($"Test {expectedNextUnreadItemIndex}", firstEntry.Title);
+    }
+
+    [Fact]
+    public async Task ReadingListContinuation_SkipsRestrictedItemsBeforeSelectingTheStart()
+    {
+        var (uow, context, mapper) = await CreateDatabase();
+        var (opds, _) = SetupService(uow, mapper);
+        var user = await SetupSeriesAndUser(context, uow, 2);
+        user.AgeRestriction = AgeRating.Teen;
+        user.AgeRestrictionIncludeUnknowns = true;
+        var series = context.Series.OrderBy(s=>s.Id).ToList();
+        series[0].Metadata.AgeRating = AgeRating.AdultsOnly;
+        series[1].Metadata.AgeRating = AgeRating.Everyone;
+        var list = await CreateReadingList(context, uow, "Accessible sequence", user.Id, [(1,1,1),(2,2,3)]);
+        var feed = await opds.GetReadingListItems(new OpdsItemsFromEntityIdRequest
+        {ApiKey="test", Prefix="/api/opds/", BaseUrl="", UserId=user.Id,
+         Preferences=await uow.UserRepository.GetOpdsPreferences(user.Id),
+         EntityId=list.Id, PageNumber=1, ContinueReading=true});
+        Assert.Equal("3", Assert.Single(feed.Entries).Id);
+    }
+
+    [Fact]
+    public async Task ReadingListContinuation_PaginatesTheRemainingSequenceAndStaysEmptyWhenFinished()
+    {
+        var (uow, context, mapper) = await CreateDatabase();
+        var (opds, reader) = SetupService(uow, mapper);
+        var count = OpdsService.PageSize + 6;
+        var user = await SetupSeriesAndUser(context, uow, count);
+        var list = await CreateReadingList(context, uow, "Ordered list", user.Id,
+            Enumerable.Range(1, count).Select(i => (i, i, i * 2 - 1)).ToList());
+        await reader.SaveReadingProgress(new ProgressDto
+            {ChapterId=5, VolumeId=3, SeriesId=3, LibraryId=2, PageNum=9}, user.Id, false);
+        var request = new OpdsItemsFromEntityIdRequest
+        {ApiKey="test", Prefix="/api/opds/", BaseUrl="", UserId=user.Id,
+         Preferences=await uow.UserRepository.GetOpdsPreferences(user.Id),
+         EntityId=list.Id, PageNumber=1, ContinueReading=true};
+        var first = await opds.GetReadingListItems(request);
+        var second = await opds.GetReadingListItems(request with {PageNumber=2});
+        Assert.Equal(count-3, first.Total);
+        Assert.Equal(count-3, first.Entries.Count+second.Entries.Count);
+        Assert.All(first.Links.Where(l => l.Rel == FeedLinkRelation.Self || l.Rel == FeedLinkRelation.Next),
+            l => Assert.Contains("continueReading=true", l.Href));
+        Assert.Empty(first.Entries.Select(e=>e.Id).Intersect(second.Entries.Select(e=>e.Id)));
+        await reader.SaveReadingProgress(new ProgressDto
+            {ChapterId=count*2-1, VolumeId=count, SeriesId=count, LibraryId=2, PageNum=10}, user.Id, false);
+        Assert.Empty((await opds.GetReadingListItems(request)).Entries);
+        var normal = await opds.GetReadingListItems(request with {ContinueReading=false});
+        Assert.DoesNotContain(normal.Entries, e=>e.Id.EndsWith("-continue"));
+        Assert.Equal(OpdsService.PageSize, normal.Entries.Count);
     }
 
     [Fact]

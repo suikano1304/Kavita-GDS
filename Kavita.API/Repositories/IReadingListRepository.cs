@@ -50,7 +50,7 @@ public interface IReadingListRepository
     Task<IEnumerable<ReadingList>> GetReadingListsBySeriesId(int seriesId, ReadingListIncludes includes = ReadingListIncludes.Items, CancellationToken ct = default);
     Task<ReadingListInfoDto?> GetReadingListInfoAsync(int readingListId, CancellationToken ct = default);
     Task<bool> AnyUserReadingProgressAsync(int readingListId, int userId, CancellationToken ct = default);
-    Task<ReadingListItemDto?> GetContinueReadingPoint(int readingListId, int userId, CancellationToken ct = default);
+    Task<ReadingListItemDto?> GetContinueReadingPoint(int readingListId, int userId, CancellationToken ct = default, bool useRecommendationThreshold = false);
     Task<int> GetReadingListItemCountAsync(int readingListId, int userId, CancellationToken ct = default);
     Task<long> GetFilesizeAsync(int readingListId, int userId, CancellationToken ct = default);
     Task<Dictionary<int, long>> GetFilesizesAsync(IList<int> readingListIds, int userId, CancellationToken ct = default);

@@ -16,6 +16,8 @@ using Kavita.Common.Helpers;
 using Kavita.Models.DTOs;
 using Kavita.Models.DTOs.Filtering.v2;
 using Kavita.Models.DTOs.Filtering.v2.Requests;
+using Kavita.Models.DTOs.Filtering.v2.SortFields;
+using Kavita.Models.DTOs.Filtering.v2.SortOptions;
 using Kavita.Models.DTOs.OPDS;
 using Kavita.Models.DTOs.OPDS.Requests;
 using Kavita.Models.DTOs.Person;
@@ -362,7 +364,16 @@ public class OpdsService(
     {
         var userId = UnpackRequest(request, out var apiKey, out var prefix, out var baseUrl);
 
-        var pagedList = await unitOfWork.SeriesRepository.GetOnDeckAsync(userId, 0, GetUserParams(request.PageNumber), ct);
+        var candidates = await unitOfWork.SeriesRepository.GetOnDeckAsync(userId, 0, UserParams.Infinite, ct);
+        var volumes = await unitOfWork.VolumeRepository.GetContinuationVolumesAsync(
+            candidates.Select(s => s.Id).ToList(), userId, ct);
+        var continuable = volumes.GroupBy(v => v.SeriesId)
+            .Where(g => Reading.ReadingContinuation.Select(Reading.ReadingContinuation.Order(g)) != null)
+            .Select(g => g.Key).ToHashSet();
+        var eligible = candidates.Where(s => continuable.Contains(s.Id)).ToList();
+        var page = Math.Max(FirstPageNumber, request.PageNumber);
+        var pagedList = PagedList<SeriesDto>.Create(eligible.Skip((page - 1) * PageSize).Take(PageSize),
+            eligible.Count, page, PageSize);
         var seriesMetadatas = await unitOfWork.SeriesRepository.GetSeriesMetadataForIdsAsync(pagedList.Select(s => s.Id), ct);
 
         var feed = CreateFeed(await localizationService.TranslateAsync(userId, "on-deck"), $"{apiKey}/on-deck", apiKey, prefix);
@@ -371,7 +382,10 @@ public class OpdsService(
 
         foreach (var seriesDto in pagedList)
         {
-            feed.Entries.Add(CreateSeries(seriesDto, seriesMetadatas.First(s => s.SeriesId == seriesDto.Id), apiKey, prefix, baseUrl));
+            var entry = CreateSeries(seriesDto, seriesMetadatas.First(s => s.SeriesId == seriesDto.Id), apiKey, prefix, baseUrl);
+            foreach (var link in entry.Links.Where(l => l.Rel == FeedLinkRelation.SubSection))
+                link.Href += "?continueReading=true";
+            feed.Entries.Add(entry);
         }
 
         return feed;
@@ -472,6 +486,8 @@ public class OpdsService(
 
         var filter = new SeriesFilterV2Dto
         {
+            SortOptions = new SeriesSortOptionDto
+            { SortField = SeriesSortField.LastModifiedDate, IsAscending = false },
             Statements = [
                 new SeriesFilterStatementDto
                 {
@@ -510,34 +526,39 @@ public class OpdsService(
         var feed = CreateFeed(readingList.Title + " " + await localizationService.TranslateAsync(userId, "reading-list"), $"{apiKey}/reading-list/{readingListId}", apiKey, prefix);
         SetFeedId(feed, $"reading-list-{readingListId}");
 
-        var items = await readingListService.GetReadingListItems(readingListId, userId, GetUserParams(request.PageNumber));
-        var totalItems = await unitOfWork.ReadingListRepository .GetReadingListItemCountAsync(readingListId, userId, ct);
+        var continuePoint = await unitOfWork.ReadingListRepository.GetContinueReadingPoint(
+            readingListId, userId, ct, useRecommendationThreshold: true);
+        var items = await readingListService.GetReadingListItems(readingListId, userId,
+            request.ContinueReading ? UserParams.Infinite : GetUserParams(request.PageNumber));
+        var totalItems = await unitOfWork.ReadingListRepository.GetReadingListItemCountAsync(readingListId, userId, ct);
+        if (request.ContinueReading)
+        {
+            SetFeedId(feed, $"reading-list-{readingListId}-continue");
+            var remaining = continuePoint == null ? new List<ReadingListItemDto>()
+                : items.SkipWhile(i => i.Id != continuePoint.Id).ToList();
+            totalItems = remaining.Count;
+            items = PagedList<ReadingListItemDto>.Create(
+                remaining.Skip((Math.Max(1, request.PageNumber) - 1) * PageSize).Take(PageSize),
+                totalItems, Math.Max(1, request.PageNumber), PageSize);
+        }
 
         var chapterIds = items.Select(i => i.ChapterId).Distinct().ToList();
         var chapters = (await unitOfWork.ChapterRepository .GetChapterDtosAsync(chapterIds, userId, ct))
             .ToDictionary(c => c.Id);
 
-        // Check if there is reading progress or not, if so, inject a "continue-reading" item
-
-        if (request.Preferences.IncludeContinueFrom && request.PageNumber == FirstPageNumber)
+        if (!request.ContinueReading && request.Preferences.IncludeContinueFrom &&
+            request.PageNumber <= FirstPageNumber && continuePoint != null &&
+            await unitOfWork.ReadingListRepository.AnyUserReadingProgressAsync(readingListId, userId, ct))
         {
-            var anyProgress = await unitOfWork.ReadingListRepository.AnyUserReadingProgressAsync(readingListId, userId, ct);
-            if (anyProgress)
+            feed.Entries.Add(new FeedEntry
             {
-                var continuePoint = await unitOfWork.ReadingListRepository.GetContinueReadingPoint(readingListId, userId, ct);
-
-                if (continuePoint != null)
-                {
-                    var continueChapter =
-                        await unitOfWork.ChapterRepository.GetChapterDtoAsync(continuePoint.ChapterId, request.UserId, ct);
-                    if (continueChapter is {Files.Count: 1})
-                    {
-                        feed.Entries.Add(await CreateContinueReadingEntryAsync(continuePoint, continueChapter, request));
-                    }
-                }
-            }
+                Id = $"reading-list-{readingListId}-continue",
+                Title = await localizationService.TranslateAsync(userId, "opds-continue-reading-title",
+                    $"{continuePoint.SeriesName}: {namingService.FormatReadingListItemTitle(continuePoint)}"),
+                Links = [CreateLink(FeedLinkRelation.SubSection, FeedLinkType.AtomNavigation,
+                    $"{prefix}{apiKey}/reading-list/{readingListId}?continueReading=true")]
+            });
         }
-
 
         foreach (var item in items)
         {
@@ -550,6 +571,9 @@ public class OpdsService(
         }
 
         AddPagination(feed, request.PageNumber, totalItems, UserParams.Default.PageSize, $"{prefix}{apiKey}/reading-list/{readingListId}/");
+        if (request.ContinueReading)
+            foreach (var link in feed.Links.Where(l => l.Href.Contains("pageNumber=")))
+                link.Href += "&continueReading=true";
 
         return feed;
     }
@@ -581,21 +605,9 @@ public class OpdsService(
         feed.Links.Add(CreateLink(FeedLinkRelation.Image, FeedLinkType.Image, $"{baseUrl}api/image/series-cover?seriesId={seriesId}&apiKey={apiKey}"));
 
 
-        // Check if there is reading progress or not, if so, inject a "continue-reading" item
-        if (request.Preferences.IncludeContinueFrom)
-        {
-            var anyUserProgress = await unitOfWork.AppUserProgressRepository
-                .AnyUserProgressForSeriesAsync(seriesId, userId, ct);
-            if (anyUserProgress)
-            {
-                var continueChapter = await readerService.GetContinuePoint(seriesId, userId);
-                if (continueChapter is { Files.Count: 1 })
-                {
-                    volumesById.TryGetValue(continueChapter.VolumeId, out var continueVolume);
-                    feed.Entries.Add(await CreateContinueReadingEntryAsync(series, continueVolume, continueChapter, namingContext, request));
-                }
-            }
-        }
+        // A continuation is a navigation shortcut, never a second acquisition of
+        // the same book. Clients use acquisition order for their next-book queue.
+        var continueChapter = await readerService.GetContinuePoint(seriesId, userId);
 
         var chaptersSeen = new Dictionary<int, short>();
 
@@ -627,6 +639,9 @@ public class OpdsService(
             feed.Entries.Add(CreateChapterFeedEntry(series, volume, special, namingContext, request));
         }
 
+        await ApplyContinuation(feed, continueChapter, request,
+            $"series-{series.Id}", $"{prefix}{apiKey}/series/{series.Id}", request.ContinueReading, series.PagesRead > 0);
+
         return feed;
     }
 
@@ -656,22 +671,17 @@ public class OpdsService(
             $"{apiKey}/series/{seriesId}/volume/{volumeId}", apiKey, prefix);
         SetFeedId(feed, $"series-{series.Id}-volume-{volume.Id}");
 
-        // Check if there is reading progress or not, if so, inject a "continue-reading" item
-        if (request.Preferences.IncludeContinueFrom && request.PageNumber == FirstPageNumber)
-        {
-            var firstChapterWithProgress = volume.Chapters.FirstOrDefault(i => i.PagesRead > 0 && i.PagesRead != i.Pages)
-                                           ?? volume.Chapters.FirstOrDefault(i => i.PagesRead == 0 && i.PagesRead != i.Pages);
+        var orderedChapters = volume.Chapters.OrderBy(c => c.SortOrder).ThenBy(c => c.Id).ToList();
+        var continueChapter = Reading.ReadingContinuation.Select(orderedChapters);
 
-            if (firstChapterWithProgress is { Files.Count: 1 })
-            {
-                feed.Entries.Add(await CreateContinueReadingEntryAsync(series, volume, firstChapterWithProgress, namingContext, request));
-            }
-        }
-
-        foreach (var chapterDto in volume.Chapters)
+        foreach (var chapterDto in orderedChapters)
         {
             feed.Entries.Add(CreateChapterFeedEntry(series, volume, chapterDto, namingContext, request));
         }
+
+        await ApplyContinuation(feed, continueChapter, request,
+            $"series-{series.Id}-volume-{volume.Id}",
+            $"{prefix}{apiKey}/series/{series.Id}/volume/{volume.Id}", request.ContinueReading, orderedChapters.Any(c => c.PagesRead > 0));
 
         return feed;
     }
@@ -1010,6 +1020,8 @@ public class OpdsService(
         return new FeedEntry()
         {
             Id = seriesDto.Id.ToString(),
+            Updated = (seriesDto.ContentLastModified == DateTime.MinValue
+                ? seriesDto.LastModified : seriesDto.ContentLastModified).ToUniversalTime().ToString("O"),
             Title = $"{seriesDto.Name}",
             Summary = $"Format: {seriesDto.Format}" + (string.IsNullOrWhiteSpace(metadata.Summary)
                 ? string.Empty
@@ -1108,7 +1120,8 @@ public class OpdsService(
 
         if (request.Preferences.EmbedProgressIndicator)
         {
-            entry.Title = $"{GetReadingProgressIcon(chapter.PagesRead, chapter.Pages)} {entry.Title}";
+            // Keep title sorting independent of mutable progress (OPDSy sorts titles).
+            entry.Title = $"{entry.Title} {GetReadingProgressIcon(chapter.PagesRead, chapter.Pages)}";
         }
 
         return entry;
@@ -1172,10 +1185,36 @@ public class OpdsService(
 
         if (request.Preferences.EmbedProgressIndicator)
         {
-            entry.Title = $"{GetReadingProgressIcon(item.PagesRead, chapter.Pages)} {entry.Title}";
+            entry.Title = $"{entry.Title} {GetReadingProgressIcon(item.PagesRead, chapter.Pages)}";
         }
 
         return entry;
+    }
+
+    private async Task ApplyContinuation(Feed feed, ChapterDto? chapter, IOpdsRequest request,
+        string identity, string href, bool continuationOnly, bool hasProgress)
+    {
+        var index = chapter == null ? -1 : feed.Entries.FindIndex(e => e.Id == chapter.Id.ToString());
+        if (continuationOnly)
+        {
+            SetFeedId(feed, identity + "-continue");
+            foreach (var link in feed.Links.Where(l => l.Rel == FeedLinkRelation.Self))
+                link.Href = href + "?continueReading=true";
+            // A completed sequence is empty; it never silently restarts at book one.
+            if (index < 0) feed.Entries.Clear();
+            else if (index > 0) feed.Entries.RemoveRange(0, index);
+            return;
+        }
+        if (!request.Preferences.IncludeContinueFrom || index < 0 ||
+            !hasProgress) return;
+        var target = feed.Entries[index];
+        feed.Entries.Insert(0, new FeedEntry
+        {
+            Id = identity + "-continue",
+            Title = await localizationService.TranslateAsync(request.UserId, "opds-continue-reading-title", target.Title),
+            Links = [CreateLink(FeedLinkRelation.SubSection, FeedLinkType.AtomNavigation,
+                href + "?continueReading=true")]
+        });
     }
 
     private static string GetReadingProgressIcon(int pagesRead, int totalPages)
@@ -1207,10 +1246,10 @@ public class OpdsService(
         link.TotalPages = chapter.Pages;
         link.IsPageStream = true;
 
-        if (chapter.LastReadingProgressUtc > DateTime.MinValue)
+        if (chapter.PagesRead > 0 && chapter.LastReadingProgressUtc > DateTime.MinValue)
         {
-            link.LastRead = chapter.PagesRead;
-            link.LastReadDate = chapter.LastReadingProgressUtc.ToString("s"); // Adhere to ISO 8601
+            link.LastRead = Math.Clamp(chapter.PagesRead, 0, Math.Max(0, chapter.Pages));
+            link.LastReadDate = DateTime.SpecifyKind(chapter.LastReadingProgressUtc, DateTimeKind.Utc).ToString("O"); // Adhere to ISO 8601
         }
 
         return link;
@@ -1225,33 +1264,4 @@ public class OpdsService(
         };
     }
 
-    /// <summary>
-    /// Creates a continued reading feed entry from a chapter.
-    /// </summary>
-    private async Task<FeedEntry> CreateContinueReadingEntryAsync( SeriesDto series, VolumeDto? volume, ChapterDto chapter, LocalizedNamingContext namingContext, IOpdsRequest request)
-    {
-        var entry = CreateChapterFeedEntry(series, volume, chapter, namingContext, request);
-
-        entry.Title = await localizationService.TranslateAsync(
-            request.UserId, "opds-continue-reading-title", entry.Title);
-
-        return entry;
-    }
-
-    /// <summary>
-    /// Creates a continue reading feed entry for a reading list item.
-    /// </summary>
-    private async Task<FeedEntry> CreateContinueReadingEntryAsync(ReadingListItemDto item, ChapterDto chapter, IOpdsRequest request)
-    {
-        var entry = CreateReadingListEntry(item, chapter, request);
-
-        var titleWithoutIcon = request.Preferences.EmbedProgressIndicator && entry.Title.Length > 2
-            ? entry.Title[2..]
-            : entry.Title;
-
-        entry.Title = await localizationService.TranslateAsync(
-            request.UserId, "opds-continue-reading-title", titleWithoutIcon);
-
-        return entry;
-    }
 }

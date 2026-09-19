@@ -15,6 +15,31 @@ namespace Kavita.Database.Repositories;
 
 public class VolumeRepository(DataContext context, IMapper mapper) : IVolumeRepository
 {
+    // Only ordering/progress fields, in one batch; no files, covers or remote I/O.
+    public async Task<IList<VolumeDto>> GetContinuationVolumesAsync(IList<int> seriesIds, int userId,
+        CancellationToken ct = default)
+    {
+        var rows = await context.Chapter.Where(c => seriesIds.Contains(c.Volume.SeriesId))
+            .Select(c => new
+            {
+                c.Id, c.VolumeId, c.SortOrder, c.Pages, c.Volume.SeriesId,
+                c.Volume.Name, c.Volume.MinNumber, c.Volume.MaxNumber,
+                PagesRead = context.AppUserProgresses
+                    .Where(p => p.ChapterId == c.Id && p.AppUserId == userId)
+                    .Select(p => (int?)p.PagesRead).Max() ?? 0
+            }).AsNoTracking().ToListAsync(ct);
+        return rows.GroupBy(c => c.VolumeId).Select(g => new VolumeDto
+        {
+            Id = g.Key, SeriesId = g.First().SeriesId, Name = g.First().Name,
+            MinNumber = g.First().MinNumber, MaxNumber = g.First().MaxNumber,
+            Chapters = g.Select(c => new ChapterDto
+            {
+                Id = c.Id, VolumeId = c.VolumeId, SortOrder = c.SortOrder,
+                Pages = c.Pages, PagesRead = c.PagesRead
+            }).ToList()
+        }).ToList();
+    }
+
     public void Add(Volume volume)
     {
         context.Volume.Add(volume);
