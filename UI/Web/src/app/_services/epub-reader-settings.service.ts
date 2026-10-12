@@ -20,6 +20,7 @@ import {EpubFont, FontProvider} from "../_models/preferences/epub-font";
 import {FontService} from "./font.service";
 import {BreakpointService} from "./breakpoint.service";
 import {FieldTree, form, max, min} from "@angular/forms/signals";
+import {AccountService} from './account.service';
 
 export interface ReaderSettingUpdate {
   setting: 'pageStyle' | 'clickToPaginate' | 'fullscreen' | 'writingStyle' | 'layoutMode' | 'readingDirection' | 'immersiveMode' | 'theme' | 'pageCalcMethod' | 'bookReaderDisableBookmarkIcon';
@@ -43,6 +44,8 @@ export interface BookReadingProfileFormModel {
 @Injectable()
 export class EpubReaderSettingsService {
 
+  private readonly accountService = inject(AccountService);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly fontService = inject(FontService);
   private readonly themeService = inject(ThemeService);
   private readonly readingProfileService = inject(ReadingProfileService);

@@ -1950,6 +1950,27 @@ public class SeriesRepository(DataContext context, IMapper mapper) : ISeriesRepo
     /// <param name="seriesIds"></param>
     /// <param name="ct"></param>
     /// <returns></returns>
+    public async Task<IList<SeriesScanFingerprintInfo>> GetGdsScanFingerprintInfoAsync(int libraryId,
+        CancellationToken ct = default)
+    {
+        return await context.Series
+            .Where(s => s.LibraryId == libraryId)
+            .AsNoTracking()
+            .Select(s => new SeriesScanFingerprintInfo
+            {
+                SeriesId = s.Id,
+                NormalizedName = s.NormalizedName,
+                Format = s.Format,
+                GdsScanFingerprint = s.GdsScanFingerprint,
+                GdsScanFingerprintVersion = s.GdsScanFingerprintVersion,
+                NeedsSeriesCoverImage = string.IsNullOrEmpty(s.CoverImage) && !s.CoverImageLocked,
+                HasMissingNestedCoverImages = s.Volumes.Any(v =>
+                    (string.IsNullOrEmpty(v.CoverImage) && !v.CoverImageLocked) ||
+                    v.Chapters.Any(c => string.IsNullOrEmpty(c.CoverImage) && !c.CoverImageLocked))
+            })
+            .ToListAsync(ct);
+    }
+
     public async Task<AgeRating> GetMaxAgeRatingFromSeriesAsyncAsync(IEnumerable<int> seriesIds, CancellationToken ct = default)
     {
         var ret = await context.Series

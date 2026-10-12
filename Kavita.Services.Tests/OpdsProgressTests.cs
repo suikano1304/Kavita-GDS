@@ -9,6 +9,7 @@ using Kavita.Database.Repositories;
 using Kavita.Database.Tests;
 using Kavita.Models.Builders;
 using Kavita.Models.DTOs.Progress;
+using Kavita.Models.Entities.Enums;
 using Kavita.Models.Entities.User;
 using Kavita.Services.Reading;
 using Kavita.Services.Builders;
@@ -23,17 +24,24 @@ namespace Kavita.Services.Tests;
 [Collection("Scan folder jobs")]
 public class OpdsProgressTests(ITestOutputHelper output) : AbstractDbTest(output)
 {
-    private static ReaderService Reader(IUnitOfWork uow) => new(uow,
-        Substitute.For<ILogger<ReaderService>>(), Substitute.For<IEventHub>(),
-        Substitute.For<IImageService>(), new DirectoryService(Substitute.For<ILogger<DirectoryService>>(), new MockFileSystem()),
-        Substitute.For<IScrobblingService>(), Substitute.For<IReadingSessionService>(),
-        Substitute.For<IClientInfoAccessor>(), Substitute.For<IEntityNamingService>(),
-        Substitute.For<ILocalizationService>(), Substitute.For<IBookService>());
+    private static ReaderService Reader(IUnitOfWork uow)
+    {
+        return new ReaderService(uow,
+            Substitute.For<ILogger<ReaderService>>(), Substitute.For<IEventHub>(),
+            Substitute.For<IImageService>(), new DirectoryService(Substitute.For<ILogger<DirectoryService>>(), new MockFileSystem()),
+            Substitute.For<IScrobblingService>(), Substitute.For<IReadingSessionService>(),
+            Substitute.For<IClientInfoAccessor>(), Substitute.For<IEntityNamingService>(),
+            Substitute.For<ILocalizationService>(), Substitute.For<IBookService>());
+    }
 
     private static async Task Seed(DataContext context)
     {
-        context.AppUser.AddRange(new AppUser {UserName = "reader-a"}, new AppUser {UserName = "reader-b"});
-        var builder = new SeriesBuilder("Sequential series").WithLibraryId(1);
+        var library = await context.Library.FirstAsync();
+
+        context.AppUser.AddRange(
+            new AppUser {UserName = "reader-a", Libraries = [library]},
+            new AppUser {UserName = "reader-b", Libraries = [library]});
+        var builder = new SeriesBuilder("Sequential series").WithLibraryId(library.Id);
         foreach (var n in Enumerable.Range(1, 3))
             builder.WithVolume(new VolumeBuilder(n.ToString())
                 .WithChapter(new ChapterBuilder(n.ToString()).WithPages(184).Build()).Build());

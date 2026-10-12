@@ -54,6 +54,8 @@ public partial class BookService(
     public const string BookReaderBodyScope = "//BODY/APP-ROOT[1]/DIV[1]/DIV[1]/DIV[1]/APP-BOOK-READER[1]/DIV[1]/DIV[2]/DIV[1]/DIV[1]/DIV[1]";
 
     private readonly PdfComicInfoExtractor _pdfComicInfoExtractor = new(logger);
+    private const int TextLinesPerPage = 1000;
+    private sealed record VirtualEpubPage(string Title, string ContentKey, string Anchor);
 
     /// <summary>
     /// Setup the most lenient book parsing options possible as people have some really bad epubs
@@ -357,7 +359,10 @@ public partial class BookService(
         {
             if (!match.Success) continue;
             var importFile = match.Groups["Filename"].Value;
-            stylesheetHtml = stylesheetHtml.Replace(importFile, apiBase + NormalizePath(prepend + importFile));
+            if (!IsLocalCssReference(importFile) ||
+                match.Value.Contains("local(", StringComparison.OrdinalIgnoreCase)) continue;
+            stylesheetHtml = stylesheetHtml.Replace(importFile,
+                apiBase + Uri.EscapeDataString(NormalizeContentKey(prepend + Uri.UnescapeDataString(importFile))));
         }
     }
 
@@ -514,7 +519,8 @@ public partial class BookService(
         }
     }
 
-    private async Task InlineStyles(HtmlDocument doc, EpubBookRef book, string libraryFilePath, string apiBase, HtmlNode body, CancellationToken ct = default)
+    private async Task InlineStyles(HtmlDocument doc, EpubBookRef book, string libraryFilePath, string apiBase,
+        HtmlNode body, string owner, CancellationToken ct = default)
     {
         var inlineStyles = doc.DocumentNode.SelectNodes("//style");
         // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
@@ -561,7 +567,7 @@ public partial class BookService(
     /// <exception cref="Exception">The epub cannot be opened even leniently, or its metadata cannot be read</exception>
     private ComicInfo? GetEpubComicInfo(string filePath, out string? strictOpenError)
     {
-        EpubBookOpener.Lease? epubBookLease = null;
+        EpubBookRef? epubBook = null;
 
         try
         {
@@ -579,7 +585,7 @@ public partial class BookService(
         }
         finally
         {
-            epubBookLease?.Dispose();
+            epubBook?.Dispose();
         }
     }
 
@@ -1077,7 +1083,7 @@ public partial class BookService(
         {
             logger.LogWarning(ex, "[GetNumberOfPagesText] There was an exception getting number of pages, defaulting to 0");
             mediaErrorService.ReportMediaIssue(filePath, MediaErrorProducer.BookService,
-                "There was an exception getting number of pages, defaulting to 0", ex);
+                MediaErrorReason.NoPages, ex);
         }
 
         return 0;
@@ -1697,7 +1703,7 @@ public partial class BookService(
         Dictionary<string, int> mappings, int page, List<PersonalToCDto> ptocBookmarks, List<AnnotationDto> annotations,
         string owner, CancellationToken ct = default)
     {
-        await InlineStyles(doc, book, libraryFilePath, apiBase, body, ct);
+        await InlineStyles(doc, book, libraryFilePath, apiBase, body, owner, ct);
 
         foreach (var anchor in doc.DocumentNode.Descendants("a"))
         {
@@ -1990,7 +1996,7 @@ public partial class BookService(
         var virtualPages = await GetSingleSpineNavigationPagesAsync(book, ct);
         if (virtualPages.Count > 1)
         {
-            return await GetSingleSpineVirtualBookPage(book, virtualPages, page, apiBase, mappings,
+            return await GetSingleSpineVirtualBookPage(book, virtualPages, page, libraryFilePath, apiBase, mappings,
                 ptocBookmarks, annotations, ct);
         }
 
@@ -2028,7 +2034,8 @@ public partial class BookService(
                     body = doc.DocumentNode.SelectSingleNode("/html/body");
                 }
 
-                return await ScopePage(doc, book, libraryFilePath, apiBase, body!, mappings, page, ptocBookmarks, annotations, ct);
+                return await ScopePage(doc, book, libraryFilePath, apiBase, body!, mappings, page, ptocBookmarks,
+                    annotations, contentFileRef.FilePath, ct);
             }
         } catch (Exception ex)
         {
@@ -2041,7 +2048,7 @@ public partial class BookService(
     }
 
     private async Task<string> GetSingleSpineVirtualBookPage(EpubBookRef book, IReadOnlyList<VirtualEpubPage> virtualPages,
-        int page, string apiBase, Dictionary<string, int> mappings, List<PersonalToCDto> ptocBookmarks,
+        int page, string libraryFilePath, string apiBase, Dictionary<string, int> mappings, List<PersonalToCDto> ptocBookmarks,
         List<AnnotationDto> annotations, CancellationToken ct = default)
     {
         page = Math.Clamp(page, 0, virtualPages.Count - 1);
@@ -2072,7 +2079,8 @@ public partial class BookService(
 
         var nextAnchor = page + 1 < virtualPages.Count ? virtualPages[page + 1].Anchor : string.Empty;
         TrimBodyToVirtualPage(body!, page == 0 ? null : virtualPages[page].Anchor, nextAnchor);
-        return await ScopePage(doc, book, apiBase, body!, mappings, page, ptocBookmarks, annotations, contentFileRef.FilePath, ct);
+        return await ScopePage(doc, book, libraryFilePath, apiBase, body!, mappings, page, ptocBookmarks, annotations,
+            contentFileRef.FilePath, ct);
     }
 
     private static void TrimBodyToVirtualPage(HtmlNode body, string? startAnchor, string? nextAnchor)
@@ -2138,7 +2146,7 @@ public partial class BookService(
         {
             logger.LogError(ex, "There was an issue reading text page {Page} for chapter {ChapterId} from {Book}", page, chapterId, cachedTextPath);
             await mediaErrorService.ReportMediaIssueAsync(cachedTextPath, MediaErrorProducer.BookService,
-                "There was an issue reading one of the text pages for", ex, ct);
+                MediaErrorReason.CorruptEpub, ex, ct);
         }
 
         throw new KavitaException("epub-html-missing");

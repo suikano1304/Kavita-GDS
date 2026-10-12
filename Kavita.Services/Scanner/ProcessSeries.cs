@@ -53,6 +53,7 @@ internal sealed record ProcessParserInfosArgs
     /// </summary>
     public IReadOnlyCollection<UnchangedFolder> UnchangedFolders { get; init; } = [];
     public bool ForceUpdate { get; init; }
+    public bool IsGdsLibrary { get; init; }
 }
 
 internal sealed record UpdateChapterComicInfoArgs
@@ -179,6 +180,7 @@ public class ProcessSeries(
                 DatabasePeople = databasePeople,
                 UnchangedFolders = unchangedFolders,
                 ForceUpdate = args.ForceUpdate,
+                IsGdsLibrary = args.Library.Type == LibraryType.GDS,
             });
 
             series.Pages = series.Volumes.Sum(v => v.Pages);
@@ -386,6 +388,12 @@ public class ProcessSeries(
         var libraryFolders = library.Folders.Select(l => Parser.NormalizePath(l.Path)).ToList();
         var seriesFiles = filePaths.Select(Parser.NormalizePath).ToList();
         if (seriesFiles.Count == 0) return;
+        var fileDirectories = seriesFiles
+            .Select(Path.GetDirectoryName)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Select(Parser.NormalizePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         var seriesDirs = directoryService.FindHighestDirectoriesFromFiles(libraryFolders, seriesFiles);
         if (seriesDirs.Keys.Count == 0)
@@ -818,7 +826,8 @@ public class ProcessSeries(
                 chapter.Volume = volume;
             }
 
-            var fileResult = AddOrUpdateFileForChapter(chapter, parsedInfo, args.ForceUpdate);
+            var fileResult = AddOrUpdateFileForChapter(chapter, parsedInfo, args.ForceUpdate,
+                args.IsGdsLibrary);
 
             await UpdateChapter(args, chapter, parsedInfo, fileResult.Changed);
             if (fileResult.ChangedOnDisk)
@@ -1099,7 +1108,8 @@ public class ProcessSeries(
         }
     }
 
-    private UpdateChapterResult AddOrUpdateFileForChapter(Chapter chapter, ParserInfo info, bool forceUpdate = false)
+    private UpdateChapterResult AddOrUpdateFileForChapter(Chapter chapter, ParserInfo info, bool forceUpdate = false,
+        bool skipExpensiveFileStats = false)
     {
         chapter.Files ??= [];
         var existingFile = chapter.Files.SingleOrDefault(f => f.FilePath == info.FullFilePath);
@@ -1124,16 +1134,25 @@ public class ProcessSeries(
             existingFile.FilePath = Parser.NormalizePath(existingFile.FilePath);
             existingFile.Bytes = fileInfo.Length;
             existingFile.FileLastWriteTimeUtc = fileInfo.LastWriteTimeUtc;
-            existingFile.KoreaderHash = KoreaderHelper.HashContents(existingFile.FilePath);
+            if (!skipExpensiveFileStats)
+            {
+                existingFile.KoreaderHash = KoreaderHelper.HashContents(existingFile.FilePath);
+            }
 
             return new UpdateChapterResult(existingFile, true, changedOnDisk);
         }
 
-        var file = new MangaFileBuilder(info.FullFilePath, info.Format, readingItemService.GetNumberOfPages(info.FullFilePath, info.Format))
+        var fileBuilder = new MangaFileBuilder(info.FullFilePath, info.Format,
+                skipExpensiveFileStats
+                    ? GetGdsPageCount(info.FullFilePath, info.Format, 0)
+                    : readingItemService.GetNumberOfPages(info.FullFilePath, info.Format))
             .WithExtension(fileInfo.Extension)
-            .WithBytes(fileInfo.Length)
-            .WithHash()
-            .Build();
+            .WithBytes(fileInfo.Length);
+        if (!skipExpensiveFileStats)
+        {
+            fileBuilder.WithHash();
+        }
+        var file = fileBuilder.Build();
         chapter.Files.Add(file);
 
         return new UpdateChapterResult(file, true, true);
@@ -1330,6 +1349,22 @@ public class ProcessSeries(
         }
 
         logger.LogTrace("[TIME] Kavita took {Time} ms to create/update Chapter: {File}", sw.ElapsedMilliseconds, chapter.Files.First().FileName);
+    }
+
+    private static bool TryCreateComicInfoReleaseDate(ComicInfo comicInfo, out DateTime releaseDate)
+    {
+        releaseDate = DateTime.MinValue;
+        if (comicInfo.Year is < 1 or > 9999) return false;
+
+        var month = comicInfo.Month <= 0 ? 1 : comicInfo.Month;
+        if (month is < 1 or > 12) return false;
+
+        var day = comicInfo.Day <= 0 ? 1 : comicInfo.Day;
+        var daysInMonth = DateTime.DaysInMonth(comicInfo.Year, month);
+        if (day > daysInMonth) return false;
+
+        releaseDate = new DateTime(comicInfo.Year, month, day);
+        return true;
     }
 
     private async Task UpdateChapterGenres(Chapter chapter, IEnumerable<string> genreNames)

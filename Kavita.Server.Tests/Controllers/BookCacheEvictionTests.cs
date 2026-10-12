@@ -37,7 +37,9 @@ public class BookCacheEvictionTests
                 return "<p>Restored content</p>";
             }
             book.GetBookPageText(0, 1, cached, Arg.Any<CancellationToken>()).Returns(_ => Read());
-            book.GetBookPage(7, 0, 1, cached, Arg.Any<string>(), Arg.Any<List<PersonalToCDto>>(), Arg.Any<List<AnnotationDto>>(), Arg.Any<CancellationToken>()).Returns(_ => Read());
+            book.GetBookPage(7, 0, 1, cached, Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<List<PersonalToCDto>>(), Arg.Any<List<AnnotationDto>>(),
+                Arg.Any<CancellationToken>()).Returns(_ => Read());
             var user = Substitute.For<IUserContext>();user.GetUserIdOrThrow().Returns(7);
             var controller = new BookController(book, Substitute.For<IUnitOfWork>(), cache,
                 Substitute.For<ILocalizationService>(), Substitute.For<IDirectoryService>())

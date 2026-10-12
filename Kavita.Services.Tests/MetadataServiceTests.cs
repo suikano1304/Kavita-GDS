@@ -109,7 +109,8 @@ public class MetadataServiceTests(ITestOutputHelper outputHelper) : AbstractDbTe
 
         var service = new MetadataService(Substitute.For<IServiceScopeFactory>(), unitOfWork,
             Substitute.For<ILogger<MetadataService>>(), Substitute.For<IEventHub>(),
-            new CacheHelper(new FileService()), readingItemService, directoryService, imageService);
+            new CacheHelper(new FileService()), readingItemService, directoryService, imageService,
+            Substitute.For<IGdsCoverService>());
         var settings = await unitOfWork.SettingsRepository.GetSettingsDtoAsync();
 
         return new Harness(unitOfWork, context, service, imageService, readingItemService, settings, root);

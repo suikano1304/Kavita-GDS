@@ -56,7 +56,7 @@ public class CoverPageCountConcurrencyTests
         covers.ProcessSeriesRepresentativeCoverGen(series, Arg.Any<bool>(), Arg.Any<EncodeFormat>(), Arg.Any<CoverImageSize>(), Arg.Any<bool>())
             .Returns(_ => FinishSlowCover());
         var events = Substitute.For<IEventHub>();
-        events.SendMessageAsync(Arg.Any<string>(), Arg.Any<SignalRMessage>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        events.SendMessageAsync(Arg.Any<string>(), Arg.Any<SignalRMessageDto>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         var service = new MetadataService(Substitute.For<IServiceScopeFactory>(), unit, Substitute.For<ILogger<MetadataService>>(),
             events, Substitute.For<ICacheHelper>(), Substitute.For<IReadingItemService>(), Substitute.For<IDirectoryService>(),
             Substitute.For<IImageService>(), covers);

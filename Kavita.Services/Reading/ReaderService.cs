@@ -318,11 +318,11 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
     /// OPDS image requests can be speculative or arrive out of order. Preserve
     /// their high-water mark for compatibility, but never call them reading sessions.
     /// </summary>
-    public async Task<bool> SaveOpdsProgress(ProgressDto progressDto, int userId)
+    public async Task<bool> SaveOpdsProgress(ProgressDto progressDto, int userId, CancellationToken ct = default)
     {
         // A stale/malformed client URL must not attach this book's progress to
         // another volume or series. Chapter identity is authoritative in the DB.
-        var chapter = await unitOfWork.ChapterRepository.GetChapterInfoDtoAsync(progressDto.ChapterId);
+        var chapter = await unitOfWork.ChapterRepository.GetChapterInfoDtoAsync(progressDto.ChapterId, ct);
         if (chapter == null) return false;
         var page = Math.Clamp(progressDto.PageNum, 0, Math.Max(0, chapter.Pages));
         progressDto.PageNum = page;
@@ -334,7 +334,7 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
 
         await eventHub.SendMessageAsync(MessageFactory.UserProgressUpdate,
             MessageFactory.UserProgressUpdateEvent(userId, progressDto.SeriesId,
-                progressDto.VolumeId, progressDto.ChapterId, page));
+                progressDto.VolumeId, progressDto.ChapterId, page), ct: ct);
         BackgroundJob.Enqueue(() => scrobblingService.ScrobbleReadingUpdate(userId,
             progressDto.SeriesId, progressDto.ChapterId, CancellationToken.None));
         BackgroundJob.Enqueue(() =>
@@ -573,23 +573,30 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
     /// <param name="userId"></param>
     /// <param name="ct"></param>
     /// <returns></returns>
-    public async Task<ChapterDto> GetContinuePoint(int seriesId, int userId, CancellationToken ct = default)
+    public Task<ChapterDto?> GetContinuePoint(int seriesId, int userId, CancellationToken ct = default)
     {
-        // Since the first chapter has progress already on it, we can check if there is any progress and if not, return that chapter
-        var firstChapter = await unitOfWork.ChapterRepository.GetFirstChapterForSeriesAsync(seriesId, userId, ct);
-        if (firstChapter is { PagesRead: 0 }) return firstChapter;
+        return GetContinuePoint(seriesId, userId, true, ct);
+    }
 
-        var currentlyReading = await unitOfWork.ChapterRepository.GetCurrentlyReadingChapterAsync(seriesId, userId, ct);
-        if (currentlyReading != null) return currentlyReading;
-
+    public async Task<ChapterDto?> GetContinuePoint(int seriesId, int userId,
+        bool useRecommendationThreshold, CancellationToken ct = default)
+    {
         var volumes = (await unitOfWork.VolumeRepository.GetVolumesDtoAsync(seriesId, userId, VolumeIncludes.Files, ct)).ToList();
+        var chapters = ReadingContinuation.Order(volumes);
+        if (chapters.Count == 0) throw new KavitaNotFoundException();
 
-        var allChapters = volumes
-            .OrderBy(v => v.MinNumber, _chapterSortComparerDefaultLast)
-            .SelectMany(v => v.Chapters.OrderBy(c => c.SortOrder))
-            .ToList();
+        var progress = (await unitOfWork.AppUserProgressRepository
+                .GetUserProgressForSeriesAsync(seriesId, userId, ct))
+            .GroupBy(p => p.ChapterId)
+            .ToDictionary(group => group.Key, group => group.MaxBy(p => p.PagesRead)!);
+        foreach (var chapter in chapters)
+        {
+            if (!progress.TryGetValue(chapter.Id, out var saved)) continue;
+            chapter.PagesRead = saved.PagesRead;
+            chapter.LastReadingProgressUtc = saved.LastModifiedUtc;
+        }
 
-        return FindNextReadingChapter(allChapters);
+        return ReadingContinuation.Select(chapters, useRecommendationThreshold);
     }
 
     private static ChapterDto FindNextReadingChapter(IList<ChapterDto> volumeChapters)
@@ -829,7 +836,9 @@ public class ReaderService(IUnitOfWork unitOfWork, ILogger<ReaderService> logger
 
         var namingContext = await CreateNamingContext(userId, libraryId);
 
-        var continuePoint = await GetContinuePoint(seriesId, userId, ct);
+        var continuePoint = await GetContinuePoint(seriesId, userId, ct)
+                            ?? await unitOfWork.ChapterRepository.GetFirstChapterForSeriesAsync(seriesId, userId, ct);
+        if (continuePoint == null) return RereadDto.Dont();
         var continuePointLabel = await FormatReReadLabel(userId, namingContext, continuePoint);
 
         var lastProgress = await unitOfWork.AppUserProgressRepository.GetLatestProgressForSeries(seriesId, userId, ct);

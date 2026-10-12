@@ -91,7 +91,6 @@ public class MetadataService(
             chapter.CoverFileWriteTimeUtc = sourceFile.LastWriteTimeUtc;
         }
 
-        chapter.CoverImage = coverImage;
         imageService.UpdateColorScape(chapter);
 
         unitOfWork.ChapterRepository.Update(chapter);

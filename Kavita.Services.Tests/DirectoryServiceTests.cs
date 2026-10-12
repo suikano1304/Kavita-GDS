@@ -1120,8 +1120,8 @@ public class DirectoryServiceTests: AbstractFsTest
     }
 
     [Theory]
-    [InlineData(SearchOption.AllDirectories, new[] {"Accel World SP01.cbz", "Accel World v1.cbz", "Accel World v2.cbz"})]
-    [InlineData(SearchOption.TopDirectoryOnly, new[] {"Accel World v1.cbz", "Accel World v2.cbz"})]
+    [InlineData(SearchOption.AllDirectories, new[] {"Accel World SP01.cbz", "Accel World v1.cbz", "Accel World v2.cbz", "cover.jpg.txt"})]
+    [InlineData(SearchOption.TopDirectoryOnly, new[] {"Accel World v1.cbz", "Accel World v2.cbz", "cover.jpg.txt"})]
     public void ScanFiles_SkipsExcludedFoldersAndFiles(SearchOption searchOption, string[] expected)
     {
         var ds = new DirectoryService(Substitute.For<ILogger<DirectoryService>>(), CreateStampLibrary());
@@ -1147,7 +1147,8 @@ public class DirectoryServiceTests: AbstractFsTest
         var stamp = ds.ScanFiles("C:/Data/Accel World", Parser.SupportedExtensions, null, SearchOption.TopDirectoryOnly)
             .Single(s => s.Path.EndsWith("v1.cbz"));
 
-        Assert.Equal("C:/Data/Accel World/Accel World v1.cbz", Parser.NormalizePath(stamp.Path));
+        Assert.Equal(Parser.NormalizePath(fileSystem.Path.GetFullPath("C:/Data/Accel World/Accel World v1.cbz")),
+            Parser.NormalizePath(stamp.Path));
         Assert.Equal(5, stamp.Bytes);
         Assert.Equal(written, stamp.LastWriteTimeUtc);
     }

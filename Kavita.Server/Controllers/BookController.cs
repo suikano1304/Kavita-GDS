@@ -57,7 +57,8 @@ public class BookController(
             case MangaFormat.Epub:
             {
                 var mangaFile = (await unitOfWork.ChapterRepository.GetFilesForChapterAsync(chapterId, ct))[0];
-                await cacheService.Ensure(chapterId, ct: ct);
+                var chapter = await cacheService.Ensure(chapterId, ct: ct);
+                if (chapter == null) return BadRequest(await localizationService.TranslateAsync(UserId, "chapter-doesnt-exist"));
 
                 var file = cacheService.GetCachedFile(chapter);
                 using var bookLease = await OpenEpubBookAsync(file);
@@ -78,7 +79,8 @@ public class BookController(
             case MangaFormat.Pdf:
             {
                 var mangaFile = (await unitOfWork.ChapterRepository.GetFilesForChapterAsync(chapterId, ct))[0];
-                await cacheService.Ensure(chapterId, ct: ct);
+                var chapter = await cacheService.Ensure(chapterId, ct: ct);
+                if (chapter == null) return BadRequest(await localizationService.TranslateAsync(UserId, "chapter-doesnt-exist"));
 
                 var file = cacheService.GetCachedFile(chapter);
                 if (string.IsNullOrEmpty(bookTitle))
@@ -220,7 +222,7 @@ public class BookController(
         {
             if (ChapterFileSelector.GetBestReadingFile(chapter.Files)?.Format == MangaFormat.Text)
             {
-                return Ok(await bookService.GetBookPageText(page, chapterId, path));
+                return Ok(await bookService.GetBookPageText(page, chapterId, path, ct));
             }
 
             var ptocBookmarks =

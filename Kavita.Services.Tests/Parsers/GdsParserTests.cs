@@ -35,9 +35,9 @@ public class GdsParserTests : AbstractFsTest
     {
         var filePath = Path.Join(_rootDirectory, relativePath);
         var rootPath = Path.GetDirectoryName(filePath)!;
-        var actual = _parser.Parse(filePath, rootPath, _rootDirectory, LibraryType.GDS);
-
-        Assert.NotNull(actual);
+        var result = _parser.Parse(filePath, rootPath, _rootDirectory, LibraryType.GDS);
+        Assert.NotNull(result.Info);
+        var actual = result.Info!;
         Assert.True(actual.HasEndMarker);
         Assert.Equal(expectedTotalCount, ParsedCountHelper.GetTotalCount(actual));
     }
@@ -47,9 +47,9 @@ public class GdsParserTests : AbstractFsTest
     {
         var filePath = Path.Join(_rootDirectory, "데스완노트완결/데스완노트완결 12권.epub");
         var rootPath = Path.GetDirectoryName(filePath)!;
-        var actual = _parser.Parse(filePath, rootPath, _rootDirectory, LibraryType.GDS);
-
-        Assert.NotNull(actual);
+        var result = _parser.Parse(filePath, rootPath, _rootDirectory, LibraryType.GDS);
+        Assert.NotNull(result.Info);
+        var actual = result.Info!;
         Assert.False(actual.HasEndMarker);
         Assert.Null(ParsedCountHelper.GetTotalCount(actual));
     }
@@ -59,9 +59,9 @@ public class GdsParserTests : AbstractFsTest
     {
         var filePath = Path.Join(_rootDirectory, "완결판 작품/완결판 작품 12권.epub");
         var rootPath = Path.GetDirectoryName(filePath)!;
-        var actual = _parser.Parse(filePath, rootPath, _rootDirectory, LibraryType.GDS);
-
-        Assert.NotNull(actual);
+        var result = _parser.Parse(filePath, rootPath, _rootDirectory, LibraryType.GDS);
+        Assert.NotNull(result.Info);
+        var actual = result.Info!;
         Assert.False(actual.HasEndMarker);
         Assert.Null(ParsedCountHelper.GetTotalCount(actual));
     }
@@ -75,9 +75,9 @@ public class GdsParserTests : AbstractFsTest
     {
         var filePath = Path.Join(_rootDirectory, relativePath);
         var rootPath = Path.GetDirectoryName(filePath)!;
-        var actual = _parser.Parse(filePath, rootPath, _rootDirectory, LibraryType.GDS);
-
-        Assert.NotNull(actual);
+        var result = _parser.Parse(filePath, rootPath, _rootDirectory, LibraryType.GDS);
+        Assert.NotNull(result.Info);
+        var actual = result.Info!;
         Assert.Equal(expectedSeries, actual.Series);
         Assert.Equal(expectedVolume, actual.Volumes);
     }

@@ -1,5 +1,8 @@
+using System;
 using Kavita.API.Services;
 using Kavita.API.Services.Helpers;
+using Kavita.Models.Entities;
+using Kavita.Models.Entities.Interfaces;
 
 namespace Kavita.Services.Helpers;
 
@@ -28,6 +31,21 @@ public class CacheHelper : ICacheHelper
         if (forceUpdate) return true;
 
         return sourceChanged || !fileExists;
+    }
+
+    public bool ShouldUpdateCoverImage(string coverPath, MangaFile? firstFile, DateTime chapterCreated,
+        bool forceUpdate = false, bool isCoverLocked = false)
+    {
+        var sourceChanged = firstFile == null ||
+                            _fileService.HasFileBeenModifiedSince(firstFile.FilePath, firstFile.LastModified);
+        return ShouldUpdateCoverImage(coverPath, sourceChanged, forceUpdate, isCoverLocked);
+    }
+
+    public bool IsFileUnmodifiedSinceCreationOrLastScan(IEntityDate chapter, bool forceUpdate, MangaFile? firstFile)
+    {
+        return firstFile != null && !forceUpdate &&
+               !_fileService.HasFileBeenModifiedSince(firstFile.FilePath, chapter.Created) &&
+               !_fileService.HasFileBeenModifiedSince(firstFile.FilePath, firstFile.LastModified);
     }
 
     /// <summary>

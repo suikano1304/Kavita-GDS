@@ -124,6 +124,7 @@ public interface ISeriesRepository
     Task<IList<Series>> RemoveGdsSeriesNotInNormalizedNamesAsync(ISet<string> seenNormalizedNames, int libraryId, CancellationToken ct = default);
     Task<IDictionary<string, IList<SeriesModified>>> GetFolderPathMapAsync(int libraryId, CancellationToken ct = default);
     Task<IList<SeriesNameMatch>> GetSeriesNameMatchesAsync(int libraryId, CancellationToken ct = default);
+    Task<IList<SeriesScanFingerprintInfo>> GetGdsScanFingerprintInfoAsync(int libraryId, CancellationToken ct = default);
     Task<AgeRating> GetMaxAgeRatingFromSeriesAsyncAsync(IEnumerable<int> seriesIds, CancellationToken ct = default);
     Task<IList<SeriesMetadataDto>> GetSeriesMetadataForIdsAsync(IEnumerable<int> seriesIds, CancellationToken ct = default);
     Task<IList<Series>> GetAllWithCoversInDifferentEncodingAsync(EncodeFormat encodeFormat, bool customOnly = true, CancellationToken ct = default);

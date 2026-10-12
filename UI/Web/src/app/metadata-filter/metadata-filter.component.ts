@@ -84,7 +84,7 @@ export class MetadataFilterComponent<TFilter extends number = number, TSort exte
   });
 
   isSaveDisabled = computed(() => {
-    return this.filterSettings().saveDisabled || !this.formGroup.name().value();
+    return this.filterSettings().saveDisabled;
   })
   isAscendingSort = signal(true);
   updateApplied: number = 0;
@@ -214,10 +214,6 @@ export class MetadataFilterComponent<TFilter extends number = number, TSort exte
     }
 
     this.updateApplied++;
-  }
-
-  isSaveDisabled() {
-    return this.filterSettings().saveDisabled;
   }
 
   save() {

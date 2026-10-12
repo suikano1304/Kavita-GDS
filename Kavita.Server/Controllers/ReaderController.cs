@@ -966,7 +966,9 @@ public class ReaderController(ICacheService cacheService,
     public async Task<ActionResult<int>> GetNextChapter(int seriesId, string? volumeId, int currentChapterId)
     {
         var ct = HttpContext.RequestAborted;
-        return Ok(await readerService.GetNextChapterIdAsync(seriesId, volumeId, currentChapterId, UserId, ct));
+        var resolvedVolumeId = await ResolveReaderVolumeId(volumeId, currentChapterId);
+        if (resolvedVolumeId <= 0) return Ok(-1);
+        return Ok(await readerService.GetNextChapterIdAsync(seriesId, resolvedVolumeId, currentChapterId, UserId, ct));
     }
 
 
@@ -993,8 +995,11 @@ public class ReaderController(ICacheService cacheService,
 
     private async Task<int> ResolveReaderVolumeId(string? volumeId, int currentChapterId)
     {
+        if (int.TryParse(volumeId, out var parsedVolumeId) && parsedVolumeId > 0) return parsedVolumeId;
+
         var ct = HttpContext.RequestAborted;
-        return Ok(await readerService.GetPrevChapterIdAsync(seriesId, volumeId, currentChapterId, UserId, ct));
+        var chapter = await unitOfWork.ChapterRepository.GetChapterInfoDtoAsync(currentChapterId, ct);
+        return chapter?.VolumeId ?? 0;
     }
 
     /// <summary>

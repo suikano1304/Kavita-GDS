@@ -23,10 +23,13 @@ public interface IReaderService
     Task MarkChaptersAsRead(AppUser user, int seriesId, IList<Chapter> chapters, CancellationToken ct = default);
     Task MarkChaptersAsUnread(AppUser user, int seriesId, IList<Chapter> chapters, CancellationToken ct = default);
     Task<bool> SaveReadingProgress(ProgressDto progressDto, int userId, bool saveToReadingSession = true, CancellationToken ct = default);
+    Task<bool> SaveOpdsProgress(ProgressDto progressDto, int userId, CancellationToken ct = default);
     int CapPageToChapter(Chapter chapter, int page);
     Task<int> GetNextChapterIdAsync(int seriesId, int volumeId, int currentChapterId, int userId, CancellationToken ct = default);
     Task<int> GetPrevChapterIdAsync(int seriesId, int volumeId, int currentChapterId, int userId, CancellationToken ct = default);
-    Task<ChapterDto> GetContinuePoint(int seriesId, int userId, CancellationToken ct = default);
+    Task<ChapterDto?> GetContinuePoint(int seriesId, int userId, CancellationToken ct = default);
+    Task<ChapterDto?> GetContinuePoint(int seriesId, int userId, bool useRecommendationThreshold,
+        CancellationToken ct = default);
     IDictionary<int, int> GetPairs(IEnumerable<FileDimensionDto> dimensions);
     Task<string> GetThumbnail(Chapter chapter, int pageNum, IEnumerable<string> cachedImages, CancellationToken ct = default);
     Task<RereadDto> CheckSeriesForReRead(int userId, int seriesId, int libraryId, CancellationToken ct = default);

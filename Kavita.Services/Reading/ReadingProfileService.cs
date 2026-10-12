@@ -39,7 +39,7 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
         UserReadingProfileDto dto, int? activeDeviceId, CancellationToken ct = default)
     {
         var profile = await unitOfWork.AppUserReadingProfileRepository.GetUserProfile(userId, dto.Id, ct);
-        if (profile == null) throw new KavitaException("profile-does-not-exist");
+        if (profile == null) throw new KavitaNotFoundException("profile-does-not-exist");
 
         var parentProfile = await GetReadingProfileForSeries(userId, libraryId, seriesId, activeDeviceId, true, ct);
 
@@ -65,7 +65,7 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
         CancellationToken ct = default)
     {
         var profile = await unitOfWork.AppUserReadingProfileRepository.GetUserProfile(userId, dto.Id, ct);
-        if (profile == null) throw new KavitaException("profile-does-not-exist");
+        if (profile == null) throw new KavitaNotFoundException("profile-does-not-exist");
 
         UpdateReaderProfileFields(profile, dto);
         unitOfWork.AppUserReadingProfileRepository.Update(profile);
@@ -191,7 +191,7 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
     public async Task DeleteReadingProfile(int userId, int profileId, CancellationToken ct = default)
     {
         var profile = await unitOfWork.AppUserReadingProfileRepository.GetUserProfile(userId, profileId, ct);
-        if (profile == null) throw new KavitaException("profile-doesnt-exist");
+        if (profile == null) throw new KavitaNotFoundException("profile-doesnt-exist");
 
         if (profile.Kind == ReadingProfileKind.Default) throw new KavitaException("cant-delete-default-profile");
 
@@ -329,13 +329,16 @@ public class ReadingProfileService(IUnitOfWork unitOfWork, ILocalizationService 
     public async Task SetProfileDevices(int userId, int profileId, List<int> deviceIds, CancellationToken ct = default)
     {
         var profile = await unitOfWork.AppUserReadingProfileRepository.GetUserProfile(userId, profileId, ct);
-        if (profile == null) throw new KavitaException("profile-doesnt-exist");
+        if (profile == null) throw new KavitaNotFoundException("profile-doesnt-exist");
 
         if (profile.Kind == ReadingProfileKind.Default) throw new KavitaException("cant-assign-devices-to-default");
 
         var requestedDevices = deviceIds.Distinct().ToList();
         if (await unitOfWork.DataContext.ClientDevice.CountAsync(d => d.AppUserId == userId && requestedDevices.Contains(d.Id)) != requestedDevices.Count)
             throw new KavitaNotFoundException("profile-doesnt-exist");
+
+        profile.DeviceIds = requestedDevices;
+        unitOfWork.AppUserReadingProfileRepository.Update(profile);
 
         await unitOfWork.CommitAsync(ct);
 

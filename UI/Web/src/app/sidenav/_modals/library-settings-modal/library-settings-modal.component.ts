@@ -277,6 +277,8 @@ export class LibrarySettingsModalComponent implements OnInit {
       case LibraryType.LightNovel:
         return [FileTypeGroup.Epub];
     }
+
+    return [];
   }
 
   setValues() {

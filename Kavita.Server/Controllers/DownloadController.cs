@@ -241,7 +241,7 @@ public class DownloadController(
                 var stem = counts[x.Stem] > 1 ? $"{x.Stem}_{ordinal:D2}" : x.Stem;
                 return new DownloadArchiveEntry(x.File.FilePath, DownloadFileName.Unique(stem, Path.GetExtension(x.File.FilePath), used));
             }).ToList();
-            if (!forceZip && files.Count == 1 && files.First().Format != MangaFormat.Image)
+            if (files.Count == 1 && files.First().Format != MangaFormat.Image)
             {
                 // Emit "ended" after the response is fully sent to the client
                 HttpContext.Response.OnCompleted(async () =>

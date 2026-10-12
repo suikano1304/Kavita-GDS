@@ -38,7 +38,7 @@ public sealed class GdsCoverServiceTests : IDisposable
         directoryService.CoverImageDirectory.Returns(_coverDirectory);
 
         var eventHub = Substitute.For<IEventHub>();
-        eventHub.SendMessageAsync(Arg.Any<string>(), Arg.Any<SignalRMessage>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+        eventHub.SendMessageAsync(Arg.Any<string>(), Arg.Any<SignalRMessageDto>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
         _unitOfWork.SeriesRepository.Returns(Substitute.For<ISeriesRepository>());

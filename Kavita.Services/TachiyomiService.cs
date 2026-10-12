@@ -37,7 +37,10 @@ public class TachiyomiService(
 
     public async Task<TachiyomiChapterDto?> GetLatestChapter(int seriesId, int userId, CancellationToken ct = default)
     {
-        var currentChapter = await readerService.GetContinuePoint(seriesId, userId, ct);
+        var currentChapter = await readerService.GetContinuePoint(seriesId, userId,
+                                 useRecommendationThreshold: false, ct: ct)
+                             ?? await unitOfWork.ChapterRepository.GetFirstChapterForSeriesAsync(seriesId, userId, ct);
+        if (currentChapter == null) return null;
 
         var prevChapterId =
             await readerService.GetPrevChapterIdAsync(seriesId, currentChapter.VolumeId, currentChapter.Id, userId, ct);

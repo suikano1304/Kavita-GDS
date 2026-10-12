@@ -3,6 +3,7 @@ using Kavita.Database.Tests;
 using Kavita.Models.Builders;
 using Kavita.Models.Entities;
 using Kavita.Models.Entities.Enums;
+using Kavita.Models.Scanner;
 using Kavita.Services.Scanner;
 using Kavita.Services.Tests.Helpers;
 using Xunit.Abstractions;
@@ -36,17 +37,18 @@ public class ScanFolderSchedulingTests(ITestOutputHelper output) : AbstractDbTes
         await context.SaveChangesAsync();
 
         var scanner = new ScannerHelper(uow, _testOutputHelper).CreateServices();
-        await scanner.ScanFolder(requested.FolderPath, includeOriginal ? requested.LowestFolderPath : string.Empty, abort);
+        await scanner.ScanFolder(new ScanFolderRequest(requested.FolderPath,
+            includeOriginal ? requested.LowestFolderPath : string.Empty, abort));
 
-        var jobs = JobStorage.Current.GetMonitoringApi().ScheduledJobs(0, 100);
+        var jobs = ScanJobQueue.Read().Jobs.Where(job => job.IsWaiting).ToList();
         if (!includeOriginal && abort)
         {
             Assert.Empty(jobs);
             return;
         }
-        var job = Assert.Single(jobs).Value.Job;
-        Assert.Equal(includeOriginal ? nameof(ScannerService.ScanSeries) : nameof(ScannerService.ScanLibrary), job.Method.Name);
-        Assert.Equal(includeOriginal ? requested.Id : library.Id, job.Args[0]);
+        var job = Assert.Single(jobs);
+        Assert.Equal(includeOriginal ? requested.Id : null, job.Target.SeriesId);
+        Assert.Equal(library.Id, job.Target.LibraryId);
     }
 
 }

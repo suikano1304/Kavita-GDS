@@ -1102,9 +1102,9 @@ public class OpdsServiceTests(ITestOutputHelper testOutputHelper) : AbstractDbTe
         Assert.True(feed.Entries.Count == UserParams.Default.PageSize);
         Assert.True(feed.Total >= OpdsService.PageSize);
         Assert.All(feed.Entries, entry => {
-            Assert.Equal(FeedLinkRelation.Acquisition, entry.Links.First().Rel);
-            Assert.Equal(OpdsDownloadDescriptor.ComicBookMime, entry.Links.First().Type);
-            Assert.EndsWith(".zip", entry.Links.First().Href);
+            var acquisition = entry.Links.Single(link => link.Rel == FeedLinkRelation.Acquisition);
+            Assert.Equal(OpdsDownloadDescriptor.ComicBookMime, acquisition.Type);
+            Assert.EndsWith(".zip", acquisition.Href);
         });
 
 
@@ -1363,8 +1363,7 @@ public class OpdsServiceTests(ITestOutputHelper testOutputHelper) : AbstractDbTe
             .SingleOrDefault(l => l.Rel == FeedLinkRelation.Stream);
         Assert.NotNull(streamLink);
         Assert.Equal(45, streamLink.TotalPages); // pre-fix this would be 10 (Files.First().Pages)
-        var acquisition = feed.Entries.First().Links.First();
-        Assert.Equal(FeedLinkRelation.Acquisition, acquisition.Rel);
+        var acquisition = feed.Entries.First().Links.Single(link => link.Rel == FeedLinkRelation.Acquisition);
         Assert.Equal(OpdsDownloadDescriptor.ComicBookMime, acquisition.Type);
         Assert.EndsWith(".zip", acquisition.Href);
         Assert.Equal(45, acquisition.TotalPages);

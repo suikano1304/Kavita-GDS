@@ -31,7 +31,7 @@ public sealed class GdsCoverService(
     IImageService imageService)
     : IGdsCoverService
 {
-    private readonly IList<SignalRMessage> _updateEvents = new List<SignalRMessage>();
+    private readonly IList<SignalRMessageDto> _updateEvents = new List<SignalRMessageDto>();
     private enum GdsCoverPriority
     {
         None = 0,

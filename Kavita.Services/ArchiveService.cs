@@ -546,15 +546,20 @@ public class ArchiveService(
                 if (Directory.Exists(extractPath)) Directory.Delete(extractPath, true);
                 Directory.Move(staging, extractPath);
             }
-
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "[ExtractArchive] There was a problem extracting {ArchivePath} to {ExtractPath}",archivePath, extractPath);
-            mediaErrorService.ReportMediaIssue(archivePath, MediaErrorProducer.ArchiveService,
-                ParseIssues.ReasonFor(archivePath, ex), ex);
-            throw new KavitaException(
-                $"There was an error when extracting {archivePath}. Check the file exists, has read permissions or the server OS can support all path characters.");
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "[ExtractArchive] There was a problem extracting {ArchivePath} to {ExtractPath}",
+                    archivePath, extractPath);
+                mediaErrorService.ReportMediaIssue(archivePath, MediaErrorProducer.ArchiveService,
+                    ParseIssues.ReasonFor(archivePath, ex), ex);
+                throw new KavitaException(
+                    $"There was an error when extracting {archivePath}. Check the file exists, has read permissions or the server OS can support all path characters.");
+            }
+            finally
+            {
+                if (Directory.Exists(staging)) Directory.Delete(staging, true);
+            }
         }
     }
 }

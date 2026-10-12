@@ -36,6 +36,17 @@ public class ParsedSeries
 public sealed record SeriesNameMatch(int Id, MangaFormat Format, string NormalizedName,
     string NormalizedLocalizedName, string NormalizedOriginalName);
 
+public sealed record SeriesScanFingerprintInfo
+{
+    public int SeriesId { get; init; }
+    public required string NormalizedName { get; init; }
+    public MangaFormat Format { get; init; }
+    public string? GdsScanFingerprint { get; init; }
+    public int GdsScanFingerprintVersion { get; init; }
+    public bool NeedsSeriesCoverImage { get; init; }
+    public bool HasMissingNestedCoverImages { get; init; }
+}
+
 public class ScanResult
 {
     /// <summary>

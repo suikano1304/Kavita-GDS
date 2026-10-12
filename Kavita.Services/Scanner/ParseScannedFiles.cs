@@ -147,7 +147,8 @@ public partial class ParseScannedFiles
     {
         if (library.Type == LibraryType.GDS)
         {
-            return await ScanDirectoriesBottomUp(folderPath, seriesPaths, library, forceCheck, matcher, result, fileExtensions);
+            return await ScanDirectoriesBottomUp(folderPath, seriesPaths, failedFiles, library, forceCheck, matcher,
+                result, fileExtensions);
         }
 
         var allDirectories = _directoryService.GetAllDirectories(folderPath, matcher)
@@ -279,10 +280,12 @@ public partial class ParseScannedFiles
         return result;
     }
 
-    private async Task<IList<ScanResult>> ScanDirectoriesBottomUp(string folderPath, IDictionary<string, IList<SeriesModified>> seriesPaths,
+    private async Task<IList<ScanResult>> ScanDirectoriesBottomUp(string folderPath,
+        IDictionary<string, IList<SeriesModified>> seriesPaths, IReadOnlyList<FailedFile> failedFiles,
         Library library, bool forceCheck, GlobMatcher matcher, List<ScanResult> result, string fileExtensions)
     {
         var processedDirs = new HashSet<string>();
+        var skippedSpecials = new List<string>();
         var processedDirectoryCount = 0;
 
         _logger.LogDebug("[ScannerService] Step 1.C Streaming bottom-up GDS directory scan for {FolderPath}", folderPath);
@@ -290,33 +293,89 @@ public partial class ParseScannedFiles
         foreach (var directory in EnumerateDirectoriesBottomUp(folderPath, matcher))
         {
             processedDirectoryCount++;
-
-            if (HasProcessedDescendant(processedDirs, directory))
-            {
-                var hasChanged = !HasSeriesFolderNotChangedSinceLastScan(library, seriesPaths, directory, forceCheck);
-                CheckSurfaceFiles(result, directory, folderPath, fileExtensions, matcher, hasChanged);
-                continue;
-            }
-
-            if (directory.EndsWith("Specials", StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogDebug("Skipping {Directory} as it ends with 'Specials'", directory);
-                continue;
-            }
-
             await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
-                MessageFactory.FileScanProgressEvent(directory, library.Name, ProgressEventType.Updated));
+                MessageFactory.FileScanProgressEvent(directory, library.Id, library.Name, ProgressEventType.Updated,
+                    MessageEventCode.ScanListingFolders, processedDirectoryCount, null));
 
-            if (HasSeriesFolderNotChangedSinceLastScan(library, seriesPaths, directory, forceCheck))
+            var isParent = HasProcessedDescendant(processedDirs, directory);
+            try
             {
-                HandleUnchangedFolder(result, folderPath, directory);
-            }
-            else
-            {
-                PerformFullScan(result, directory, folderPath, fileExtensions, matcher);
-            }
+                if (isParent)
+                {
+                    var specials = skippedSpecials.Where(s => IsDirectChild(s, directory)).ToList();
+                    var looseFileOwners = forceCheck ? [] : SeriesWithFilesIn(seriesPaths, directory);
+                    var specialsOwners = specials.Select(s => forceCheck ? [] : SeriesWithFilesIn(seriesPaths, s)).ToList();
+                    var allOwners = looseFileOwners.Concat(specialsOwners.SelectMany(o => o)).Distinct().ToList();
+                    var onDisk = ListLibraryFiles(directory, fileExtensions, matcher, library.Type,
+                            SearchOption.TopDirectoryOnly)
+                        .Concat(specials.SelectMany(s => ListLibraryFiles(s, fileExtensions, matcher, library.Type)))
+                        .ToList();
+                    Func<string, bool> isInScope = folder => folder == directory || specials.Exists(folder.IsSameOrInsideFolder);
+                    var failures = FailedFilesIn(failedFiles, isInScope);
+                    var unchanged = !forceCheck && (allOwners.Count > 0 || failures.Count > 0) &&
+                                    FolderChangeCheck.IsUnchanged(onDisk, allOwners, failures, isInScope,
+                                        WriteTimesToBackfill);
 
-            processedDirs.Add(directory);
+                    if (unchanged)
+                    {
+                        if (looseFileOwners.Count > 0)
+                        {
+                            HandleUnchangedFolder(result, folderPath, directory, looseFileOwners, true);
+                        }
+                        for (var j = 0; j < specials.Count; j++)
+                        {
+                            if (specialsOwners[j].Count > 0)
+                            {
+                                HandleUnchangedFolder(result, folderPath, specials[j], specialsOwners[j], false);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        MarkRead(failures);
+                        _readFolders.Add(directory);
+                        _readFolders.UnionWith(specials);
+                        AddSurfaceAndSpecialsFiles(result, directory, folderPath, onDisk);
+                    }
+                    continue;
+                }
+
+                if (directory.EndsWith("Specials", StringComparison.OrdinalIgnoreCase))
+                {
+                    skippedSpecials.Add(directory);
+                    continue;
+                }
+
+                var owners = forceCheck
+                    ? []
+                    : skippedSpecials.Where(s => s.IsInsideFolder(directory)).Prepend(directory)
+                        .SelectMany(f => SeriesWithFilesIn(seriesPaths, f)).Distinct().ToList();
+                var onDiskBelow = ListLibraryFiles(directory, fileExtensions, matcher, library.Type);
+                Func<string, bool> isBelow = folder => folder.IsSameOrInsideFolder(directory);
+                var failuresBelow = FailedFilesIn(failedFiles, isBelow);
+
+                if (!forceCheck && (owners.Count > 0 || failuresBelow.Count > 0) &&
+                    FolderChangeCheck.IsUnchanged(onDiskBelow, owners, failuresBelow, isBelow, WriteTimesToBackfill))
+                {
+                    HandleUnchangedFolder(result, folderPath, directory, owners, false);
+                }
+                else
+                {
+                    MarkRead(failuresBelow);
+                    AddChangedFolder(result, directory, folderPath, onDiskBelow);
+                }
+
+                processedDirs.Add(directory);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                _logger.LogWarning(ex,
+                    "[ScannerService] Could not read {Directory}, keeping its series as they are for this scan",
+                    directory);
+                _unreadableFolders.Add(directory);
+                KeepUnreadableFolder(result, folderPath, directory, isParent, skippedSpecials, seriesPaths);
+                if (!isParent) processedDirs.Add(directory);
+            }
         }
 
         _logger.LogDebug("[ScannerService] Step 1.C Processed {DirectoryCount} streamed GDS directories for {FolderPath}",
@@ -576,7 +635,8 @@ public partial class ParseScannedFiles
     /// <param name="scanResults">A collection of scan results</param>
     /// <param name="scannedSeries">A concurrent dictionary to store the tracked series</param>
     /// <returns>Files that were turned away</returns>
-    public IList<(ParserInfo Info, ParseIssue Issue)> TrackSeriesAcrossScanResults(IList<ScanResult> scanResults, ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries)
+    public IList<(ParserInfo Info, ParseIssue Issue)> TrackSeriesAcrossScanResults(IList<ScanResult> scanResults,
+        ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, LibraryType libraryType)
     {
         // Flatten all ParserInfos from scanResults
         var allInfos = scanResults.SelectMany(sr => sr.ParserInfos).ToList();
@@ -589,21 +649,13 @@ public partial class ParseScannedFiles
 
             try
             {
-                var rejection = TrackSeries(scannedSeries, info);
+                var rejection = TrackSeries(scannedSeries, info, libraryType);
                 if (rejection != null && !string.IsNullOrEmpty(info.FullFilePath)) rejected.Add((info, rejection));
             }
             catch (Exception ex)
             {
-                if (info == null) continue;
-
-                try
-                {
-                    TrackSeries(scannedSeries, info, libraryType);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[ScannerService] Exception occurred during tracking {FilePath}. Skipping this file", info?.FullFilePath);
-                }
+                _logger.LogError(ex, "[ScannerService] Exception occurred during tracking {FilePath}. Skipping this file",
+                    info.FullFilePath);
             }
         }
 
@@ -618,7 +670,8 @@ public partial class ParseScannedFiles
     /// <param name="scannedSeries">A localized list of a series' parsed infos</param>
     /// <param name="info"></param>
     /// <returns>Set when the file is turned away</returns>
-    private ParseIssue? TrackSeries(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, ParserInfo? info)
+    private ParseIssue? TrackSeries(ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries,
+        ParserInfo? info, LibraryType libraryType)
     {
         if (info == null) return null;
         if (info.Series == string.Empty) return ParseIssues.FromFailedParse(info);
@@ -666,7 +719,7 @@ public partial class ParseScannedFiles
                 return oldValue;
             });
 
-            return existingKey;
+            return null;
         }
         catch (Exception ex)
         {
@@ -680,8 +733,6 @@ public partial class ParseScannedFiles
 
             return null;
         }
-
-        return null;
 
         bool Guard(ParsedSeries series)
         {
@@ -811,7 +862,8 @@ public partial class ParseScannedFiles
         IDictionary<string, IList<SeriesModified>> seriesPaths, bool forceCheck = false)
     {
         await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
-            MessageFactory.FileScanProgressEvent("File Scan Starting", library.Name, ProgressEventType.Started));
+            MessageFactory.FileScanProgressEvent("File Scan Starting", library.Id, library.Name,
+                ProgressEventType.Started));
 
         _logger.LogInformation("[ScannerService] Lightweight GDS scan plan starting for {LibraryName}. Roots: {RootCount}",
             library.Name, folders.Count);
@@ -833,7 +885,8 @@ public partial class ParseScannedFiles
         }
 
         await _eventHub.SendMessageAsync(MessageFactory.NotificationProgress,
-            MessageFactory.FileScanProgressEvent("File Scan Done", library.Name, ProgressEventType.Ended));
+            MessageFactory.FileScanProgressEvent("File Scan Done", library.Id, library.Name,
+                ProgressEventType.Ended));
 
         _logger.LogInformation("[ScannerService] Lightweight GDS scan plan finished for {LibraryName}. Parsed series: {SeriesCount}",
             library.Name, scannedSeries.Count);
@@ -856,8 +909,13 @@ public partial class ParseScannedFiles
 
         foreach (var group in files.GroupBy(file => (file.Folder, file.LibraryRoot)))
         {
+            var stamps = group.Select(file =>
+            {
+                var fileInfo = _directoryService.FileSystem.FileInfo.New(file.FilePath);
+                return new FileStamp(file.FilePath, fileInfo.Length, fileInfo.LastWriteTimeUtc);
+            }).ToList();
             var scanResult = CreateScanResult(group.Key.Folder, group.Key.LibraryRoot, true,
-                group.Select(file => file.FilePath).ToList());
+                stamps);
             await ParseAndTrackGdsScanResult(scanResult, seriesPaths, library, scannedSeries, []);
         }
 
@@ -868,6 +926,164 @@ public partial class ParseScannedFiles
             .GroupBy(info => Parser.NormalizePath(info.FullFilePath))
             .Select(group => group.First())
             .ToList();
+    }
+
+    private async Task ScanAndParseGdsFolder(string folderPath, Library library, bool isLibraryScan,
+        IDictionary<string, IList<SeriesModified>> seriesPaths,
+        ConcurrentBag<ScannedSeriesResult> processedScannedSeries, bool forceCheck)
+    {
+        var scanResults = await ScanFiles(folderPath, isLibraryScan, seriesPaths, library, forceCheck);
+        AddReadFiles(scanResults);
+
+        var scannedSeries = new ConcurrentDictionary<ParsedSeries, List<ParserInfo>>();
+        var changedSeries = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < scanResults.Count; i++)
+        {
+            await ParseAndTrackGdsScanResult(scanResults[i], seriesPaths, library, scannedSeries, changedSeries,
+                i + 1, scanResults.Count);
+        }
+
+        UpdateSeriesSortOrder(scannedSeries);
+        foreach (var series in scannedSeries.Keys)
+        {
+            if (scannedSeries[series].Count == 0) continue;
+            processedScannedSeries.Add(new ScannedSeriesResult
+            {
+                HasChanged = changedSeries.Contains(BuildTrackedSeriesKey(series)),
+                ParsedSeries = series,
+                ParsedInfos = scannedSeries[series]
+            });
+        }
+    }
+
+    private async Task ScanAndPlanGdsFolder(string folderPath, Library library, bool isLibraryScan,
+        IDictionary<string, IList<SeriesModified>> seriesPaths,
+        ConcurrentDictionary<ParsedSeries, List<GdsScannedFileRef>> scannedSeries,
+        HashSet<string> changedSeries, bool forceCheck)
+    {
+        var scanResults = await ScanFiles(folderPath, isLibraryScan, seriesPaths, library, forceCheck);
+        var placeholderOwners = new Dictionary<ParserInfo, SeriesModified>(ReferenceEqualityComparer.Instance);
+
+        for (var i = 0; i < scanResults.Count; i++)
+        {
+            var scanResult = scanResults[i];
+            if (!scanResult.HasChanged)
+            {
+                AddKnownGdsFiles(scanResult, scannedSeries);
+                continue;
+            }
+
+            await ParseFiles(scanResult, placeholderOwners, library, i + 1, scanResults.Count);
+            foreach (var info in scanResult.ParserInfos)
+            {
+                var series = TrackGdsSeriesFile(scannedSeries, info, scanResult.Folder, scanResult.LibraryRoot);
+                if (series != null) changedSeries.Add(BuildTrackedSeriesKey(series));
+            }
+
+            scanResult.Files = ArraySegment<FileStamp>.Empty;
+            scanResult.ParserInfos = ArraySegment<ParserInfo>.Empty;
+        }
+    }
+
+    private void AddKnownGdsFiles(ScanResult scanResult,
+        ConcurrentDictionary<ParsedSeries, List<GdsScannedFileRef>> scannedSeries)
+    {
+        foreach (var owner in scanResult.UnchangedSeries)
+        {
+            var series = scannedSeries.Keys.FirstOrDefault(s =>
+                s.NormalizedName == owner.SeriesName.ToNormalized()) ?? new ParsedSeries
+            {
+                Name = owner.SeriesName,
+                NormalizedName = owner.SeriesName.ToNormalized(),
+                Format = owner.Format
+            };
+
+            var refs = owner.FilesByFolder
+                .Where(pair => scanResult.IsShallow
+                    ? pair.Key == scanResult.Folder
+                    : pair.Key.IsSameOrInsideFolder(scanResult.Folder))
+                .SelectMany(pair => pair.Value.Select(file => new GdsScannedFileRef
+                {
+                    FilePath = file.Path,
+                    Folder = pair.Key,
+                    LibraryRoot = scanResult.LibraryRoot
+                }))
+                .ToList();
+
+            scannedSeries.AddOrUpdate(series, refs, (_, existing) =>
+            {
+                foreach (var file in refs)
+                {
+                    if (existing.All(e => !e.FilePath.Equals(file.FilePath, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        existing.Add(file);
+                    }
+                }
+                return existing;
+            });
+        }
+    }
+
+    private ParsedSeries? TrackGdsSeriesFile(
+        ConcurrentDictionary<ParsedSeries, List<GdsScannedFileRef>> scannedSeries, ParserInfo? info,
+        string folder, string libraryRoot)
+    {
+        if (info == null || string.IsNullOrEmpty(info.Series) || string.IsNullOrEmpty(info.FullFilePath)) return null;
+        var normalizedSeries = info.Series.ToNormalized();
+        if (string.IsNullOrEmpty(normalizedSeries)) return null;
+
+        var existingKey = scannedSeries.Keys.SingleOrDefault(series =>
+            MergeNameGuard(series.Format, series.NormalizedName, info.Format, LibraryType.GDS,
+                normalizedSeries, info.SeriesSort.ToNormalized(), info.LocalizedSeries.ToNormalized()));
+        existingKey ??= new ParsedSeries
+        {
+            Format = info.Format,
+            Name = info.Series,
+            NormalizedName = normalizedSeries
+        };
+
+        var fileRef = new GdsScannedFileRef
+        {
+            FilePath = Parser.NormalizePath(info.FullFilePath),
+            Folder = Parser.NormalizePath(folder),
+            LibraryRoot = libraryRoot
+        };
+        scannedSeries.AddOrUpdate(existingKey, [fileRef], (_, existing) =>
+        {
+            if (existing.All(e => !e.FilePath.Equals(fileRef.FilePath, StringComparison.OrdinalIgnoreCase)))
+            {
+                existing.Add(fileRef);
+            }
+            return existing;
+        });
+        return existingKey;
+    }
+
+    private async Task ParseAndTrackGdsScanResult(ScanResult scanResult,
+        IDictionary<string, IList<SeriesModified>> seriesPaths, Library library,
+        ConcurrentDictionary<ParsedSeries, List<ParserInfo>> scannedSeries, HashSet<string> changedSeries,
+        int current = 1, int total = 1)
+    {
+        var placeholderOwners = new Dictionary<ParserInfo, SeriesModified>(ReferenceEqualityComparer.Instance);
+        await ParseFiles(scanResult, placeholderOwners, library, current, total);
+        foreach (var info in scanResult.ParserInfos)
+        {
+            var rejection = TrackSeries(scannedSeries, info, LibraryType.GDS);
+            if (rejection != null) continue;
+
+            var key = scannedSeries.Keys.FirstOrDefault(series =>
+                MergeNameGuard(series.Format, series.NormalizedName, info.Format, LibraryType.GDS,
+                    info.Series.ToNormalized(), info.SeriesSort.ToNormalized(), info.LocalizedSeries.ToNormalized()));
+            if (scanResult.HasChanged && key != null) changedSeries.Add(BuildTrackedSeriesKey(key));
+        }
+
+        scanResult.Files = ArraySegment<FileStamp>.Empty;
+        scanResult.ParserInfos = ArraySegment<ParserInfo>.Empty;
+    }
+
+    private static string BuildTrackedSeriesKey(ParsedSeries series)
+    {
+        return $"{series.Format}:{series.NormalizedName}";
     }
 
     /// <summary>
@@ -890,7 +1106,7 @@ public partial class ParseScannedFiles
         {
             await ScanAndParseGdsFolder(folderPath, library, isLibraryScan, seriesPaths, processedScannedSeries,
                 forceCheck);
-            return;
+            return [];
         }
 
         _logger.LogDebug("\t[ScannerService] Library {LibraryName} Step 1.B: Scan files in {Folder}", library.Name, folderPath);
@@ -916,7 +1132,7 @@ public partial class ParseScannedFiles
         scanResults = MergeLocalizedSeriesAcrossScanResults(scanResults);
 
         _logger.LogDebug("\t[ScannerService] Library {LibraryName} Step 1.E: Group all parsed data into logical Series", library.Name);
-        var rejected = TrackSeriesAcrossScanResults(scanResults, scannedSeries);
+        var rejected = TrackSeriesAcrossScanResults(scanResults, scannedSeries, library.Type);
         AddRejectedIssues(walkResults, rejected);
 
 

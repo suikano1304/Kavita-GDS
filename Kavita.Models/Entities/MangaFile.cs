@@ -1,5 +1,6 @@
 ﻿
 using System;
+using System.IO;
 using Kavita.Models.Entities.Enums;
 using Kavita.Models.Entities.Interfaces;
 
@@ -52,6 +53,11 @@ public class MangaFile : IEntityDate
     /// Added in v0.9.2. Once every install has scanned since then, the null fallback in the scanner can be removed
     /// </remarks>
     public DateTime? FileLastWriteTimeUtc { get; set; }
+    /// <summary>
+    /// Creation time of the underlying file on disk. Retained for GDS content ordering and migration compatibility.
+    /// </summary>
+    public DateTime FileCreated { get; set; }
+    public DateTime FileCreatedUtc { get; set; }
 
     /// <summary>
     /// Last time file analysis ran on this file
@@ -68,6 +74,15 @@ public class MangaFile : IEntityDate
     public Chapter Chapter { get; set; } = null!;
     public int ChapterId { get; set; }
 
+    public void UpdateLastModified()
+    {
+        if (FilePath == null) return;
+        LastModified = File.GetLastWriteTime(FilePath);
+        LastModifiedUtc = File.GetLastWriteTimeUtc(FilePath);
+        FileLastWriteTimeUtc = LastModifiedUtc;
+        FileCreated = File.GetCreationTime(FilePath);
+        FileCreatedUtc = File.GetCreationTimeUtc(FilePath);
+    }
 
     public void UpdateLastFileAnalysis()
     {

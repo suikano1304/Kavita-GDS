@@ -31,12 +31,12 @@ public class GdsParser(IDirectoryService directoryService, IDefaultParser imageP
         "pdf", "rar", "text", "txt", "zip"
     };
 
-    public override ParserInfo? Parse(string filePath, string rootPath, string libraryRoot, LibraryType type,
+    public override ParseInfoResult Parse(string filePath, string rootPath, string libraryRoot, LibraryType type,
         bool enableMetadata = true, ComicInfo? comicInfo = null)
     {
         var fileName = directoryService.FileSystem.Path.GetFileNameWithoutExtension(filePath);
 
-        if (Parser.IsCoverImage(directoryService.FileSystem.Path.GetFileName(filePath))) return null;
+        if (Parser.IsCoverImage(directoryService.FileSystem.Path.GetFileName(filePath))) return ParseInfoResult.SkippedParse();
 
         if (Parser.IsImage(filePath))
         {
@@ -82,7 +82,7 @@ public class GdsParser(IDirectoryService directoryService, IDefaultParser imageP
         }
 
         FinalizeNumbers(ret);
-        return ret.Series == string.Empty ? null : ret;
+        return ParseInfoResult.FromParserInfo(ret);
     }
 
     private static string ParseEndMarkerRange(string fileName)

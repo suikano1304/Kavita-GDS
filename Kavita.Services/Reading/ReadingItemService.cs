@@ -22,6 +22,7 @@ public class ReadingItemService : IReadingItemService
     private readonly ImageParser _imageParser;
     private readonly BookParser _bookParser;
     private readonly PdfParser _pdfParser;
+    private readonly GdsParser _gdsParser;
 
     public ReadingItemService(IArchiveService archiveService, IBookService bookService, IImageService imageService,
         IDirectoryService directoryService, ILogger<ReadingItemService> logger)
@@ -47,14 +48,15 @@ public class ReadingItemService : IReadingItemService
     /// <param name="filePath">Fully qualified path of file</param>
     /// <param name="enableMetadata">If false, returns null</param>
     /// <param name="issue">Set when the metadata could not be read, or an epub only opened leniently. The file can still be imported</param>
-    private ComicInfo? ReadComicInfo(string filePath, bool enableMetadata, out ParseIssue? issue)
+    private ComicInfo? ReadComicInfo(string filePath, bool enableMetadata, LibraryType type, out ParseIssue? issue)
     {
         issue = null;
-        if (!enableMetadata) return null;
+        ComicInfo? info = null;
+        if (!enableMetadata && type != LibraryType.GDS) return null;
 
         try
         {
-            if (Parser.IsEpub(filePath) || Parser.IsPdf(filePath))
+            if (enableMetadata && (Parser.IsEpub(filePath) || Parser.IsPdf(filePath)))
             {
                 var comicInfo = _bookService.GetComicInfo(filePath, out var strictOpenError);
                 if (strictOpenError != null)
@@ -62,12 +64,12 @@ public class ReadingItemService : IReadingItemService
                     issue = new ParseIssue(MediaErrorReason.EpubNotStrict, strictOpenError);
                 }
 
-                return comicInfo;
+                info = comicInfo;
             }
 
-            if (Parser.IsComicInfoExtension(filePath))
+            if (enableMetadata && Parser.IsComicInfoExtension(filePath))
             {
-                return _archiveService.GetComicInfo(filePath);
+                info = _archiveService.GetComicInfo(filePath);
             }
         }
         catch (Exception ex)
@@ -96,7 +98,7 @@ public class ReadingItemService : IReadingItemService
             return ParseFileResult.Failed(ParseIssues.FromFailedParse(null));
         }
 
-        var comicInfo = ReadComicInfo(path, enableMetadata, out var metadataIssue);
+        var comicInfo = ReadComicInfo(path, enableMetadata, type, out var metadataIssue);
         try
         {
             var parseResult = parser.Parse(path, rootPath, libraryRoot, type, enableMetadata, comicInfo);

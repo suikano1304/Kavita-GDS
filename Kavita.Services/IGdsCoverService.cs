@@ -16,4 +16,4 @@ public interface IGdsCoverService
         EncodeFormat encodeFormat, CoverImageSize coverImageSize, bool forceColorScape = false);
 }
 
-public sealed record GdsCoverGenerationResult(bool Handled, IReadOnlyCollection<SignalRMessage> UpdateEvents);
+public sealed record GdsCoverGenerationResult(bool Handled, IReadOnlyCollection<SignalRMessageDto> UpdateEvents);

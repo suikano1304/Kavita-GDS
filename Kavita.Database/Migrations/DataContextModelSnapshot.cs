@@ -873,6 +873,12 @@ namespace Kavita.Database.Migrations
                     b.Property<string>("Extension")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime>("FileCreated")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("FileCreatedUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("FileLastWriteTimeUtc")
                         .HasColumnType("TEXT");
 
