@@ -1,6 +1,11 @@
-# Kavita-GDS 0.9.1.4-6
+# Kavita-GDS 0.9.1.13-1
 
-OPDS 다음 권·완독 처리를 정리하고 라이브러리 수정일순 피드를 추가합니다. EPUB 읽기, ZIP/CBZ 페이지 누락과 다운로드 처리를 함께 수정합니다. 공식 Kavita `0.9.1.4` 기반입니다.
+공식 Kavita nightly `0.9.1.13`에 GDS 패치를 이식한 릴리스입니다. upstream의 서버·DB·WebUI 변경을 유지하면서 OPDS 다음 권, 완독, 수정일 정렬과 GDS scan/reader 동작을 다시 맞췄습니다.
+
+- `다음에 읽을 것`과 작품 권 목록에서 연 경우 모두 가장 멀리 진행한 권을 기준으로 앞으로만 이동합니다. 완독한 4권을 다시 추천하거나 1권부터 각 권의 마지막 페이지를 반복하는 흐름을 막습니다.
+- 역순·동시·prefetch 이미지 요청은 저장된 완독 상태와 수정 시각을 뒤로 돌리지 않습니다. 마지막 권 뒤에는 추천을 종료합니다.
+- reading profile의 사용자·기기 연결과 기본값 우선순위를 새 upstream 구조에 맞췄습니다.
+- GDS 스캔의 원래 폴더 경로, 혼합 형식, 파일 생성·수정 시각, 페이지 합계와 캐시 재생성 규칙을 유지합니다.
 
 - OPDS에서 같은 권이 중복되거나 이전 권으로 되돌아가는 추천을 수정합니다. 이어읽기·다음에 읽을 것·읽기 목록에 같은 기준을 사용하며 마지막 권 이후에는 추천을 종료합니다. 진행률 기호는 제목 뒤에 표시하고 첫/마지막 이미지의 저장 페이지를 일치시킵니다.
 - OPDS 라이브러리는 최근 콘텐츠 수정일순으로 제공합니다. **OPDSy 2.29.0은 목록을 제목순으로 다시 정렬하므로 이 앱의 화면에는 서버 수정일순이 반영되지 않을 수 있습니다.**
@@ -12,20 +17,20 @@ OPDS 다음 권·완독 처리를 정리하고 라이브러리 수정일순 피�
 
 기존 API URL·권한·OPDS MIME 및 별칭·사용자 프로필 DTO를 유지합니다. OPDS 완독 기록 보호와 90% 다음 권 추천도 유지합니다.
 
-검증: 자동 테스트 2,993개 통과(기존 제외 6개). 실제 EPUB 24개·942페이지·리소스 해시 839개, 본문 순서, Angular 열기·이동·재열기, 사용자별 프로필·폰트, 내부 OPDS·Range·동시 다운로드와 장애 복구를 확인했습니다. 세 플랫폼의 새/기존 DB 기동·재기동·독서 기록 보존과 핵심 읽기 검증을 통과했습니다. ARM은 QEMU 검증입니다. ARMv7 부하 검사는 Kavita와 무관한 .NET/QEMU 스레드 신호 호환성 문제를 피하기 위해 테스트 컨테이너에서만 `DOTNET_INTERNAL_ThreadSuspendInjection=0`을 사용했습니다. 배포 이미지의 기본 설정은 변경하지 않았으며 실제 ARM 기기는 미검증입니다. Leaf5C의 다음 권·완독 흐름은 동일 소스에서 실기기 검증했으며 최종 이미지에서도 API로 재확인했습니다. 이번 최종 이미지의 인증된 외부 HTTPS 요청과 확대된 기기 조합은 재검증하지 않았습니다.
+검증: Services `3,069` 통과·기존 제외 `6`, Common `159`, Models `46`, Database `89`, Server `114`, scan queue `40`, 통합 라이선스 테스트 `15` 제외, 실패 `0`입니다. production UI와 solution build를 통과했습니다. 운영 DB 온라인 복제본을 `0.9.1.4`에서 `0.9.1.13`으로 실제 마이그레이션하고 재기동했으며 SQLite `quick_check=ok`와 핵심 레코드 수 보존을 확인했습니다. `linux/amd64`, `linux/arm64`, `linux/arm/v7` 모두 `/api/health` smoke를 통과했습니다. ARM은 QEMU 검증이며 실제 ARM 기기는 미검증입니다.
 
 기존 외부 앱 제한: MoonReader TXT 회전 문제와 확대된 외부 리더 조합은 이번 수정으로 해결되거나 전체 재검증된 것으로 표시하지 않습니다.
 
-업데이트 전 config/DB를 백업하세요. 문제가 생기면 이전 `0.9.1.4-5` 이미지로 되돌리고, DB 복원은 필요성이 확인된 경우에만 수행하세요.
+업데이트 전 config/DB를 백업하세요. 문제가 생기면 이전 `0.9.1.4-6` 이미지로 되돌리고, DB 복원은 필요성이 확인된 경우에만 수행하세요.
 
 ```bash
-docker pull ghcr.io/suikano1304/kavita-gds:0.9.1.4-6
+docker pull ghcr.io/suikano1304/kavita-gds:0.9.1.13-1
 ```
 
-빌드 소스: [e0853e3a1](https://github.com/suikano1304/Kavita-GDS/commit/e0853e3a1). 하나의 소스와 검증된 단일 UI 번들, 세 RID publish 및 단일 Dockerfile/buildx 흐름을 사용합니다.
+빌드 소스: [0bc753390](https://github.com/suikano1304/Kavita-GDS/commit/0bc753390). 하나의 소스와 검증된 단일 UI 번들, 세 RID publish 및 단일 Dockerfile/buildx 흐름을 사용합니다.
 
-멀티아키텍처 이미지: `sha256:432f062cbfd1f6f6c5c6fcabb014758ab5382016543cc46036d66081908f00c7`
+멀티아키텍처 이미지: `sha256:2be9e7e5d44b9e53d75b5b2ac679d26442604b282bcaba8ae03e63d6aee2ef4a`
 
-- `linux/amd64`: `sha256:204b973776138388c689402c008e1be85f80e360d95e73ffeb3e59b4fbbe14f4`
-- `linux/arm64`: `sha256:d9f6da13e3ba4d9cb1e35cca7ba3cc5d35668e66df76b2333922830cdb8062f0`
-- `linux/arm/v7`: `sha256:a1a5855bea34cf8ce50c2c0a2e6cabea97abe3091f17f3ec65c08ad3bd0c4eca`
+- `linux/amd64`: `sha256:7ff9886f82adaae84d9771234647d02abf74ac87427f0ad2ce2f5da7caa27e76`
+- `linux/arm64`: `sha256:6aa32b613760b92785036ce33449a523abaed6f3cb09083eaeb23d77d0f467b9`
+- `linux/arm/v7`: `sha256:c8df7b10012417b5d67c7bc918f77e6320f61aafa9d7d4ea8fa4f4cfe781eba3`

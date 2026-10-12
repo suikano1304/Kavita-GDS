@@ -75,6 +75,8 @@ issue class | previous status | current version result | validation method | blo
 14. `kavita-test`, ARM smoke containers, BuildKit을 정지한다.
 15. 결과를 release notes와 검증 기록에 남긴다.
 
+CT101에서 별도 Docker daemon으로 smoke test할 때 data-root와 socket 분리만으로는 충분하지 않습니다. 운영 daemon과 같은 network namespace에서 `docker0`를 공유하지 마세요. 기본 검증 경로는 datapool의 DB clone과 후보 바이너리를 별도 포트에서 직접 실행하는 방식이며, 별도 daemon이 필요하면 고유 bridge를 가진 독립 network namespace를 사용해야 합니다.
+
 ## Upstream Base + GDS Patch Stack Gate
 
 새 upstream 버전으로 올릴 때는 다음을 release blocker로 취급한다.
